@@ -2,6 +2,7 @@
 /dist
 /node_modules
 /build
+/public
 
 # Logs
 logs
@@ -58,3 +59,4 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .claude
 .agents
 .codex
+CLAUDE.md
