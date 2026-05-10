@@ -34,6 +34,8 @@ interface FilesState {
   toggleDirectory: (dirPath: string) => void;
   selectFile: (filePath: string) => Promise<void>;
   saveFile: (content: string) => Promise<void>;
+  deletePath: (targetPath: string) => Promise<void>;
+  navigateUp: () => Promise<void>;
   setPanelOpen: (open: boolean) => void;
 }
 
@@ -126,6 +128,30 @@ export const useFilesStore = create<FilesState>((set, get) => ({
     } catch (err) {
       console.error('Save failed:', err);
     }
+  },
+
+  deletePath: async (targetPath: string) => {
+    try {
+      await api.deleteFile(targetPath);
+      // Reload the parent directory
+      const parent = targetPath.substring(0, targetPath.lastIndexOf('/'));
+      if (parent) {
+        await get().loadDirectory(parent);
+      }
+      // Clear selection if deleted file was selected
+      if (get().selectedFile === targetPath) {
+        set({ selectedFile: null, fileContent: null });
+      }
+    } catch (err) {
+      console.error('Delete failed:', err);
+    }
+  },
+
+  navigateUp: async () => {
+    const { rootDir } = get();
+    if (!rootDir || rootDir === '/') return;
+    const parent = rootDir.substring(0, rootDir.lastIndexOf('/')) || '/';
+    await get().setRootDir(parent);
   },
 
   setPanelOpen: (open: boolean) => set({ panelOpen: open }),

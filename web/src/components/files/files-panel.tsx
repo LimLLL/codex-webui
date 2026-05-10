@@ -1,22 +1,14 @@
 /**
- * Combined file browser panel: tree sidebar + file viewer.
- * Syncs root directory from the active thread's cwd.
+ * Full-screen file browser panel (global view): tree sidebar + file viewer.
+ * Root directory is managed by App.tsx.
  */
-import { useEffect } from 'react';
 import { FileTree } from './file-tree';
 import { FileViewer } from './file-viewer';
 import { useFilesStore } from '@/stores/files-store';
-import { useTimelineStore } from '@/stores/timeline-store';
 
 export function FilesPanel() {
   const selectedFile = useFilesStore((s) => s.selectedFile);
-  const setRootDir = useFilesStore((s) => s.setRootDir);
-  const threadCwd = useTimelineStore((s) => s.threadCwd);
-
-  // Sync file tree root with current thread's cwd
-  useEffect(() => {
-    void setRootDir(threadCwd);
-  }, [threadCwd, setRootDir]);
+  const rootDir = useFilesStore((s) => s.rootDir);
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -24,6 +16,11 @@ export function FilesPanel() {
         <div className="px-3 py-2 text-xs font-medium text-muted-foreground">
           Explorer
         </div>
+        {rootDir && (
+          <div className="truncate border-b border-border px-3 pb-1.5 text-xs text-muted-foreground/60">
+            {rootDir}
+          </div>
+        )}
         <FileTree />
       </div>
 

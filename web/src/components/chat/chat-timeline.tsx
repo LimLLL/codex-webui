@@ -3,9 +3,8 @@
  */
 import { useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Bot, User } from 'lucide-react';
+import { Bot } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { TurnBlock } from './turn-block';
 
@@ -28,8 +27,8 @@ export function ChatTimeline() {
   }, [timeline]);
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
-      <div className="mx-auto max-w-3xl px-4 py-6 md:px-6">
+    <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block">
+      <div className="px-4 py-6 md:px-6">
         {timeline.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -54,14 +53,9 @@ export function ChatTimeline() {
                   variants={entryVariants}
                   initial="hidden"
                   animate="visible"
-                  className="mb-4 flex flex-row-reverse gap-3"
+                  className="mb-4 flex justify-end"
                 >
-                  <Avatar className="h-8 w-8 shrink-0">
-                    <AvatarFallback className="bg-blue-600 text-white">
-                      <User className="h-4 w-4" />
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="max-w-[80%] rounded-2xl bg-blue-600 px-4 py-3 text-white shadow-md">
+                  <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-3 text-white shadow-md">
                     <pre className="m-0 whitespace-pre-wrap font-sans text-sm leading-relaxed wrap-break-word">
                       {entry.content}
                     </pre>

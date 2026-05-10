@@ -2,7 +2,7 @@
  * REST controller for file management operations.
  * All paths are security-validated against workspace roots.
  */
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -56,15 +56,28 @@ export class FilesController {
   }
 
   @Get('roots')
-  @ApiOperation({ summary: 'List configured workspace roots' })
+  @ApiOperation({
+    summary: 'List configured workspace roots and home directory',
+  })
   getRoots() {
-    return { roots: this.filesService.getWorkspaceRoots() };
+    return {
+      roots: this.filesService.getWorkspaceRoots(),
+      homeDir: this.filesService.getHomeDir(),
+    };
   }
 
   @Post('roots')
   @ApiOperation({ summary: 'Register a workspace root (e.g. thread cwd)' })
   addRoot(@Body() body: { root: string }) {
     this.filesService.addWorkspaceRoot(body.root);
+    return { ok: true };
+  }
+
+  @Delete('delete')
+  @ApiOperation({ summary: 'Delete a file or empty directory' })
+  @ApiQuery({ name: 'path', required: true })
+  async deletePath(@Query('path') filePath: string) {
+    await this.filesService.deletePath(filePath);
     return { ok: true };
   }
 }

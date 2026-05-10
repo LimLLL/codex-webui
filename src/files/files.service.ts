@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 /** Maximum file size for text reading (5 MB). */
@@ -249,5 +250,25 @@ export class FilesService {
    */
   getWorkspaceRoots(): string[] {
     return Array.from(this.workspaceRoots);
+  }
+
+  /** Returns the user's home directory. */
+  getHomeDir(): string {
+    return os.homedir();
+  }
+
+  /**
+   * Deletes a file or empty directory.
+   *
+   * @param targetPath - Path to delete
+   */
+  async deletePath(targetPath: string): Promise<void> {
+    const resolved = await this.resolveSafePath(targetPath);
+    const stat = await fs.lstat(resolved);
+    if (stat.isDirectory()) {
+      await fs.rmdir(resolved);
+    } else {
+      await fs.unlink(resolved);
+    }
   }
 }

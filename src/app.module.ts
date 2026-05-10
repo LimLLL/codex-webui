@@ -7,6 +7,7 @@ import { AppService } from './app.service';
 import { CodexModule } from './codex/codex.module';
 import { FilesModule } from './files/files.module';
 import { ModelsModule } from './models/models.module';
+import { TerminalModule } from './terminal/terminal.module';
 import { ThreadsModule } from './threads/threads.module';
 
 @Module({
@@ -18,6 +19,7 @@ import { ThreadsModule } from './threads/threads.module';
     }),
     CodexModule,
     FilesModule,
+    TerminalModule,
     ThreadsModule,
     ModelsModule,
   ],

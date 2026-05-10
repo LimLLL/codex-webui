@@ -4,7 +4,7 @@
  */
 import { useCallback, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { Loader2, Save, X } from 'lucide-react';
+import { Loader2, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useFilesStore } from '@/stores/files-store';
 
@@ -13,7 +13,6 @@ export function FileViewer() {
   const fileContent = useFilesStore((s) => s.fileContent);
   const loadingFile = useFilesStore((s) => s.loadingFile);
   const saveFile = useFilesStore((s) => s.saveFile);
-  const setPanelOpen = useFilesStore((s) => s.setPanelOpen);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
@@ -49,37 +48,28 @@ export function FileViewer() {
   const language = guessLanguage(fileName);
 
   return (
-    <div className="flex flex-1 flex-col">
-      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5">
         <span className="truncate text-xs text-muted-foreground">
           {selectedFile}
         </span>
-        <div className="flex items-center gap-1">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-6 w-6"
-            onClick={handleSave}
-            title="Save (Ctrl+S)"
-          >
-            <Save className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-6 w-6"
-            onClick={() => setPanelOpen(false)}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6"
+          onClick={handleSave}
+          title="Save (Ctrl+S)"
+        >
+          <Save className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         <Editor
           defaultValue={fileContent ?? ''}
           language={language}
           theme="vs-dark"
+          height="100%"
           onMount={handleMount}
           options={{
             readOnly: false,

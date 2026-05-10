@@ -175,7 +175,14 @@ export const api = {
   },
 
   getWorkspaceRoots() {
-    return request<{ roots: string[] }>('/files/roots');
+    return request<{ roots: string[]; homeDir: string }>('/files/roots');
+  },
+
+  deleteFile(path: string) {
+    return request<{ ok: boolean }>(
+      `/files/delete?path=${encodeURIComponent(path)}`,
+      { method: 'DELETE' },
+    );
   },
 
   addWorkspaceRoot(root: string) {
