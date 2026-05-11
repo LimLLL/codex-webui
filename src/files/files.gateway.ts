@@ -6,6 +6,7 @@
 import {
   ConnectedSocket,
   MessageBody,
+  OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -16,7 +17,7 @@ import * as chokidar from 'chokidar';
 import { FilesService } from './files.service';
 
 @WebSocketGateway({ namespace: '/ws', cors: { origin: '*' } })
-export class FilesGateway implements OnModuleDestroy {
+export class FilesGateway implements OnModuleDestroy, OnGatewayDisconnect {
   private readonly logger = new Logger(FilesGateway.name);
   /** Active watchers keyed by directory path. */
   private readonly watchers = new Map<string, chokidar.FSWatcher>();
@@ -25,6 +26,12 @@ export class FilesGateway implements OnModuleDestroy {
   server!: Server;
 
   constructor(private readonly filesService: FilesService) {}
+
+  /** Cleans up watchers with no remaining subscribers after a client disconnects. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  handleDisconnect(_client: Socket): void {
+    void this.cleanupOrphanedWatchers();
+  }
 
   async onModuleDestroy(): Promise<void> {
     await Promise.all([...this.watchers.values()].map((w) => w.close()));
@@ -121,6 +128,17 @@ export class FilesGateway implements OnModuleDestroy {
       await watcher.close();
       this.watchers.delete(dirPath);
       this.logger.log(`Stopped watcher: ${dirPath}`);
+    }
+  }
+
+  /** Stops watchers whose rooms have no remaining subscribers. */
+  private async cleanupOrphanedWatchers(): Promise<void> {
+    for (const dirPath of [...this.watchers.keys()]) {
+      const room = `fs:${dirPath}`;
+      const sockets = await this.server.in(room).fetchSockets();
+      if (sockets.length === 0) {
+        await this.stopWatcher(dirPath);
+      }
     }
   }
 }

@@ -21,8 +21,11 @@ export function TerminalView({ cwd, className }: Props) {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const terminalIdRef = useRef<string | null>(null);
+  /** Monotonically increasing generation counter to distinguish effect runs. */
+  const generationRef = useRef(0);
 
   const cleanup = useCallback(() => {
+    generationRef.current++;
     const socket = getSocket();
     if (terminalIdRef.current) {
       socket.emit('terminal.close', { terminalId: terminalIdRef.current });
@@ -63,11 +66,20 @@ export function TerminalView({ cwd, className }: Props) {
 
     const socket = getSocket();
 
+    const thisGeneration = generationRef.current;
+
     // Open PTY session
     socket.emit(
       'terminal.open',
       { cwd, cols: term.cols, rows: term.rows },
       (response: { terminalId: string }) => {
+        if (generationRef.current !== thisGeneration) {
+          // Effect was cleaned up before ack — close the orphaned PTY
+          if (response.terminalId) {
+            socket.emit('terminal.close', { terminalId: response.terminalId });
+          }
+          return;
+        }
         terminalIdRef.current = response.terminalId;
       },
     );

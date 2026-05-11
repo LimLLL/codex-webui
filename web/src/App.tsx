@@ -8,12 +8,16 @@ import type { GlobalView } from '@/types/views';
 import { SessionPanel } from '@/components/chat/session-panel';
 import { FilesPanel } from '@/components/files/files-panel';
 import { TerminalView } from '@/components/terminal/terminal-view';
+import { LoginPage } from '@/components/login';
 import { useCodexSocket } from '@/hooks/use-codex-socket';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useFilesStore } from '@/stores/files-store';
 import { api } from '@/api';
+import { getApiToken, setApiToken, clearApiToken } from '@/auth-token';
+import { resetSocket } from '@/socket';
 
 function App() {
+  const [authenticated, setAuthenticated] = useState(false);
   const [input, setInput] = useState('');
   const [dark, setDark] = useState(() =>
     window.matchMedia('(prefers-color-scheme: dark)').matches,
@@ -26,13 +30,33 @@ function App() {
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const setRootDir = useFilesStore((s) => s.setRootDir);
 
-  useCodexSocket();
+  // Only connect socket after authentication
+  useCodexSocket(authenticated);
 
-  // Fetch home dir from backend on mount
+  // Validate existing token on mount
   useEffect(() => {
+    const token = getApiToken();
+    if (!token) return;
     api.getWorkspaceRoots().then((res) => {
+      setAuthenticated(true);
       setHomeDir(res.homeDir);
-    }).catch(() => {});
+    }).catch(() => {
+      clearApiToken();
+    });
+  }, []);
+
+  const handleLogin = useCallback(async (apiKey: string): Promise<boolean> => {
+    setApiToken(apiKey);
+    try {
+      const res = await api.getWorkspaceRoots();
+      setHomeDir(res.homeDir);
+      resetSocket(); // Reconnect with new token
+      setAuthenticated(true);
+      return true;
+    } catch {
+      clearApiToken();
+      return false;
+    }
   }, []);
 
   useEffect(() => {
@@ -54,6 +78,10 @@ function App() {
       setSessionPanelOpen(false);
     }
   }, []);
+
+  if (!authenticated) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
 
   return (
     <TooltipProvider>

@@ -1,7 +1,15 @@
 /**
  * REST controller for thread and turn operations.
  */
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -46,9 +54,14 @@ export class ThreadsController {
     @Query('archived') archived?: string,
     @Query('searchTerm') searchTerm?: string,
   ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    if (parsedLimit !== undefined && (isNaN(parsedLimit) || parsedLimit < 1)) {
+      throw new BadRequestException('limit must be a positive number');
+    }
+
     return this.threadsService.listThreads({
       cursor,
-      limit: limit ? Number(limit) : undefined,
+      limit: parsedLimit,
       archived: archived === 'true' ? true : undefined,
       searchTerm,
     });
@@ -76,6 +89,9 @@ export class ThreadsController {
     @Param('threadId') threadId: string,
     @Body() body: { input: Array<{ type: string; text?: string }> },
   ) {
+    if (!Array.isArray(body.input) || body.input.length === 0) {
+      throw new BadRequestException('input must be a non-empty array');
+    }
     return this.threadsService.startTurn({
       threadId,
       input: body.input as never,

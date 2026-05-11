@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -47,28 +48,40 @@ export interface FileMetadata {
 @Injectable()
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
-  private readonly workspaceRoots: Set<string>;
+  private readonly workspaceRoots = new Set<string>();
 
   constructor(private readonly config: ConfigService) {
     const roots = this.config.get<string>('WORKSPACE_ROOTS') ?? '';
-    this.workspaceRoots = new Set(
-      roots
-        .split(',')
-        .map((r) => r.trim())
-        .filter(Boolean),
-    );
+    for (const root of roots
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean)) {
+      this.workspaceRoots.add(this.resolveExistingDirectorySync(root));
+    }
+
+    // Home directory is always an allowed root
+    const home = fsSync.realpathSync(os.homedir());
+    this.workspaceRoots.add(home);
   }
 
   /**
    * Registers a workspace root directory (e.g. from a thread's cwd).
-   * Paths under registered roots are allowed for file operations.
+   * Dynamic roots must fall within an already-configured root.
    *
    * @param root - Absolute path to register
+   * @throws ForbiddenException if root escapes configured workspace roots
    */
   addWorkspaceRoot(root: string): void {
-    if (!this.workspaceRoots.has(root)) {
-      this.workspaceRoots.add(root);
-      this.logger.log(`Registered workspace root: ${root}`);
+    const resolved = this.resolveExistingDirectorySync(root);
+    if (!this.isAllowedPath(resolved)) {
+      throw new ForbiddenException(
+        'Workspace root must be inside configured workspace roots',
+      );
+    }
+
+    if (!this.workspaceRoots.has(resolved)) {
+      this.workspaceRoots.add(resolved);
+      this.logger.log(`Registered workspace root: ${resolved}`);
     }
   }
 
@@ -92,10 +105,7 @@ export class FilesService {
       throw new NotFoundException(`Path not found: ${inputPath}`);
     }
 
-    const allowed = [...this.workspaceRoots].some(
-      (root) => resolved === root || resolved.startsWith(root + path.sep),
-    );
-    if (!allowed) {
+    if (!this.isAllowedPath(resolved)) {
       throw new ForbiddenException('Path outside allowed workspace roots');
     }
 
@@ -182,12 +192,12 @@ export class FilesService {
 
   /**
    * Writes content to a file, with optional mtime conflict detection.
+   * Validates the final target path against workspace roots (symlink-safe).
    *
    * @param filePath - File to write
    * @param content - Text content to save
    * @param expectedMtime - If provided, reject if file was modified since this timestamp
    * @returns The new mtime after writing
-   * @throws ConflictException if mtime mismatch
    */
   async writeFile(
     filePath: string,
@@ -197,7 +207,17 @@ export class FilesService {
     const resolved = await this.resolveSafePath(
       path.dirname(path.resolve(filePath)),
     );
-    const targetPath = path.join(resolved, path.basename(filePath));
+    let targetPath = path.join(resolved, path.basename(filePath));
+
+    // If the target already exists, resolve its real path to catch symlinks
+    try {
+      targetPath = await this.resolveSafePath(targetPath);
+    } catch (err) {
+      if (!(err instanceof NotFoundException)) {
+        throw err;
+      }
+      // File doesn't exist yet — ok to create in the resolved directory
+    }
 
     if (expectedMtime !== undefined) {
       try {
@@ -258,17 +278,50 @@ export class FilesService {
   }
 
   /**
-   * Deletes a file or empty directory.
+   * Deletes a file, symlink, or empty directory.
+   * For symlinks, removes the link itself (not the target).
    *
    * @param targetPath - Path to delete
    */
   async deletePath(targetPath: string): Promise<void> {
-    const resolved = await this.resolveSafePath(targetPath);
-    const stat = await fs.lstat(resolved);
-    if (stat.isDirectory()) {
-      await fs.rmdir(resolved);
-    } else {
-      await fs.unlink(resolved);
+    // Validate the parent directory is within workspace roots
+    const parentDir = path.dirname(path.resolve(targetPath));
+    const resolvedParent = await this.resolveSafePath(parentDir);
+    const entryPath = path.join(resolvedParent, path.basename(targetPath));
+
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(entryPath);
+    } catch {
+      throw new NotFoundException(`Path not found: ${targetPath}`);
     }
+
+    if (stat.isSymbolicLink()) {
+      await fs.unlink(entryPath);
+    } else if (stat.isDirectory()) {
+      await fs.rmdir(entryPath);
+    } else {
+      await fs.unlink(entryPath);
+    }
+  }
+
+  /** Resolves a path synchronously, ensuring it exists and is a directory. */
+  private resolveExistingDirectorySync(inputPath: string): string {
+    if (!inputPath) {
+      throw new BadRequestException('Path is required');
+    }
+    const resolved = fsSync.realpathSync(path.resolve(inputPath));
+    const stat = fsSync.statSync(resolved);
+    if (!stat.isDirectory()) {
+      throw new BadRequestException('Workspace root is not a directory');
+    }
+    return resolved;
+  }
+
+  /** Checks if a resolved path is under an allowed workspace root. */
+  private isAllowedPath(resolved: string): boolean {
+    return [...this.workspaceRoots].some(
+      (root) => resolved === root || resolved.startsWith(root + path.sep),
+    );
   }
 }

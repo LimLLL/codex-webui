@@ -66,7 +66,8 @@ export function FileViewer() {
 
       <div className="relative min-h-0 flex-1">
         <Editor
-          defaultValue={fileContent ?? ''}
+          key={selectedFile}
+          value={fileContent ?? ''}
           language={language}
           theme="vs-dark"
           height="100%"

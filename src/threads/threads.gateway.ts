@@ -14,6 +14,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
@@ -23,11 +24,17 @@ export class ThreadsGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(ThreadsGateway.name);
+  private readonly apiKey: string;
 
   @WebSocketServer()
   server!: Server;
 
-  constructor(private readonly codexManager: CodexProcessManager) {}
+  constructor(
+    private readonly codexManager: CodexProcessManager,
+    configService: ConfigService,
+  ) {
+    this.apiKey = configService.getOrThrow<string>('WEBUI_API_KEY');
+  }
 
   afterInit(): void {
     this.codexManager.addListener(
@@ -44,7 +51,16 @@ export class ThreadsGateway
     this.logger.log('ThreadsGateway initialized');
   }
 
+  /** Validates auth token on connection; disconnects unauthorized clients. */
   handleConnection(client: Socket): void {
+    const token = this.extractSocketToken(client);
+
+    if (token !== this.apiKey) {
+      this.logger.warn(`Rejected unauthenticated socket: ${client.id}`);
+      client.disconnect(true);
+      return;
+    }
+
     this.logger.debug(`Client connected: ${client.id}`);
   }
 
@@ -128,5 +144,24 @@ export class ThreadsGateway
     if (client) {
       client.respondToServerRequest(data.id, data.result);
     }
+  }
+
+  /** Extracts auth token from socket handshake (mirrors ApiKeyGuard logic). */
+  private extractSocketToken(client: Socket): string | null {
+    const authToken = (client.handshake.auth as Record<string, unknown>)?.[
+      'token'
+    ];
+    if (typeof authToken === 'string' && authToken.trim()) {
+      return authToken.startsWith('Bearer ')
+        ? authToken.slice(7).trim()
+        : authToken;
+    }
+
+    const header = client.handshake.headers.authorization;
+    if (typeof header === 'string' && header.startsWith('Bearer ')) {
+      return header.slice(7).trim();
+    }
+
+    return null;
   }
 }

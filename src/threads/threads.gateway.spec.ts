@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { ThreadsGateway } from './threads.gateway';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 
@@ -25,6 +26,12 @@ describe('ThreadsGateway', () => {
       providers: [
         ThreadsGateway,
         { provide: CodexProcessManager, useValue: mockManager },
+        {
+          provide: ConfigService,
+          useValue: {
+            getOrThrow: () => 'test-api-key',
+          },
+        },
       ],
     }).compile();
 
@@ -82,6 +89,59 @@ describe('ThreadsGateway', () => {
       'codex.notification',
       notification,
     );
+  });
+
+  it('should accept connection with valid token', () => {
+    const client = {
+      id: 'c1',
+      handshake: { auth: { token: 'test-api-key' }, headers: {} },
+      disconnect: jest.fn(),
+    };
+    gateway.handleConnection(client as never);
+    expect(client.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('should reject connection with invalid token', () => {
+    const client = {
+      id: 'c2',
+      handshake: { auth: { token: 'wrong-key' }, headers: {} },
+      disconnect: jest.fn(),
+    };
+    gateway.handleConnection(client as never);
+    expect(client.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('should reject connection with no token', () => {
+    const client = {
+      id: 'c3',
+      handshake: { auth: {}, headers: {} },
+      disconnect: jest.fn(),
+    };
+    gateway.handleConnection(client as never);
+    expect(client.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('should accept connection with Bearer authorization header', () => {
+    const client = {
+      id: 'c4',
+      handshake: {
+        auth: {},
+        headers: { authorization: 'Bearer test-api-key' },
+      },
+      disconnect: jest.fn(),
+    };
+    gateway.handleConnection(client as never);
+    expect(client.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('should accept connection with Bearer-prefixed auth token', () => {
+    const client = {
+      id: 'c5',
+      handshake: { auth: { token: 'Bearer test-api-key' }, headers: {} },
+      disconnect: jest.fn(),
+    };
+    gateway.handleConnection(client as never);
+    expect(client.disconnect).not.toHaveBeenCalled();
   });
 
   it('should forward server response to codex client', () => {

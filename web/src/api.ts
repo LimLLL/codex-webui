@@ -3,12 +3,22 @@
  * Will be replaced by Hey API generated SDK later.
  */
 
+import { getAuthorizationHeader } from './auth-token';
+
 const BASE = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers);
+  headers.set('Content-Type', 'application/json');
+
+  const authorization = getAuthorizationHeader();
+  if (authorization) {
+    headers.set('Authorization', authorization);
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${await res.text()}`);

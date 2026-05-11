@@ -2,7 +2,15 @@
  * REST controller for file management operations.
  * All paths are security-validated against workspace roots.
  */
-import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -41,6 +49,9 @@ export class FilesController {
       expectedMtime?: number;
     },
   ) {
+    if (!body.path || typeof body.content !== 'string') {
+      throw new BadRequestException('path and content are required');
+    }
     return this.filesService.writeFile(
       body.path,
       body.content,
@@ -69,6 +80,9 @@ export class FilesController {
   @Post('roots')
   @ApiOperation({ summary: 'Register a workspace root (e.g. thread cwd)' })
   addRoot(@Body() body: { root: string }) {
+    if (!body.root) {
+      throw new BadRequestException('root is required');
+    }
     this.filesService.addWorkspaceRoot(body.root);
     return { ok: true };
   }

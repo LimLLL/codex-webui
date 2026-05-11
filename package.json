@@ -6,14 +6,15 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "ensure:codex-schema": "test -f src/codex/codex-schema/index.ts || pnpm codex:schema",
+    "build": "pnpm ensure:codex-schema && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start": "pnpm ensure:codex-schema && nest start",
+    "start:dev": "pnpm ensure:codex-schema && nest start --watch",
+    "start:debug": "pnpm ensure:codex-schema && nest start --debug --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "jest",
+    "lint": "pnpm ensure:codex-schema && eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "test": "pnpm ensure:codex-schema && jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
@@ -77,5 +78,7 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-  }
+  },
+  "pnpm": {},
+  "packageManager": "pnpm@10.18.3"
 }

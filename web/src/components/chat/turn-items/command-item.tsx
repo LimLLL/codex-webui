@@ -1,7 +1,9 @@
 /**
  * Renders a command execution item showing the command and its output.
+ * Long commands are collapsible — never truncated for safety.
  */
-import { Loader2, Terminal } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, ChevronRight, Loader2, Terminal } from 'lucide-react';
 import type { TurnItem } from '@/types/timeline';
 import { cn } from '@/lib/utils';
 
@@ -9,11 +11,16 @@ interface Props {
   item: TurnItem;
 }
 
+/** Threshold (in chars) above which the command is collapsed by default. */
+const COLLAPSE_THRESHOLD = 200;
+
 export function CommandItem({ item }: Props) {
-  /** Extract a readable command from the full shell invocation. */
-  const displayCommand = item.command
-    ? simplifyCommand(item.command)
-    : undefined;
+  const fullCommand = item.command ? stripShellWrapper(item.command) : undefined;
+  const isLong = (fullCommand?.length ?? 0) > COLLAPSE_THRESHOLD;
+  const [expanded, setExpanded] = useState(!isLong);
+
+  /** First logical line for the collapsed preview. */
+  const previewLine = fullCommand?.split('\n')[0] ?? '';
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/50 bg-muted/40 font-mono">
@@ -35,10 +42,39 @@ export function CommandItem({ item }: Props) {
         )}
       </div>
 
-      {displayCommand && (
+      {fullCommand && (
         <div className="border-b border-border/30 bg-muted/60 px-3 py-1.5 text-xs text-foreground/80">
-          <span className="mr-1.5 text-green-400">$</span>
-          {displayCommand}
+          {isLong ? (
+            <button
+              type="button"
+              className="flex w-full items-start gap-1 text-left"
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? (
+                <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="mr-1.5 text-green-400">$</span>
+                {expanded ? (
+                  <span className="whitespace-pre-wrap break-all">
+                    {fullCommand}
+                  </span>
+                ) : (
+                  <span className="break-all">
+                    {previewLine}
+                    <span className="ml-1 text-muted-foreground">...</span>
+                  </span>
+                )}
+              </span>
+            </button>
+          ) : (
+            <>
+              <span className="mr-1.5 text-green-400">$</span>
+              {fullCommand}
+            </>
+          )}
         </div>
       )}
 
@@ -52,22 +88,11 @@ export function CommandItem({ item }: Props) {
 }
 
 /**
- * Extracts the actual command from codex's shell invocation wrapper.
- * e.g. `/bin/zsh -lc "mkdir -p .claude && apply_patch ..."` → `mkdir -p .claude && apply_patch ...`
+ * Strips the shell invocation wrapper added by Codex.
+ * e.g. `/bin/zsh -lc "mkdir -p .claude && ..."` → `mkdir -p .claude && ...`
+ * Never truncates — returns the full inner command.
  */
-function simplifyCommand(cmd: string): string {
-  // Strip `/bin/zsh -lc "..."` or `/bin/bash -lc "..."` wrapper
-  const match = cmd.match(/^\/bin\/(?:zsh|bash)\s+-\w+\s+"(.+)"$/s);
-  if (match) {
-    let inner = match[1];
-    // Truncate very long commands (e.g. apply_patch with full content)
-    if (inner.length > 200) {
-      const firstLine = inner.split('\n')[0];
-      inner = firstLine.length > 200
-        ? firstLine.slice(0, 200) + '...'
-        : firstLine + ' ...';
-    }
-    return inner;
-  }
-  return cmd.length > 200 ? cmd.slice(0, 200) + '...' : cmd;
+function stripShellWrapper(cmd: string): string {
+  const match = cmd.match(/^\/bin\/(?:zsh|bash)\s+-\w+\s+"([\s\S]+)"$/);
+  return match ? match[1] : cmd;
 }

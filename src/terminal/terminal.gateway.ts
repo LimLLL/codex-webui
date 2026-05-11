@@ -1,6 +1,7 @@
 /**
  * WebSocket gateway for terminal sessions.
  * Bridges xterm.js on the frontend with node-pty on the backend.
+ * All operations validate socket client ownership.
  */
 import {
   ConnectedSocket,
@@ -33,12 +34,12 @@ export class TerminalGateway implements OnGatewayDisconnect {
    * @returns { terminalId } on success
    */
   @SubscribeMessage('terminal.open')
-  handleOpen(
+  async handleOpen(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { cwd: string; cols: number; rows: number },
-  ): { terminalId: string; error?: string } {
+  ): Promise<{ terminalId: string; error?: string }> {
     try {
-      const session = this.terminalService.open(
+      const session = await this.terminalService.open(
         client.id,
         data.cwd,
         data.cols || 80,
@@ -58,7 +59,7 @@ export class TerminalGateway implements OnGatewayDisconnect {
           terminalId: session.id,
           exitCode,
         });
-        this.terminalService.close(session.id);
+        this.terminalService.close(client.id, session.id);
       });
 
       this.logger.debug(`Client ${client.id} opened terminal ${session.id}`);
@@ -72,22 +73,33 @@ export class TerminalGateway implements OnGatewayDisconnect {
 
   /** Writes user input to the terminal. */
   @SubscribeMessage('terminal.input')
-  handleInput(@MessageBody() data: { terminalId: string; data: string }): void {
-    this.terminalService.write(data.terminalId, data.data);
+  handleInput(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { terminalId: string; data: string },
+  ): void {
+    this.terminalService.write(client.id, data.terminalId, data.data);
   }
 
   /** Resizes the terminal. */
   @SubscribeMessage('terminal.resize')
   handleResize(
+    @ConnectedSocket() client: Socket,
     @MessageBody() data: { terminalId: string; cols: number; rows: number },
   ): void {
-    this.terminalService.resize(data.terminalId, data.cols, data.rows);
+    this.terminalService.resize(
+      client.id,
+      data.terminalId,
+      data.cols,
+      data.rows,
+    );
   }
 
   /** Closes a terminal session. */
   @SubscribeMessage('terminal.close')
-  handleClose(@MessageBody() data: { terminalId: string }): { ok: boolean } {
-    this.terminalService.close(data.terminalId);
-    return { ok: true };
+  handleClose(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { terminalId: string },
+  ): { ok: boolean } {
+    return { ok: this.terminalService.close(client.id, data.terminalId) };
   }
 }

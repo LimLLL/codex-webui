@@ -98,19 +98,25 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Codex client error: ${err.message}`);
     });
 
-    this.client.on('close', (code, signal) => {
+    // Capture local reference to avoid race with close handler
+    const currentClient = this.client;
+
+    currentClient.on('close', (code, signal) => {
       this.logger.warn(
         `Codex app-server exited (code=${code}, signal=${signal})`,
       );
-      this.client = null;
-      this.initResult = null;
+      // Only clear if still the active client (avoids clobbering a new spawn)
+      if (this.client === currentClient) {
+        this.client = null;
+        this.initResult = null;
+      }
       if (!this.destroyed) {
         void this.restart();
       }
     });
 
     try {
-      this.initResult = await this.client.initialize({
+      this.initResult = await currentClient.initialize({
         clientInfo: {
           name: 'codex_webui',
           title: 'Codex WebUI',
@@ -125,8 +131,10 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `Failed to initialize codex app-server: ${(err as Error).message}`,
       );
-      this.client.destroy();
-      this.client = null;
+      currentClient.destroy();
+      if (this.client === currentClient) {
+        this.client = null;
+      }
       if (!this.destroyed) {
         void this.restart();
       }

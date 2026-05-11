@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { api, type Thread, type TurnItemData, type Turn } from '../api';
 import { getSocket } from '../socket';
 import type { TimelineEntry, TurnItem } from '../types/timeline';
+import type { ApprovalRequest } from '../types/approval';
 
 /** Converts a persisted turn item to a TurnItem for rendering. */
 function parseTurnItem(item: TurnItemData): TurnItem | null {
@@ -104,6 +105,8 @@ interface TimelineState {
   timeline: TimelineEntry[];
   loading: boolean;
   expandedReasoning: Set<string>;
+  /** Pending/resolved approval requests, keyed by itemId for easy lookup. */
+  approvals: Record<string, ApprovalRequest>;
 
   fetchThreads: () => Promise<void>;
   createThread: () => Promise<void>;
@@ -131,6 +134,11 @@ interface TimelineState {
   setLoading: (loading: boolean) => void;
   expandReasoning: (itemId: string) => void;
   collapseReasoning: (itemId: string) => void;
+
+  /** Adds a pending approval request. */
+  addApproval: (approval: ApprovalRequest) => void;
+  /** Marks an approval as accepted or declined. */
+  resolveApproval: (itemId: string, decision: 'accepted' | 'declined') => void;
 }
 
 /** Unsubscribe from the current thread and subscribe to a new one. */
@@ -152,6 +160,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   timeline: [],
   loading: false,
   expandedReasoning: new Set<string>(),
+  approvals: {},
 
   fetchThreads: async () => {
     try {
@@ -200,6 +209,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       timeline: [],
       loading: false,
       expandedReasoning: new Set<string>(),
+      approvals: {},
     });
 
     try {
@@ -316,6 +326,25 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       const next = new Set(s.expandedReasoning);
       next.delete(itemId);
       return { expandedReasoning: next };
+    });
+  },
+
+  addApproval: (approval) => {
+    set((s) => ({
+      approvals: { ...s.approvals, [approval.itemId]: approval },
+    }));
+  },
+
+  resolveApproval: (itemId, decision) => {
+    set((s) => {
+      const existing = s.approvals[itemId];
+      if (!existing) return {};
+      return {
+        approvals: {
+          ...s.approvals,
+          [itemId]: { ...existing, status: decision },
+        },
+      };
     });
   },
 }));

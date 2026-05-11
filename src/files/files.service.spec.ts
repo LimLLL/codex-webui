@@ -151,23 +151,33 @@ describe('FilesService', () => {
   });
 
   describe('addWorkspaceRoot', () => {
-    it('should allow access to dynamically added roots', async () => {
-      const newRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'extra-'));
-      const resolved = await fs.realpath(newRoot);
-      const testFile = path.join(resolved, 'test.txt');
+    it('should allow access to dynamically added sub-roots', async () => {
+      // Dynamic roots must be inside an existing root
+      const newRoot = path.join(tmpDir, 'extra-root');
+      await fs.mkdir(newRoot);
+      const testFile = path.join(newRoot, 'test.txt');
       await fs.writeFile(testFile, 'dynamic');
 
-      // Should fail before adding root
-      await expect(service.resolveSafePath(testFile)).rejects.toThrow(
-        ForbiddenException,
-      );
-
-      // Add root and retry
-      service.addWorkspaceRoot(resolved);
+      // Already accessible since it's under tmpDir
       const result = await service.resolveSafePath(testFile);
       expect(result).toBe(testFile);
 
-      await fs.rm(resolved, { recursive: true, force: true });
+      // Registering as explicit root should not throw
+      service.addWorkspaceRoot(newRoot);
+      expect(service.getWorkspaceRoots()).toContain(newRoot);
+    });
+
+    it('should reject adding root outside configured workspace', async () => {
+      // Create a real directory outside tmpDir
+      const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'outside-'));
+      const resolvedOutside = await fs.realpath(outsideRoot);
+      try {
+        expect(() => service.addWorkspaceRoot(resolvedOutside)).toThrow(
+          ForbiddenException,
+        );
+      } finally {
+        await fs.rm(resolvedOutside, { recursive: true, force: true });
+      }
     });
   });
 });

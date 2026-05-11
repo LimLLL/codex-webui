@@ -50,11 +50,17 @@ export const useFilesStore = create<FilesState>((set, get) => ({
 
   setRootDir: async (dir: string | null) => {
     if (dir === get().rootDir) return;
-    set({ rootDir: dir, tree: new Map(), selectedFile: null, fileContent: null });
-    if (dir) {
-      // Register cwd as workspace root so backend allows access
+    if (!dir) {
+      set({ rootDir: null, tree: new Map(), selectedFile: null, fileContent: null });
+      return;
+    }
+    try {
+      // Authorize first — only update UI state after success
       await api.addWorkspaceRoot(dir);
+      set({ rootDir: dir, tree: new Map(), selectedFile: null, fileContent: null });
       await get().loadDirectory(dir);
+    } catch {
+      // Root rejected — keep previous state
     }
   },
 

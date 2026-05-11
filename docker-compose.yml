@@ -1,0 +1,22 @@
+services:
+  web:
+    build: .
+    ports:
+      - "${PORT:-8172}:8172"
+    environment:
+      NODE_ENV: production
+      PORT: 8172
+      WEBUI_API_KEY: ${WEBUI_API_KEY:?Set WEBUI_API_KEY in .env}
+      CODEX_HOME: /codex-home
+      WORKSPACE_ROOTS: /workspaces
+      # Pass through API keys for model providers
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - workspaces:/workspaces
+      - codex_home:/codex-home
+    restart: unless-stopped
+
+volumes:
+  workspaces:
+  codex_home:

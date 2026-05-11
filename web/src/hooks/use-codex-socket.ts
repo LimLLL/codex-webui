@@ -7,7 +7,7 @@ import { getSocket } from '../socket';
 import { useConnectionStore } from '../stores/connection-store';
 import { useTimelineStore } from '../stores/timeline-store';
 
-export function useCodexSocket() {
+export function useCodexSocket(enabled = true) {
   const setConnected = useConnectionStore((s) => s.setConnected);
   const {
     updateCurrentTurn,
@@ -16,9 +16,13 @@ export function useCodexSocket() {
     setLoading,
     expandReasoning,
     collapseReasoning,
+    addApproval,
+    resolveApproval,
   } = useTimelineStore();
 
   useEffect(() => {
+    if (!enabled) return;
+
     const socket = getSocket();
 
     socket.on('connect', () => setConnected(true));
@@ -234,12 +238,55 @@ export function useCodexSocket() {
       },
     );
 
+    socket.on(
+      'codex.serverRequest',
+      (request: {
+        id: number | string;
+        method: string;
+        params: Record<string, unknown>;
+      }) => {
+        const { id, method, params } = request;
+        const threadId = params.threadId as string;
+        const turnId = params.turnId as string;
+        const itemId = params.itemId as string;
+
+        if (method === 'item/commandExecution/requestApproval') {
+          addApproval({
+            requestId: id,
+            kind: 'commandExecution',
+            threadId,
+            turnId,
+            itemId,
+            status: 'pending',
+            command: (params.command as string) ?? null,
+            cwd: (params.cwd as string) ?? null,
+            reason: (params.reason as string) ?? null,
+          });
+        }
+
+        if (method === 'item/fileChange/requestApproval') {
+          addApproval({
+            requestId: id,
+            kind: 'fileChange',
+            threadId,
+            turnId,
+            itemId,
+            status: 'pending',
+            reason: (params.reason as string) ?? null,
+            grantRoot: (params.grantRoot as string) ?? null,
+          });
+        }
+      },
+    );
+
     return () => {
       socket.off('connect');
       socket.off('disconnect');
       socket.off('codex.notification');
+      socket.off('codex.serverRequest');
     };
   }, [
+    enabled,
     setConnected,
     updateCurrentTurn,
     updateTurnItem,
@@ -247,5 +294,7 @@ export function useCodexSocket() {
     setLoading,
     expandReasoning,
     collapseReasoning,
+    addApproval,
+    resolveApproval,
   ]);
 }
