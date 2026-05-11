@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Terminal } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { TurnItem } from '@/types/timeline';
 import { cn } from '@/lib/utils';
 
@@ -15,6 +16,7 @@ interface Props {
 const COLLAPSE_THRESHOLD = 200;
 
 export function CommandItem({ item }: Props) {
+  const { t } = useTranslation();
   const fullCommand = item.command ? stripShellWrapper(item.command) : undefined;
   const isLong = (fullCommand?.length ?? 0) > COLLAPSE_THRESHOLD;
   const [expanded, setExpanded] = useState(!isLong);
@@ -26,7 +28,7 @@ export function CommandItem({ item }: Props) {
     <div className="overflow-hidden rounded-lg border border-border/50 bg-muted/40 font-mono">
       <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-1.5 text-xs text-muted-foreground">
         <Terminal className="h-3 w-3" />
-        <span>Terminal</span>
+        <span>{t('Terminal')}</span>
         {item.exitCode !== undefined && item.completed && (
           <span
             className={cn(
@@ -34,7 +36,7 @@ export function CommandItem({ item }: Props) {
               item.exitCode === 0 ? 'text-green-400' : 'text-red-400',
             )}
           >
-            exit {item.exitCode}
+            {t('exit')} {item.exitCode}
           </span>
         )}
         {!item.completed && (

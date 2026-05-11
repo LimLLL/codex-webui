@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import { ChevronDown, GitBranch } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function DiffViewer({ diff }: Props) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const lines = diff.split('\n');
   const fileCount = lines.filter((l) => l.startsWith('diff --git')).length;
@@ -31,7 +33,7 @@ export function DiffViewer({ diff }: Props) {
       >
         <GitBranch className="h-3.5 w-3.5 text-purple-400" />
         <span className="font-medium">
-          {fileCount} file{fileCount !== 1 ? 's' : ''} changed
+          {fileCount === 1 ? t('{{count}} file changed', { count: fileCount }) : t('{{count}} files changed', { count: fileCount })}
         </span>
         <span className="text-green-400">+{additions}</span>
         <span className="text-red-400">-{deletions}</span>

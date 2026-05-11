@@ -173,6 +173,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   hydrateTimeline: (turns: TurnDto[], cwd?: string | null) => {
     set({
       threadCwd: cwd ?? get().threadCwd,
+      loading: false,
       ...(turns.length > 0 ? { timeline: turnsToTimeline(turns) } : {}),
     });
   },

@@ -4,6 +4,7 @@
 import { useCallback, useRef } from 'react';
 import { Send, TerminalSquare } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { threadsStartTurnMutation } from '@/generated/api/@tanstack/react-query.gen';
@@ -12,13 +13,12 @@ import { useTimelineStore } from '@/stores/timeline-store';
 interface Props {
   value: string;
   onChange: (value: string) => void;
-  /** Whether the session bottom panel is open. */
   panelOpen: boolean;
-  /** Toggle session bottom panel. */
   onTogglePanel: () => void;
 }
 
 export function ChatInput({ value, onChange, panelOpen, onTogglePanel }: Props) {
+  const { t } = useTranslation();
   const threadId = useTimelineStore((s) => s.threadId);
   const loading = useTimelineStore((s) => s.loading);
   const addUserMessage = useTimelineStore((s) => s.addUserMessage);
@@ -61,14 +61,13 @@ export function ChatInput({ value, onChange, panelOpen, onTogglePanel }: Props) 
           onKeyDown={handleKeyDown}
           placeholder={
             threadId
-              ? 'Type a message... (Enter to send)'
-              : 'Create a thread first'
+              ? t('Type a message... (Enter to send)')
+              : t('Create a thread first')
           }
           disabled={!threadId || loading}
           rows={1}
           className="max-h-32 min-h-0 resize-none rounded-xl bg-background/60 pb-10 pr-4 pt-2.5 backdrop-blur-sm transition-all duration-200 focus:ring-2 focus:ring-primary/30"
         />
-        {/* Bottom bar inside textarea area */}
         <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
           <Button
             size="sm"
@@ -76,10 +75,10 @@ export function ChatInput({ value, onChange, panelOpen, onTogglePanel }: Props) 
             className="h-7 gap-1.5 rounded-lg px-2.5 text-xs"
             onClick={onTogglePanel}
             disabled={!threadId}
-            title="Toggle terminal & files panel"
+            title={t('Terminal')}
           >
             <TerminalSquare className="h-3.5 w-3.5" />
-            Terminal
+            {t('Terminal')}
           </Button>
 
           <Button

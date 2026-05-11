@@ -1,5 +1,6 @@
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { TurnItem } from '@/types/timeline';
 
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function ReasoningItem({ item }: Props) {
+  const { t } = useTranslation();
   const expanded = useTimelineStore((s) => s.expandedReasoning.has(item.itemId));
   const toggleReasoning = useTimelineStore((s) => s.toggleReasoning);
 
@@ -22,9 +24,9 @@ export function ReasoningItem({ item }: Props) {
         <ChevronDown
           className={`h-3 w-3 transition-transform duration-200 ${expanded ? '' : '-rotate-90'}`}
         />
-        <span>Thinking</span>
+        <span>{t('Thinking')}</span>
         {!expanded && item.completed && (
-          <span className="opacity-50">(click to expand)</span>
+          <span className="opacity-50">{t('(click to expand)')}</span>
         )}
         {!item.completed && <Loader2 className="h-3 w-3 animate-spin" />}
       </div>

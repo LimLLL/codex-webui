@@ -4,6 +4,7 @@
  */
 import { Bot, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import type { TimelineEntry, TurnItem } from '@/types/timeline';
 import { ReasoningItem } from './turn-items/reasoning-item';
@@ -56,6 +57,7 @@ function ItemWithApproval({ item }: { item: TurnItem }) {
 }
 
 export function TurnBlock({ entry }: Props) {
+  const { t } = useTranslation();
   return (
     <motion.div
       variants={entryVariants}
@@ -79,7 +81,7 @@ export function TurnBlock({ entry }: Props) {
         {!entry.completed && entry.items.length === 0 && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Thinking...
+            {t('Thinking...')}
           </div>
         )}
       </div>

@@ -1,4 +1,5 @@
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, Globe } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -10,7 +11,13 @@ interface Props {
 }
 
 export function ChatHeader({ dark, onToggleDark }: Props) {
+  const { t, i18n } = useTranslation();
   const connected = useConnectionStore((s) => s.connected);
+
+  const toggleLanguage = () => {
+    const next = i18n.language.startsWith('zh') ? 'en' : 'zh-CN';
+    void i18n.changeLanguage(next);
+  };
 
   return (
     <>
@@ -29,8 +36,17 @@ export function ChatHeader({ dark, onToggleDark }: Props) {
                 : 'bg-muted-foreground'
             }`}
           />
-          {connected ? 'Connected' : 'Disconnected'}
+          {connected ? t('Connected') : t('Disconnected')}
         </Badge>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-8 w-8"
+          onClick={toggleLanguage}
+          title={i18n.language.startsWith('zh') ? 'English' : '简体中文'}
+        >
+          <Globe className="h-4 w-4" />
+        </Button>
         <Button
           size="icon"
           variant="ghost"

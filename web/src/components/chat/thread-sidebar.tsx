@@ -3,6 +3,7 @@
  */
 import { FolderOpen, MessageSquare, Plus, Terminal } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export function ThreadSidebar({ activeView, onViewChange }: Props) {
+  const { t } = useTranslation();
   const threadId = useTimelineStore((s) => s.threadId);
   const setActiveThread = useTimelineStore((s) => s.setActiveThread);
   const hydrateTimeline = useTimelineStore((s) => s.hydrateTimeline);
@@ -42,16 +44,22 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
     onError: (err) => addSystemError(String(err.message)),
   });
 
+  const setLoading = useTimelineStore((s) => s.setLoading);
+
   const resumeThread = useMutation({
     ...threadsResumeThreadMutation(),
     onSuccess: (res) => {
       hydrateTimeline(res.thread.turns, res.cwd);
+    },
+    onError: () => {
+      setLoading(false);
     },
   });
 
   const handleSwitchThread = (targetId: string) => {
     if (targetId === threadId) return;
     setActiveThread(targetId);
+    setLoading(true);
     resumeThread.mutate({ path: { threadId: targetId } });
   };
 
@@ -70,7 +78,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
           )}
         >
           <FolderOpen className="h-4 w-4 shrink-0" />
-          Files
+          {t('Files')}
         </button>
         <button
           type="button"
@@ -83,7 +91,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
           )}
         >
           <Terminal className="h-4 w-4 shrink-0" />
-          Terminal
+          {t('Terminal')}
         </button>
       </div>
 
@@ -92,7 +100,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
       {/* Thread list */}
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">
-          Threads
+          {t('Threads')}
         </span>
         <Button
           size="icon"
@@ -133,7 +141,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
 
           {threads.length === 0 && (
             <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-              No threads yet
+              {t('No threads yet')}
             </p>
           )}
         </div>

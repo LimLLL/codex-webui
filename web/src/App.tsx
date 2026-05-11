@@ -9,6 +9,7 @@ import { SessionPanel } from '@/components/chat/session-panel';
 import { FilesPanel } from '@/components/files/files-panel';
 import { TerminalView } from '@/components/terminal/terminal-view';
 import { LoginPage } from '@/components/login';
+import { SnackbarContainer } from '@/components/snackbar/snackbar-container';
 import { useCodexSocket } from '@/hooks/use-codex-socket';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useFilesStore } from '@/stores/files-store';
@@ -70,7 +71,7 @@ function App() {
     const dir = globalView === 'chat' ? threadCwd : globalView === 'files' ? homeDir : null;
     if (dir) {
       // Register as workspace root, then update store
-      void filesAddRoot({ body: { root: dir }, throwOnError: true })
+      void filesAddRoot({ body: { root: dir }, throwOnError: true, meta: { silent: true } })
         .then(() => setRootDir(dir))
         .catch(() => { /* root rejected — keep previous state */ });
     } else {
@@ -86,7 +87,12 @@ function App() {
   }, []);
 
   if (!authenticated) {
-    return <LoginPage onLogin={handleLogin} />;
+    return (
+      <>
+        <LoginPage onLogin={handleLogin} />
+        <SnackbarContainer />
+      </>
+    );
   }
 
   return (
@@ -131,6 +137,7 @@ function App() {
           )}
         </div>
       </div>
+      <SnackbarContainer />
     </TooltipProvider>
   );
 }

@@ -4,6 +4,7 @@
  */
 import { useState, useCallback } from 'react';
 import { FileCode, Terminal, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { FileTree } from '@/components/files/file-tree';
 import { FileViewer } from '@/components/files/file-viewer';
 import { TerminalView } from '@/components/terminal/terminal-view';
@@ -21,6 +22,7 @@ interface FileTab {
 }
 
 export function SessionPanel({ cwd, onClose }: Props) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'terminal' | string>('terminal');
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]);
   const selectFile = useFilesStore((s) => s.selectFile);
@@ -59,7 +61,7 @@ export function SessionPanel({ cwd, onClose }: Props) {
       {/* File tree — fixed width */}
       <div className="flex w-52 shrink-0 flex-col border-r border-border overflow-hidden">
         <div className="shrink-0 border-b border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
-          Explorer
+          {t('Explorer')}
         </div>
         <FileTree onFileClick={handleFileClick} />
       </div>
@@ -79,7 +81,7 @@ export function SessionPanel({ cwd, onClose }: Props) {
             )}
           >
             <Terminal className="h-3 w-3" />
-            Terminal
+            {t('Terminal')}
           </button>
 
           {fileTabs.map((tab) => (
@@ -117,7 +119,7 @@ export function SessionPanel({ cwd, onClose }: Props) {
             type="button"
             onClick={onClose}
             className="ml-auto px-2 py-1.5 text-muted-foreground hover:text-foreground"
-            title="Close panel"
+            title={t('Close panel')}
           >
             <X className="h-3.5 w-3.5" />
           </button>

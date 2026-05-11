@@ -2,6 +2,7 @@
  * Renders a file change item showing the diff output from codex agent.
  */
 import { FileCode, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { TurnItem } from '@/types/timeline';
 import { cn } from '@/lib/utils';
 
@@ -10,7 +11,8 @@ interface Props {
 }
 
 export function FileChangeItem({ item }: Props) {
-  const fileName = item.filePath?.split('/').pop() ?? 'File change';
+  const { t } = useTranslation();
+  const fileName = item.filePath?.split('/').pop() ?? t('File change');
 
   return (
     <div className="rounded-lg border border-border bg-muted/30 text-sm">
@@ -23,7 +25,7 @@ export function FileChangeItem({ item }: Props) {
           <Loader2 className="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
         )}
         {item.completed && (
-          <span className="ml-auto text-xs text-green-400">Applied</span>
+          <span className="ml-auto text-xs text-green-400">{t('Applied')}</span>
         )}
       </div>
 

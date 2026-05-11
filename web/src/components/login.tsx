@@ -3,6 +3,7 @@
  * Validates against the backend before granting access.
  */
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { KeyRound, Loader2 } from 'lucide-react';
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function LoginPage({ onLogin }: Props) {
+  const { t } = useTranslation();
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,10 +29,10 @@ export function LoginPage({ onLogin }: Props) {
     try {
       const ok = await onLogin(trimmed);
       if (!ok) {
-        setError('Invalid API key');
+        setError(t('Invalid API key'));
       }
     } catch {
-      setError('Failed to connect to server');
+      setError(t('Failed to connect to server'));
     } finally {
       setLoading(false);
     }
@@ -47,12 +49,12 @@ export function LoginPage({ onLogin }: Props) {
           Codex WebUI
         </div>
         <p className="text-sm text-muted-foreground">
-          Enter your API key to continue.
+          {t('Enter your API key to continue.')}
         </p>
 
         <Input
           type="password"
-          placeholder="API Key"
+          placeholder={t('API Key')}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           autoFocus
@@ -66,7 +68,7 @@ export function LoginPage({ onLogin }: Props) {
           {loading ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           ) : null}
-          Login
+          {t('Login')}
         </Button>
       </form>
     </div>

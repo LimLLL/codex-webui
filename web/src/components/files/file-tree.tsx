@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   filesReadTreeOptions,
@@ -27,6 +28,7 @@ interface FileTreeProps {
 }
 
 export function FileTree({ onFileClick }: FileTreeProps = {}) {
+  const { t } = useTranslation();
   const rootDir = useFilesStore((s) => s.rootDir);
   const selectedFile = useFilesStore((s) => s.selectedFile);
   const navigateUp = useFilesStore((s) => s.navigateUp);
@@ -34,7 +36,7 @@ export function FileTree({ onFileClick }: FileTreeProps = {}) {
   if (!rootDir) {
     return (
       <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-        No workspace directory
+        {t('No workspace directory')}
       </div>
     );
   }
@@ -49,7 +51,7 @@ export function FileTree({ onFileClick }: FileTreeProps = {}) {
           type="button"
           onClick={() => navigateUp()}
           className="rounded p-0.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-          title="Go up"
+          title={t('Go up')}
         >
           <ChevronUp className="h-3.5 w-3.5" />
         </button>
@@ -80,6 +82,7 @@ interface DirectoryContentsProps {
 }
 
 function DirectoryContents({ dirPath, depth, selectedFile, onFileClick }: DirectoryContentsProps) {
+  const { t } = useTranslation();
   const toggleDirectory = useFilesStore((s) => s.toggleDirectory);
   const defaultSelectFile = useFilesStore((s) => s.selectFile);
   const expandedDirs = useFilesStore((s) => s.expandedDirs);
@@ -108,7 +111,7 @@ function DirectoryContents({ dirPath, depth, selectedFile, onFileClick }: Direct
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         <Loader2 className="h-3 w-3 animate-spin" />
-        Loading...
+        {t('Loading...')}
       </div>
     );
   }
@@ -169,6 +172,7 @@ interface TreeRowProps {
 }
 
 function TreeRow({ depth, icon, name, expanded, selected, onClick, onDelete }: TreeRowProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -212,7 +216,7 @@ function TreeRow({ depth, icon, name, expanded, selected, onClick, onDelete }: T
           onDelete();
         }}
         className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-destructive/20 hover:text-destructive group-hover:opacity-100"
-        title="Delete"
+        title={t('Delete')}
       >
         <Trash2 className="h-3 w-3" />
       </button>

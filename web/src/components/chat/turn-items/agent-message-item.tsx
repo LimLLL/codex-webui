@@ -1,4 +1,5 @@
 import type { TurnItem } from '@/types/timeline';
+import { MarkdownRenderer } from '../markdown-renderer';
 
 interface Props {
   item: TurnItem;
@@ -7,9 +8,7 @@ interface Props {
 export function AgentMessageItem({ item }: Props) {
   return (
     <div>
-      <pre className="m-0 whitespace-pre-wrap font-sans text-sm leading-relaxed wrap-break-word">
-        {item.content}
-      </pre>
+      <MarkdownRenderer content={item.content} completed={item.completed} />
     </div>
   );
 }

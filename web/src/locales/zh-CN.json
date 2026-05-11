@@ -1,0 +1,69 @@
+{
+  "Loading...": "加载中...",
+  "Delete": "删除",
+  "Terminal": "终端",
+  "Files": "文件",
+  "Explorer": "资源管理器",
+  "Close": "关闭",
+  "Copy": "复制",
+  "Copied!": "已复制！",
+  "Copy failed": "复制失败",
+  "Code": "代码",
+
+  "Request failed": "请求失败",
+  "Request failed ({{status}})": "请求失败（{{status}}）",
+
+  "Codex WebUI": "Codex WebUI",
+  "Connected": "已连接",
+  "Disconnected": "未连接",
+
+  "Threads": "会话",
+  "No threads yet": "暂无会话",
+
+  "Type a message... (Enter to send)": "输入消息…（按 Enter 发送）",
+  "Create a thread first": "请先创建会话",
+
+  "Send a message to start the conversation.": "发送消息开始对话。",
+  "Create a new thread to begin.": "创建新会话以开始。",
+
+  "Thinking...": "思考中...",
+  "Thinking": "思考",
+  "(click to expand)": "（点击展开）",
+
+  "Command Approval": "命令审批",
+  "File Change Approval": "文件变更审批",
+  "Accepted": "已接受",
+  "Declined": "已拒绝",
+  "Accept": "接受",
+  "Decline": "拒绝",
+  "Requesting write access to:": "请求写入权限：",
+  "cwd:": "工作目录：",
+
+  "done": "完成",
+  "exit": "退出码",
+
+  "File change": "文件变更",
+  "Applied": "已应用",
+
+  "{{count}} file changed": "{{count}} 个文件变更",
+  "{{count}} files changed": "{{count}} 个文件变更",
+
+  "No workspace directory": "无工作区目录",
+  "Go up": "返回上级",
+
+  "Select a file to view": "选择文件以查看",
+  "Save (Ctrl+S)": "保存 (Ctrl+S)",
+
+  "Close panel": "关闭面板",
+
+  "Process exited with code {{code}}": "进程退出，退出码 {{code}}",
+
+  "Enter your API key to continue.": "输入 API 密钥以继续。",
+  "API Key": "API 密钥",
+  "Invalid API key": "API 密钥无效",
+  "Failed to connect to server": "无法连接到服务器",
+  "Login": "登录",
+
+  "English": "English",
+  "简体中文": "简体中文"
+}

@@ -6,6 +6,7 @@ import { useCallback, useRef, useEffect } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { Loader2, Save } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import {
   filesReadFileOptions,
@@ -16,6 +17,7 @@ import {
 import { useFilesStore } from '@/stores/files-store';
 
 export function FileViewer() {
+  const { t } = useTranslation();
   const selectedFile = useFilesStore((s) => s.selectedFile);
   const fileMtime = useFilesStore((s) => s.fileMtime);
   const setFileMtime = useFilesStore((s) => s.setFileMtime);
@@ -70,7 +72,7 @@ export function FileViewer() {
   if (!selectedFile) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        Select a file to view
+        {t('Select a file to view')}
       </div>
     );
   }
@@ -79,7 +81,7 @@ export function FileViewer() {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Loading...
+        {t('Loading...')}
       </div>
     );
   }
@@ -98,7 +100,7 @@ export function FileViewer() {
           variant="ghost"
           className="h-6 w-6"
           onClick={handleSave}
-          title="Save (Ctrl+S)"
+          title={t('Save (Ctrl+S)')}
         >
           <Save className="h-3.5 w-3.5" />
         </Button>

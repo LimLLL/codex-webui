@@ -7,6 +7,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import i18n from '@/i18n';
 import { getSocket } from '@/socket';
 
 interface Props {
@@ -93,7 +94,7 @@ export function TerminalView({ cwd, className }: Props) {
 
     const handleExit = (data: { terminalId: string; exitCode: number }) => {
       if (data.terminalId === terminalIdRef.current) {
-        term.write(`\r\n[Process exited with code ${data.exitCode}]\r\n`);
+        term.write(`\r\n[${i18n.t('Process exited with code {{code}}', { code: data.exitCode })}]\r\n`);
         terminalIdRef.current = null;
       }
     };

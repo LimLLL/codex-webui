@@ -3,6 +3,7 @@
  * Shows the command/reason and Accept/Decline buttons when pending.
  */
 import { ShieldAlert, Check, X, Terminal, FileCode } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { getSocket } from '@/socket';
 import { useTimelineStore } from '@/stores/timeline-store';
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function ApprovalItem({ approval }: Props) {
+  const { t } = useTranslation();
   const resolveApproval = useTimelineStore((s) => s.resolveApproval);
 
   const handleDecision = (decision: 'accepted' | 'declined') => {
@@ -33,8 +35,8 @@ export function ApprovalItem({ approval }: Props) {
   const Icon = approval.kind === 'commandExecution' ? Terminal : FileCode;
   const label =
     approval.kind === 'commandExecution'
-      ? 'Command Approval'
-      : 'File Change Approval';
+      ? t('Command Approval')
+      : t('File Change Approval');
 
   return (
     <div
@@ -58,12 +60,12 @@ export function ApprovalItem({ approval }: Props) {
         <span className="font-medium">{label}</span>
         {isAccepted && (
           <span className="ml-auto flex items-center gap-1 text-xs text-green-500">
-            <Check className="h-3 w-3" /> Accepted
+            <Check className="h-3 w-3" /> {t('Accepted')}
           </span>
         )}
         {isDeclined && (
           <span className="ml-auto flex items-center gap-1 text-xs text-red-500">
-            <X className="h-3 w-3" /> Declined
+            <X className="h-3 w-3" /> {t('Declined')}
           </span>
         )}
       </div>
@@ -83,14 +85,14 @@ export function ApprovalItem({ approval }: Props) {
 
         {approval.grantRoot && (
           <p className="text-xs text-muted-foreground">
-            Requesting write access to:{' '}
+            {t('Requesting write access to:')}{' '}
             <code className="rounded bg-muted px-1">{approval.grantRoot}</code>
           </p>
         )}
 
         {approval.cwd && (
           <p className="text-xs text-muted-foreground">
-            cwd:{' '}
+            {t('cwd:')}{' '}
             <code className="rounded bg-muted px-1">{approval.cwd}</code>
           </p>
         )}
@@ -105,7 +107,7 @@ export function ApprovalItem({ approval }: Props) {
               onClick={() => handleDecision('accepted')}
             >
               <Check className="mr-1 h-3 w-3" />
-              Accept
+              {t('Accept')}
             </Button>
             <Button
               size="sm"
@@ -114,7 +116,7 @@ export function ApprovalItem({ approval }: Props) {
               onClick={() => handleDecision('declined')}
             >
               <X className="mr-1 h-3 w-3" />
-              Decline
+              {t('Decline')}
             </Button>
           </div>
         )}
