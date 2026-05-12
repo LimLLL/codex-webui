@@ -22,7 +22,10 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { ApiErrorResponseDto, OkResponseDto } from '../common/dto/api-responses.dto';
+import {
+  ApiErrorResponseDto,
+  OkResponseDto,
+} from '../common/dto/api-responses.dto';
 import type { v2 } from '../codex/codex-schema';
 import { ThreadsService } from './threads.service';
 import {
@@ -53,7 +56,8 @@ export class ThreadsController {
     return this.threadsService.startThread({
       model: body.model,
       cwd: body.cwd,
-      approvalPolicy: body.approvalPolicy as v2.ThreadStartParams['approvalPolicy'],
+      approvalPolicy:
+        body.approvalPolicy as v2.ThreadStartParams['approvalPolicy'],
       experimentalRawEvents: false,
       persistExtendedHistory: true,
     });

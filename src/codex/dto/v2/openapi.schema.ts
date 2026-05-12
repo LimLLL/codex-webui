@@ -1,11 +1,9 @@
 /**
- * NestJS Swagger's ApiPropertyOptions is a complex union that rejects plain
- * SchemaObject at the type level (despite working correctly at runtime).
- * We use a permissive alias so schema helpers can be passed directly to
- * @ApiProperty() without manual casts at every call site.
+ * Swagger schema object passed to @ApiProperty().
+ * NestJS Swagger accepts Record<string, unknown> at runtime for raw schemas.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SwaggerSchema = any;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface SwaggerSchema extends Record<string, unknown> {}
 
 /** String enum values mirrored from generated Codex v2 schema aliases. */
 export const REASONING_EFFORT_VALUES = [
@@ -129,7 +127,7 @@ export function jsonValueSchema(nullable = true): SwaggerSchema {
       { type: 'array', items: {} },
       { type: 'object', additionalProperties: true },
     ],
-  } as SwaggerSchema;
+  };
 }
 
 /** Builds a nullable oneOf schema while preserving plain string enum arms. */
@@ -137,47 +135,51 @@ export function oneOfSchema(
   schemas: Array<Record<string, unknown>>,
   nullable = false,
 ): SwaggerSchema {
-  return { nullable, oneOf: schemas } as SwaggerSchema;
+  return { nullable, oneOf: schemas };
 }
 
 /** OpenAPI schema for an object map whose values use another schema. */
-export function recordOfSchema(valueSchema: Record<string, unknown>): SwaggerSchema {
+export function recordOfSchema(
+  valueSchema: Record<string, unknown>,
+): SwaggerSchema {
   return {
     type: 'object',
     additionalProperties: valueSchema,
-  } as SwaggerSchema;
+  };
 }
 
 /** Schema for a string enum union branch. */
 export function stringEnumSchema(values: readonly string[]): SwaggerSchema {
-  return { type: 'string', enum: [...values] } as SwaggerSchema;
+  return { type: 'string', enum: [...values] };
 }
 
 /** Schema for a nullable string enum field with Codex-style nullability. */
-export function nullableStringEnumSchema(values: readonly string[]): SwaggerSchema {
+export function nullableStringEnumSchema(
+  values: readonly string[],
+): SwaggerSchema {
   return oneOfSchema([stringEnumSchema(values)], true);
 }
 
 /** Schema for a nullable string field with Codex-style nullability. */
-export const NULLABLE_STRING_SCHEMA: SwaggerSchema = {
+export const NULLABLE_STRING_SCHEMA = {
   type: 'string',
   nullable: true,
-} as SwaggerSchema;
+} as const;
 
 /** Schema for a nullable number field with Codex-style nullability. */
-export const NULLABLE_NUMBER_SCHEMA: SwaggerSchema = {
+export const NULLABLE_NUMBER_SCHEMA = {
   type: 'number',
   nullable: true,
-} as SwaggerSchema;
+} as const;
 
 /** Schema for a nullable boolean field with Codex-style nullability. */
-export const NULLABLE_BOOLEAN_SCHEMA: SwaggerSchema = {
+export const NULLABLE_BOOLEAN_SCHEMA = {
   type: 'boolean',
   nullable: true,
-} as SwaggerSchema;
+} as const;
 
 /** Schema for a path alias that is represented as a string at runtime. */
-export const ABSOLUTE_PATH_BUF_SCHEMA: SwaggerSchema = {
+export const ABSOLUTE_PATH_BUF_SCHEMA = {
   type: 'string',
   description: 'Absolute normalized path as emitted by Codex.',
-} as SwaggerSchema;
+} as const;

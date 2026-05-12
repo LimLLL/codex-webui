@@ -13,7 +13,7 @@ export class TurnErrorDto {
   message!: string;
 
   @ApiProperty(codexErrorInfoSchema(true))
-  codexErrorInfo!: unknown | null;
+  codexErrorInfo!: unknown;
 
   @ApiProperty(NULLABLE_STRING_SCHEMA)
   additionalDetails!: string | null;
@@ -24,7 +24,10 @@ export class TurnDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty({ type: 'array', items: threadItemSchema(false) })
+  @ApiProperty({
+    type: 'array',
+    items: threadItemSchema(false) as Record<string, unknown>,
+  })
   items!: unknown[];
 
   @ApiProperty({ enum: TURN_STATUS_VALUES })

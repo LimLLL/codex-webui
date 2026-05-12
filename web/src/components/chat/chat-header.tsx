@@ -1,16 +1,22 @@
-import { Moon, Sun, Globe } from 'lucide-react';
+import { Activity, Moon, Sun, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useConnectionStore } from '@/stores/connection-store';
 
 interface Props {
   dark: boolean;
   onToggleDark: () => void;
+  onToggleDiagnostics: () => void;
 }
 
-export function ChatHeader({ dark, onToggleDark }: Props) {
+export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
   const { t, i18n } = useTranslation();
   const connected = useConnectionStore((s) => s.connected);
 
@@ -38,27 +44,56 @@ export function ChatHeader({ dark, onToggleDark }: Props) {
           />
           {connected ? t('Connected') : t('Disconnected')}
         </Badge>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-8 w-8"
-          onClick={toggleLanguage}
-          title={i18n.language.startsWith('zh') ? 'English' : '简体中文'}
-        >
-          <Globe className="h-4 w-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-8 w-8"
-          onClick={onToggleDark}
-        >
-          {dark ? (
-            <Sun className="h-4 w-4" />
-          ) : (
-            <Moon className="h-4 w-4" />
-          )}
-        </Button>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={onToggleDiagnostics}
+            >
+              <Activity className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t('Diagnostics')}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={toggleLanguage}
+            >
+              <Globe className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {i18n.language.startsWith('zh') ? 'English' : '简体中文'}
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={onToggleDark}
+            >
+              {dark ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {dark ? t('Light mode') : t('Dark mode')}
+          </TooltipContent>
+        </Tooltip>
       </header>
       <Separator />
     </>

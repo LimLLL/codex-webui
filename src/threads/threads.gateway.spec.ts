@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { ThreadsGateway } from './threads.gateway';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
+import { AuthService } from '../auth/auth.service';
 
 describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
@@ -16,6 +16,10 @@ describe('ThreadsGateway', () => {
     getClient: jest.fn(),
   };
 
+  const mockAuthService = {
+    authenticateToken: jest.fn(),
+  };
+
   const mockServer = {
     to: jest.fn().mockReturnThis(),
     emit: jest.fn(),
@@ -26,12 +30,7 @@ describe('ThreadsGateway', () => {
       providers: [
         ThreadsGateway,
         { provide: CodexProcessManager, useValue: mockManager },
-        {
-          provide: ConfigService,
-          useValue: {
-            getOrThrow: () => 'test-api-key',
-          },
-        },
+        { provide: AuthService, useValue: mockAuthService },
       ],
     }).compile();
 
@@ -91,56 +90,76 @@ describe('ThreadsGateway', () => {
     );
   });
 
-  it('should accept connection with valid token', () => {
+  it('should accept connection with valid token', async () => {
+    mockAuthService.authenticateToken.mockResolvedValue({
+      ok: true,
+      authType: 'apiKey',
+    });
     const client = {
       id: 'c1',
       handshake: { auth: { token: 'test-api-key' }, headers: {} },
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(client as never);
+    await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
-  it('should reject connection with invalid token', () => {
+  it('should reject connection with invalid token', async () => {
+    mockAuthService.authenticateToken.mockResolvedValue({
+      ok: false,
+      reason: 'invalidToken',
+    });
     const client = {
       id: 'c2',
       handshake: { auth: { token: 'wrong-key' }, headers: {} },
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(client as never);
+    await gateway.handleConnection(client as never);
     expect(client.disconnect).toHaveBeenCalledWith(true);
   });
 
-  it('should reject connection with no token', () => {
+  it('should reject connection with no token', async () => {
+    mockAuthService.authenticateToken.mockResolvedValue({
+      ok: false,
+      reason: 'missingToken',
+    });
     const client = {
       id: 'c3',
       handshake: { auth: {}, headers: {} },
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(client as never);
+    await gateway.handleConnection(client as never);
     expect(client.disconnect).toHaveBeenCalledWith(true);
   });
 
-  it('should accept connection with Bearer authorization header', () => {
+  it('should accept connection with Bearer authorization header', async () => {
+    mockAuthService.authenticateToken.mockResolvedValue({
+      ok: true,
+      authType: 'jwt',
+    });
     const client = {
       id: 'c4',
       handshake: {
         auth: {},
-        headers: { authorization: 'Bearer test-api-key' },
+        headers: { authorization: 'Bearer some-jwt-token' },
       },
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(client as never);
+    await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
-  it('should accept connection with Bearer-prefixed auth token', () => {
+  it('should accept connection with Bearer-prefixed auth token', async () => {
+    mockAuthService.authenticateToken.mockResolvedValue({
+      ok: true,
+      authType: 'jwt',
+    });
     const client = {
       id: 'c5',
-      handshake: { auth: { token: 'Bearer test-api-key' }, headers: {} },
+      handshake: { auth: { token: 'Bearer some-jwt-token' }, headers: {} },
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(client as never);
+    await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 

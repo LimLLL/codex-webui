@@ -1,4 +1,8 @@
-import { ApiProperty, ApiPropertyOptional, getSchemaPath } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import {
   type SwaggerSchema,
   COLLAB_AGENT_TOOL_CALL_STATUS_VALUES,
@@ -39,7 +43,10 @@ export class UserMessageThreadItemDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty({ type: 'array', items: userInputSchema(false) })
+  @ApiProperty({
+    type: 'array',
+    items: userInputSchema(false) as Record<string, unknown>,
+  })
   content!: unknown[];
 }
 
@@ -69,7 +76,10 @@ export class AgentMessageThreadItemDto {
   @ApiProperty(nullableStringEnumSchema(MESSAGE_PHASE_VALUES))
   phase!: (typeof MESSAGE_PHASE_VALUES)[number] | null;
 
-  @ApiProperty({ nullable: true, oneOf: [{ $ref: getSchemaPath(MemoryCitationDto) }] })
+  @ApiProperty({
+    nullable: true,
+    oneOf: [{ $ref: getSchemaPath(MemoryCitationDto) }],
+  })
   memoryCitation!: MemoryCitationDto | null;
 }
 
@@ -123,7 +133,10 @@ export class CommandExecutionThreadItemDto {
   @ApiProperty({ enum: COMMAND_EXECUTION_STATUS_VALUES })
   status!: (typeof COMMAND_EXECUTION_STATUS_VALUES)[number];
 
-  @ApiProperty({ type: 'array', items: commandActionSchema(false) })
+  @ApiProperty({
+    type: 'array',
+    items: commandActionSchema(false) as Record<string, unknown>,
+  })
   commandActions!: unknown[];
 
   @ApiProperty(NULLABLE_STRING_SCHEMA)
@@ -171,10 +184,16 @@ export class McpToolCallThreadItemDto {
   @ApiProperty(jsonValueSchema(false))
   arguments!: unknown;
 
-  @ApiProperty({ nullable: true, oneOf: [{ $ref: getSchemaPath(McpToolCallResultDto) }] })
+  @ApiProperty({
+    nullable: true,
+    oneOf: [{ $ref: getSchemaPath(McpToolCallResultDto) }],
+  })
   result!: McpToolCallResultDto | null;
 
-  @ApiProperty({ nullable: true, oneOf: [{ $ref: getSchemaPath(McpToolCallErrorDto) }] })
+  @ApiProperty({
+    nullable: true,
+    oneOf: [{ $ref: getSchemaPath(McpToolCallErrorDto) }],
+  })
   error!: McpToolCallErrorDto | null;
 
   @ApiProperty(NULLABLE_NUMBER_SCHEMA)
@@ -201,7 +220,10 @@ export class DynamicToolCallThreadItemDto {
   @ApiProperty({
     nullable: true,
     type: 'array',
-    items: dynamicToolCallOutputContentItemSchema(false),
+    items: dynamicToolCallOutputContentItemSchema(false) as Record<
+      string,
+      unknown
+    >,
   })
   contentItems!: unknown[] | null;
 
@@ -257,7 +279,7 @@ export class WebSearchThreadItemDto {
   query!: string;
 
   @ApiProperty(webSearchActionSchema(true))
-  action!: unknown | null;
+  action!: unknown;
 }
 
 /** v2 ThreadItem branch for image views. */

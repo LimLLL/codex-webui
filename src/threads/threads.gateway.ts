@@ -14,8 +14,8 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
+import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 
@@ -24,17 +24,14 @@ export class ThreadsGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(ThreadsGateway.name);
-  private readonly apiKey: string;
 
   @WebSocketServer()
   server!: Server;
 
   constructor(
     private readonly codexManager: CodexProcessManager,
-    configService: ConfigService,
-  ) {
-    this.apiKey = configService.getOrThrow<string>('WEBUI_API_KEY');
-  }
+    private readonly authService: AuthService,
+  ) {}
 
   afterInit(): void {
     this.codexManager.addListener(
@@ -52,10 +49,10 @@ export class ThreadsGateway
   }
 
   /** Validates auth token on connection; disconnects unauthorized clients. */
-  handleConnection(client: Socket): void {
+  async handleConnection(client: Socket): Promise<void> {
     const token = this.extractSocketToken(client);
 
-    if (token !== this.apiKey) {
+    if (!(await this.authService.authenticateToken(token, client.id)).ok) {
       this.logger.warn(`Rejected unauthenticated socket: ${client.id}`);
       client.disconnect(true);
       return;

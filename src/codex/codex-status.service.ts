@@ -63,6 +63,14 @@ export interface CodexSectionStatus {
   error?: CodexStatusError;
 }
 
+export interface CodexConfigSummary {
+  sandboxMode: string | null;
+  sandboxNetworkAccess: boolean | null;
+  approvalPolicy: JsonSafeValue;
+  model: string | null;
+  modelProvider: string | null;
+}
+
 export interface CodexProviderStatus {
   ok: boolean;
   id: string | null;
@@ -132,6 +140,11 @@ export class CodexStatusService {
     }
   }
 
+  /** Clears the status cache so the next query returns fresh data. */
+  invalidateCache(): void {
+    this.cache = null;
+  }
+
   private getFreshCache(): CodexStatusResponse | null {
     if (!this.cache) return null;
     if (Date.now() >= this.cache.expiresAt) {
@@ -180,11 +193,14 @@ export class CodexStatusService {
       this.probe<v2.ConfigReadResponse>('config/read', {
         includeLayers: true,
       } satisfies v2.ConfigReadParams),
-      this.probe<v2.ModelListResponse>('model/list', {} satisfies v2.ModelListParams),
+      this.probe<v2.ModelListResponse>(
+        'model/list',
+        {} satisfies v2.ModelListParams,
+      ),
     ]);
 
     const account = this.toSection(accountProbe);
-    const config = this.toSection(configProbe);
+    const config = this.toConfigSection(configProbe);
     const provider = this.buildProviderStatus(configProbe);
     const models = this.buildModelsStatus(modelsProbe, configProbe);
     const runtime = this.buildRuntimeStatus({
@@ -213,13 +229,18 @@ export class CodexStatusService {
     };
   }
 
-  private async probe<T>(method: string, params?: unknown): Promise<ProbeResult<T>> {
+  private async probe<T>(
+    method: string,
+    params?: unknown,
+  ): Promise<ProbeResult<T>> {
     try {
       const data = await this.codex.request<T>(method, params);
       return { ok: true, data };
     } catch (err) {
       const error = this.toStatusError(err, 'RPC_ERROR');
-      this.logger.debug(`Codex status probe failed (${method}): ${error.message}`);
+      this.logger.debug(
+        `Codex status probe failed (${method}): ${error.message}`,
+      );
       return { ok: false, error };
     }
   }
@@ -238,6 +259,29 @@ export class CodexStatusService {
     };
   }
 
+  private toConfigSection(
+    probe: ProbeResult<v2.ConfigReadResponse>,
+  ): CodexSectionStatus {
+    if (!probe.ok) {
+      return {
+        ok: false,
+        error: probe.error,
+      };
+    }
+
+    const config = probe.data.config;
+    const summary: CodexConfigSummary = {
+      sandboxMode: config.sandbox_mode ?? null,
+      sandboxNetworkAccess:
+        config.sandbox_workspace_write?.network_access ?? null,
+      approvalPolicy: this.toJsonSafe(config.approval_policy),
+      model: config.model ?? null,
+      modelProvider: config.model_provider ?? null,
+    };
+
+    return { ok: true, data: this.toJsonSafe(summary) };
+  }
+
   private buildProviderStatus(
     configProbe: ProbeResult<v2.ConfigReadResponse>,
   ): CodexProviderStatus {
@@ -252,7 +296,10 @@ export class CodexStatusService {
     }
 
     const providerId = configProbe.data.config.model_provider;
-    const envKey = this.lookupProviderEnvKey(providerId, configProbe.data.config);
+    const envKey = this.lookupProviderEnvKey(
+      providerId,
+      configProbe.data.config,
+    );
     return {
       ok: true,
       id: providerId,
@@ -308,7 +355,8 @@ export class CodexStatusService {
       blocking = true;
     }
 
-    const hasAccount = args.accountProbe.ok && args.accountProbe.data.account !== null;
+    const hasAccount =
+      args.accountProbe.ok && args.accountProbe.data.account !== null;
     const loginRequired =
       args.accountProbe.ok &&
       args.accountProbe.data.account === null &&
@@ -326,7 +374,11 @@ export class CodexStatusService {
       blocking = true;
     }
 
-    if (!hasAccount && args.provider.envKey && args.provider.envPresent === false) {
+    if (
+      !hasAccount &&
+      args.provider.envKey &&
+      args.provider.envPresent === false
+    ) {
       reasons.add('missingEnvKey');
       blocking = true;
     }
@@ -346,7 +398,9 @@ export class CodexStatusService {
       reasons: [...reasons],
       checkedAt: args.checkedAt,
       cacheTtlMs:
-        status === 'unavailable' ? UNAVAILABLE_CACHE_TTL_MS : READY_CACHE_TTL_MS,
+        status === 'unavailable'
+          ? UNAVAILABLE_CACHE_TTL_MS
+          : READY_CACHE_TTL_MS,
     };
   }
 
@@ -389,10 +443,12 @@ export class CodexStatusService {
 
     // Read from config's model_providers (covers custom providers)
     const providers = config?.model_providers as
-      | Record<string, { env_key?: unknown }> | undefined;
+      | Record<string, { env_key?: unknown }>
+      | undefined;
     const providerConfig = providers?.[providerId];
     const configuredEnvKey = providerConfig?.env_key;
-    if (typeof configuredEnvKey === 'string' && configuredEnvKey.trim()) return configuredEnvKey;
+    if (typeof configuredEnvKey === 'string' && configuredEnvKey.trim())
+      return configuredEnvKey;
 
     // Fallback to hardcoded mapping for built-in providers
     return PROVIDER_ENV_KEYS[providerId.trim().toLowerCase()] ?? null;
@@ -504,12 +560,21 @@ export class CodexStatusService {
 
     if (typeof value === 'object') {
       const result: Record<string, JsonSafeValue> = {};
-      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      for (const [key, child] of Object.entries(
+        value as Record<string, unknown>,
+      )) {
         result[key] = this.toJsonSafe(child);
       }
       return result;
     }
 
-    return String(value);
+    // Remaining types (symbol, function) after all narrowing above
+    if (typeof value === 'symbol') {
+      return value.toString();
+    }
+    if (typeof value === 'function') {
+      return value.name || 'anonymous';
+    }
+    return null;
   }
 }

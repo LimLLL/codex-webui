@@ -1,6 +1,6 @@
 /**
  * Login page for WebUI API key authentication.
- * Validates against the backend before granting access.
+ * Exchanges the raw key for a short-lived JWT before granting access.
  */
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';

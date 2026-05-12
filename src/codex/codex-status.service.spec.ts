@@ -74,7 +74,7 @@ function model(overrides: Partial<v2.Model> = {}): v2.Model {
     additionalSpeedTiers: [],
     isDefault: true,
     ...overrides,
-  } as v2.Model;
+  };
 }
 
 function modelListResponse(
@@ -180,14 +180,12 @@ describe('CodexStatusService', () => {
       count: 1,
     });
 
-    const configData = status.config.data as {
-      config: {
-        model_context_window: number;
-        model_auto_compact_token_limit: number;
-      };
-    };
-    expect(configData.config.model_context_window).toBe(128_000);
-    expect(configData.config.model_auto_compact_token_limit).toBe(64_000);
+    // Config now returns a whitelist summary, not raw config/read data
+    const configData = status.config.data as Record<string, unknown>;
+    expect(configData.model).toBe('gpt-5');
+    expect(configData.modelProvider).toBe('openai');
+    expect(configData.sandboxMode).toBeDefined();
+    expect(configData.approvalPolicy).toBeDefined();
     expect(mockCodex.request).toHaveBeenCalledWith('account/read', {
       refreshToken: false,
     });
@@ -237,7 +235,7 @@ describe('CodexStatusService', () => {
               model_providers: {
                 donehub: { env_key: 'OPENAI_API_KEY' },
               },
-            } as Partial<v2.Config>),
+            }),
           );
         case 'model/list':
           return Promise.resolve(modelListResponse());

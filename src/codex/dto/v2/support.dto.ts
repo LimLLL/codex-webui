@@ -143,7 +143,10 @@ export class FileUpdateChangeDto {
   path!: string;
 
   @ApiProperty(patchChangeKindSchema())
-  kind!: PatchChangeKindAddDto | PatchChangeKindDeleteDto | PatchChangeKindUpdateDto;
+  kind!:
+    | PatchChangeKindAddDto
+    | PatchChangeKindDeleteDto
+    | PatchChangeKindUpdateDto;
 
   @ApiProperty()
   diff!: string;
@@ -151,14 +154,17 @@ export class FileUpdateChangeDto {
 
 /** Successful MCP tool call result. */
 export class McpToolCallResultDto {
-  @ApiProperty({ type: 'array', items: jsonValueSchema(false) })
+  @ApiProperty({
+    type: 'array',
+    items: jsonValueSchema(false) as Record<string, unknown>,
+  })
   content!: unknown[];
 
   @ApiProperty(jsonValueSchema(true))
-  structuredContent!: unknown | null;
+  structuredContent!: unknown;
 
   @ApiProperty(jsonValueSchema(true))
-  _meta!: unknown | null;
+  _meta!: unknown;
 }
 
 /** MCP tool call error result. */

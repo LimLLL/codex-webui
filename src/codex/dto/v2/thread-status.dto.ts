@@ -1,5 +1,9 @@
 import { ApiProperty, getSchemaPath } from '@nestjs/swagger';
-import { type SwaggerSchema, THREAD_ACTIVE_FLAG_VALUES, oneOfSchema } from './openapi.schema';
+import {
+  type SwaggerSchema,
+  THREAD_ACTIVE_FLAG_VALUES,
+  oneOfSchema,
+} from './openapi.schema';
 
 /** v2 ThreadStatus branch for unloaded threads. */
 export class ThreadStatusNotLoadedDto {

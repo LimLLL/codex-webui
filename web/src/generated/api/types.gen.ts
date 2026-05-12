@@ -8,6 +8,18 @@ export type StatusResponseDto = {
     status: string;
 };
 
+export type LoginRequestDto = {
+    apiKey: string;
+};
+
+export type LoginResponseDto = {
+    accessToken: string;
+    /**
+     * Token lifetime in seconds.
+     */
+    expiresIn: number;
+};
+
 export type ApiErrorResponseDto = {
     statusCode: number;
     message: string | Array<string>;
@@ -24,6 +36,16 @@ export type CodexAppServerStatusDto = {
     connected: boolean;
     initialized: boolean;
     error?: CodexStatusErrorDto;
+};
+
+export type CodexConfigSummaryDto = {
+    sandboxMode: string | null;
+    sandboxNetworkAccess: boolean | null;
+    approvalPolicy: number | string | boolean | Array<unknown> | {
+        [key: string]: unknown;
+    } | null;
+    model: string | null;
+    modelProvider: string | null;
 };
 
 export type CodexInitializeStatusDto = {
@@ -44,9 +66,7 @@ export type CodexAccountStatusDto = {
 
 export type CodexConfigStatusDto = {
     ok: boolean;
-    data?: number | string | boolean | Array<unknown> | {
-        [key: string]: unknown;
-    } | null;
+    data?: CodexConfigSummaryDto;
     error?: CodexStatusErrorDto;
 };
 
@@ -84,6 +104,14 @@ export type CodexStatusResponseDto = {
     provider: CodexProviderStatusDto;
     models: CodexModelsStatusDto;
     runtime: CodexRuntimeStatusDto;
+};
+
+export type UpdateApprovalPolicyDto = {
+    approvalPolicy: 'untrusted' | 'on-failure' | 'on-request' | 'never';
+};
+
+export type UpdateSandboxModeDto = {
+    sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
 };
 
 export type FileEntryDto = {
@@ -664,6 +692,41 @@ export type StartTurnDto = {
     input: Array<TextTurnInputDto>;
 };
 
+export type LogEntryDto = {
+    timestamp: string;
+    level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'unknown';
+    source: string;
+    message: string;
+    fields: number | string | boolean | Array<unknown> | {
+        [key: string]: unknown;
+    } | null;
+};
+
+export type LogsResponseDto = {
+    data: Array<LogEntryDto>;
+    offset: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+};
+
+export type LogsSystemInfoDto = {
+    nodeVersion: string;
+    platform: string;
+    arch: string;
+    uptimeSeconds: number;
+    codexVersion: string;
+};
+
+export type LogsExportResponseDto = {
+    exportedAt: string;
+    system: LogsSystemInfoDto;
+    runtimeStatus: number | string | boolean | Array<unknown> | {
+        [key: string]: unknown;
+    } | null;
+    logs: Array<LogEntryDto>;
+};
+
 export type AppGetStatusData = {
     body?: never;
     path?: never;
@@ -676,6 +739,38 @@ export type AppGetStatusResponses = {
 };
 
 export type AppGetStatusResponse = AppGetStatusResponses[keyof AppGetStatusResponses];
+
+export type AuthLoginData = {
+    body: LoginRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/auth/login';
+};
+
+export type AuthLoginErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type AuthLoginError = AuthLoginErrors[keyof AuthLoginErrors];
+
+export type AuthLoginResponses = {
+    200: LoginResponseDto;
+};
+
+export type AuthLoginResponse = AuthLoginResponses[keyof AuthLoginResponses];
+
+export type AuthLogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/auth/logout';
+};
+
+export type AuthLogoutResponses = {
+    204: void;
+};
+
+export type AuthLogoutResponse = AuthLogoutResponses[keyof AuthLogoutResponses];
 
 export type CodexStatusGetStatusData = {
     body?: never;
@@ -695,6 +790,46 @@ export type CodexStatusGetStatusResponses = {
 };
 
 export type CodexStatusGetStatusResponse = CodexStatusGetStatusResponses[keyof CodexStatusGetStatusResponses];
+
+export type CodexStatusUpdateApprovalPolicyData = {
+    body: UpdateApprovalPolicyDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/approval-policy';
+};
+
+export type CodexStatusUpdateApprovalPolicyErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type CodexStatusUpdateApprovalPolicyError = CodexStatusUpdateApprovalPolicyErrors[keyof CodexStatusUpdateApprovalPolicyErrors];
+
+export type CodexStatusUpdateApprovalPolicyResponses = {
+    204: void;
+};
+
+export type CodexStatusUpdateApprovalPolicyResponse = CodexStatusUpdateApprovalPolicyResponses[keyof CodexStatusUpdateApprovalPolicyResponses];
+
+export type CodexStatusUpdateSandboxModeData = {
+    body: UpdateSandboxModeDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/sandbox-mode';
+};
+
+export type CodexStatusUpdateSandboxModeErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type CodexStatusUpdateSandboxModeError = CodexStatusUpdateSandboxModeErrors[keyof CodexStatusUpdateSandboxModeErrors];
+
+export type CodexStatusUpdateSandboxModeResponses = {
+    204: void;
+};
+
+export type CodexStatusUpdateSandboxModeResponse = CodexStatusUpdateSandboxModeResponses[keyof CodexStatusUpdateSandboxModeResponses];
 
 export type FilesReadTreeData = {
     body?: never;
@@ -1018,3 +1153,46 @@ export type ModelsListModelsResponses = {
 };
 
 export type ModelsListModelsResponse = ModelsListModelsResponses[keyof ModelsListModelsResponses];
+
+export type LogsListLogsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        offset?: number;
+        limit?: number;
+        level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+        source?: string;
+    };
+    url: '/api/logs';
+};
+
+export type LogsListLogsErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type LogsListLogsError = LogsListLogsErrors[keyof LogsListLogsErrors];
+
+export type LogsListLogsResponses = {
+    200: LogsResponseDto;
+};
+
+export type LogsListLogsResponse = LogsListLogsResponses[keyof LogsListLogsResponses];
+
+export type LogsExportDiagnosticsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/logs/export';
+};
+
+export type LogsExportDiagnosticsErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type LogsExportDiagnosticsError = LogsExportDiagnosticsErrors[keyof LogsExportDiagnosticsErrors];
+
+export type LogsExportDiagnosticsResponses = {
+    200: LogsExportResponseDto;
+};
+
+export type LogsExportDiagnosticsResponse = LogsExportDiagnosticsResponses[keyof LogsExportDiagnosticsResponses];

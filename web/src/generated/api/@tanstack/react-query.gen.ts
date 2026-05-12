@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { appGetStatus, codexStatusGetStatus, filesAddRoot, filesDeletePath, filesGetMetadata, filesGetRoots, filesReadFile, filesReadTree, filesWriteFile, modelsListModels, type Options, threadsInterruptTurn, threadsListThreads, threadsReadThread, threadsResumeThread, threadsStartThread, threadsStartTurn } from '../sdk.gen';
-import type { AppGetStatusData, AppGetStatusResponse, CodexStatusGetStatusData, CodexStatusGetStatusError, CodexStatusGetStatusResponse, FilesAddRootData, FilesAddRootError, FilesAddRootResponse, FilesDeletePathData, FilesDeletePathError, FilesDeletePathResponse, FilesGetMetadataData, FilesGetMetadataError, FilesGetMetadataResponse, FilesGetRootsData, FilesGetRootsError, FilesGetRootsResponse, FilesReadFileData, FilesReadFileError, FilesReadFileResponse, FilesReadTreeData, FilesReadTreeError, FilesReadTreeResponse, FilesWriteFileData, FilesWriteFileError, FilesWriteFileResponse, ModelsListModelsData, ModelsListModelsError, ModelsListModelsResponse, ThreadsInterruptTurnData, ThreadsInterruptTurnError, ThreadsInterruptTurnResponse, ThreadsListThreadsData, ThreadsListThreadsError, ThreadsListThreadsResponse, ThreadsReadThreadData, ThreadsReadThreadError, ThreadsReadThreadResponse, ThreadsResumeThreadData, ThreadsResumeThreadError, ThreadsResumeThreadResponse, ThreadsStartThreadData, ThreadsStartThreadError, ThreadsStartThreadResponse, ThreadsStartTurnData, ThreadsStartTurnError, ThreadsStartTurnResponse } from '../types.gen';
+import { appGetStatus, authLogin, authLogout, codexStatusGetStatus, codexStatusUpdateApprovalPolicy, codexStatusUpdateSandboxMode, filesAddRoot, filesDeletePath, filesGetMetadata, filesGetRoots, filesReadFile, filesReadTree, filesWriteFile, logsExportDiagnostics, logsListLogs, modelsListModels, type Options, threadsInterruptTurn, threadsListThreads, threadsReadThread, threadsResumeThread, threadsStartThread, threadsStartTurn } from '../sdk.gen';
+import type { AppGetStatusData, AppGetStatusResponse, AuthLoginData, AuthLoginError, AuthLoginResponse, AuthLogoutData, AuthLogoutResponse, CodexStatusGetStatusData, CodexStatusGetStatusError, CodexStatusGetStatusResponse, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyError, CodexStatusUpdateApprovalPolicyResponse, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeError, CodexStatusUpdateSandboxModeResponse, FilesAddRootData, FilesAddRootError, FilesAddRootResponse, FilesDeletePathData, FilesDeletePathError, FilesDeletePathResponse, FilesGetMetadataData, FilesGetMetadataError, FilesGetMetadataResponse, FilesGetRootsData, FilesGetRootsError, FilesGetRootsResponse, FilesReadFileData, FilesReadFileError, FilesReadFileResponse, FilesReadTreeData, FilesReadTreeError, FilesReadTreeResponse, FilesWriteFileData, FilesWriteFileError, FilesWriteFileResponse, LogsExportDiagnosticsData, LogsExportDiagnosticsError, LogsExportDiagnosticsResponse, LogsListLogsData, LogsListLogsError, LogsListLogsResponse, ModelsListModelsData, ModelsListModelsError, ModelsListModelsResponse, ThreadsInterruptTurnData, ThreadsInterruptTurnError, ThreadsInterruptTurnResponse, ThreadsListThreadsData, ThreadsListThreadsError, ThreadsListThreadsResponse, ThreadsReadThreadData, ThreadsReadThreadError, ThreadsReadThreadResponse, ThreadsResumeThreadData, ThreadsResumeThreadError, ThreadsResumeThreadResponse, ThreadsStartThreadData, ThreadsStartThreadError, ThreadsStartThreadResponse, ThreadsStartTurnData, ThreadsStartTurnError, ThreadsStartTurnResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -57,6 +57,40 @@ export const appGetStatusOptions = (options?: Options<AppGetStatusData>) => quer
     queryKey: appGetStatusQueryKey(options)
 });
 
+/**
+ * Login with the WebUI API key
+ */
+export const authLoginMutation = (options?: Partial<Options<AuthLoginData>>): UseMutationOptions<AuthLoginResponse, AuthLoginError, Options<AuthLoginData>> => {
+    const mutationOptions: UseMutationOptions<AuthLoginResponse, AuthLoginError, Options<AuthLoginData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await authLogin({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Logout the current WebUI session
+ */
+export const authLogoutMutation = (options?: Partial<Options<AuthLogoutData>>): UseMutationOptions<AuthLogoutResponse, DefaultError, Options<AuthLogoutData>> => {
+    const mutationOptions: UseMutationOptions<AuthLogoutResponse, DefaultError, Options<AuthLogoutData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await authLogout({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const codexStatusGetStatusQueryKey = (options?: Options<CodexStatusGetStatusData>) => createQueryKey('codexStatusGetStatus', options);
 
 /**
@@ -74,6 +108,40 @@ export const codexStatusGetStatusOptions = (options?: Options<CodexStatusGetStat
     },
     queryKey: codexStatusGetStatusQueryKey(options)
 });
+
+/**
+ * Update approval policy (hot-reloads all threads)
+ */
+export const codexStatusUpdateApprovalPolicyMutation = (options?: Partial<Options<CodexStatusUpdateApprovalPolicyData>>): UseMutationOptions<CodexStatusUpdateApprovalPolicyResponse, CodexStatusUpdateApprovalPolicyError, Options<CodexStatusUpdateApprovalPolicyData>> => {
+    const mutationOptions: UseMutationOptions<CodexStatusUpdateApprovalPolicyResponse, CodexStatusUpdateApprovalPolicyError, Options<CodexStatusUpdateApprovalPolicyData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await codexStatusUpdateApprovalPolicy({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Update sandbox mode (hot-reloads all threads)
+ */
+export const codexStatusUpdateSandboxModeMutation = (options?: Partial<Options<CodexStatusUpdateSandboxModeData>>): UseMutationOptions<CodexStatusUpdateSandboxModeResponse, CodexStatusUpdateSandboxModeError, Options<CodexStatusUpdateSandboxModeData>> => {
+    const mutationOptions: UseMutationOptions<CodexStatusUpdateSandboxModeResponse, CodexStatusUpdateSandboxModeError, Options<CodexStatusUpdateSandboxModeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await codexStatusUpdateSandboxMode({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 export const filesReadTreeQueryKey = (options: Options<FilesReadTreeData>) => createQueryKey('filesReadTree', options);
 
@@ -401,4 +469,67 @@ export const modelsListModelsInfiniteOptions = (options?: Options<ModelsListMode
         return data;
     },
     queryKey: modelsListModelsInfiniteQueryKey(options)
+});
+
+export const logsListLogsQueryKey = (options?: Options<LogsListLogsData>) => createQueryKey('logsListLogs', options);
+
+/**
+ * List structured application logs
+ */
+export const logsListLogsOptions = (options?: Options<LogsListLogsData>) => queryOptions<LogsListLogsResponse, LogsListLogsError, LogsListLogsResponse, ReturnType<typeof logsListLogsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await logsListLogs({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: logsListLogsQueryKey(options)
+});
+
+export const logsListLogsInfiniteQueryKey = (options?: Options<LogsListLogsData>): QueryKey<Options<LogsListLogsData>> => createQueryKey('logsListLogs', options, true);
+
+/**
+ * List structured application logs
+ */
+export const logsListLogsInfiniteOptions = (options?: Options<LogsListLogsData>) => infiniteQueryOptions<LogsListLogsResponse, LogsListLogsError, InfiniteData<LogsListLogsResponse>, QueryKey<Options<LogsListLogsData>>, number | Pick<QueryKey<Options<LogsListLogsData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
+// @ts-ignore
+{
+    queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<QueryKey<Options<LogsListLogsData>>[0], 'body' | 'headers' | 'path' | 'query'> = typeof pageParam === 'object' ? pageParam : {
+            query: {
+                offset: pageParam
+            }
+        };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await logsListLogs({
+            ...options,
+            ...params,
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: logsListLogsInfiniteQueryKey(options)
+});
+
+export const logsExportDiagnosticsQueryKey = (options?: Options<LogsExportDiagnosticsData>) => createQueryKey('logsExportDiagnostics', options);
+
+/**
+ * Export sanitized diagnostics bundle
+ */
+export const logsExportDiagnosticsOptions = (options?: Options<LogsExportDiagnosticsData>) => queryOptions<LogsExportDiagnosticsResponse, LogsExportDiagnosticsError, LogsExportDiagnosticsResponse, ReturnType<typeof logsExportDiagnosticsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await logsExportDiagnostics({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: logsExportDiagnosticsQueryKey(options)
 });

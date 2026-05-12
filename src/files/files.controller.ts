@@ -24,7 +24,10 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { ApiErrorResponseDto, OkResponseDto } from '../common/dto/api-responses.dto';
+import {
+  ApiErrorResponseDto,
+  OkResponseDto,
+} from '../common/dto/api-responses.dto';
 import { FilesService } from './files.service';
 import {
   AddWorkspaceRootRequestDto,

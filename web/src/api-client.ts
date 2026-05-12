@@ -13,6 +13,7 @@ export function configureApiClient() {
   clientAny.__codexWebuiConfigured = true;
 
   client.interceptors.request.use((request) => {
+    if (request.url.includes('/api/auth/login')) return request;
     const token = getApiToken();
     if (token) {
       request.headers.set('Authorization', `Bearer ${token}`);
@@ -23,6 +24,7 @@ export function configureApiClient() {
   client.interceptors.response.use((response) => {
     if (response.status === 401) {
       clearApiToken();
+      window.dispatchEvent(new Event('codex-webui:auth-expired'));
     }
     return response;
   });

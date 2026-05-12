@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AppGetStatusData, AppGetStatusResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses } from './types.gen';
+import type { AppGetStatusData, AppGetStatusResponses, AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthLogoutData, AuthLogoutResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyErrors, CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeErrors, CodexStatusUpdateSandboxModeResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, LogsExportDiagnosticsData, LogsExportDiagnosticsErrors, LogsExportDiagnosticsResponses, LogsListLogsData, LogsListLogsErrors, LogsListLogsResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -28,12 +28,55 @@ export const appGetStatus = <ThrowOnError extends boolean = false>(options?: Opt
 });
 
 /**
+ * Login with the WebUI API key
+ */
+export const authLogin = <ThrowOnError extends boolean = false>(options: Options<AuthLoginData, ThrowOnError>) => (options.client ?? client).post<AuthLoginResponses, AuthLoginErrors, ThrowOnError>({
+    url: '/api/auth/login',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Logout the current WebUI session
+ */
+export const authLogout = <ThrowOnError extends boolean = false>(options?: Options<AuthLogoutData, ThrowOnError>) => (options?.client ?? client).post<AuthLogoutResponses, unknown, ThrowOnError>({ url: '/api/auth/logout', ...options });
+
+/**
  * Get aggregated Codex runtime status
  */
 export const codexStatusGetStatus = <ThrowOnError extends boolean = false>(options?: Options<CodexStatusGetStatusData, ThrowOnError>) => (options?.client ?? client).get<CodexStatusGetStatusResponses, CodexStatusGetStatusErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/codex/status',
     ...options
+});
+
+/**
+ * Update approval policy (hot-reloads all threads)
+ */
+export const codexStatusUpdateApprovalPolicy = <ThrowOnError extends boolean = false>(options: Options<CodexStatusUpdateApprovalPolicyData, ThrowOnError>) => (options.client ?? client).post<CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateApprovalPolicyErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/codex/approval-policy',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Update sandbox mode (hot-reloads all threads)
+ */
+export const codexStatusUpdateSandboxMode = <ThrowOnError extends boolean = false>(options: Options<CodexStatusUpdateSandboxModeData, ThrowOnError>) => (options.client ?? client).post<CodexStatusUpdateSandboxModeResponses, CodexStatusUpdateSandboxModeErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/codex/sandbox-mode',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**
@@ -175,5 +218,23 @@ export const threadsInterruptTurn = <ThrowOnError extends boolean = false>(optio
 export const modelsListModels = <ThrowOnError extends boolean = false>(options?: Options<ModelsListModelsData, ThrowOnError>) => (options?.client ?? client).get<ModelsListModelsResponses, ModelsListModelsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/models',
+    ...options
+});
+
+/**
+ * List structured application logs
+ */
+export const logsListLogs = <ThrowOnError extends boolean = false>(options?: Options<LogsListLogsData, ThrowOnError>) => (options?.client ?? client).get<LogsListLogsResponses, LogsListLogsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/logs',
+    ...options
+});
+
+/**
+ * Export sanitized diagnostics bundle
+ */
+export const logsExportDiagnostics = <ThrowOnError extends boolean = false>(options?: Options<LogsExportDiagnosticsData, ThrowOnError>) => (options?.client ?? client).get<LogsExportDiagnosticsResponses, LogsExportDiagnosticsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/logs/export',
     ...options
 });

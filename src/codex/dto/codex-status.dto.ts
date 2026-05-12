@@ -55,13 +55,31 @@ export class CodexAccountStatusDto {
   error?: CodexStatusErrorDto;
 }
 
-/** Raw config/read probe result. */
+/** Sanitized config/read summary safe for browser display. */
+export class CodexConfigSummaryDto {
+  @ApiProperty({ type: String, nullable: true })
+  sandboxMode!: string | null;
+
+  @ApiProperty({ type: Boolean, nullable: true })
+  sandboxNetworkAccess!: boolean | null;
+
+  @ApiProperty(jsonValueSchema(true))
+  approvalPolicy!: unknown;
+
+  @ApiProperty({ type: String, nullable: true })
+  model!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  modelProvider!: string | null;
+}
+
+/** Sanitized config/read probe result. */
 export class CodexConfigStatusDto {
   @ApiProperty()
   ok!: boolean;
 
-  @ApiPropertyOptional(jsonValueSchema(true))
-  data?: unknown;
+  @ApiPropertyOptional({ type: () => CodexConfigSummaryDto })
+  data?: CodexConfigSummaryDto;
 
   @ApiPropertyOptional({ type: () => CodexStatusErrorDto })
   error?: CodexStatusErrorDto;

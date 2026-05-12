@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { threadsStartTurnMutation } from '@/generated/api/@tanstack/react-query.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
+import { SecurityPolicyBadge } from './security-policy-badge';
 import { TokenUsageRing } from './token-usage-ring';
 
 interface Props {
@@ -70,17 +71,20 @@ export function ChatInput({ value, onChange, panelOpen, onTogglePanel }: Props) 
           className="max-h-32 min-h-0 resize-none rounded-xl bg-background/60 pb-10 pr-4 pt-2.5 backdrop-blur-sm transition-all duration-200 focus:ring-2 focus:ring-primary/30"
         />
         <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-          <Button
-            size="sm"
-            variant={panelOpen ? 'secondary' : 'ghost'}
-            className="h-7 gap-1.5 rounded-lg px-2.5 text-xs"
-            onClick={onTogglePanel}
-            disabled={!threadId}
-            title={t('Terminal')}
-          >
-            <TerminalSquare className="h-3.5 w-3.5" />
-            {t('Terminal')}
-          </Button>
+          <div className="flex items-center gap-1">
+            <SecurityPolicyBadge />
+            <Button
+              size="sm"
+              variant={panelOpen ? 'secondary' : 'ghost'}
+              className="h-7 gap-1.5 rounded-lg px-2.5 text-xs"
+              onClick={onTogglePanel}
+              disabled={!threadId}
+              title={t('Terminal')}
+            >
+              <TerminalSquare className="h-3.5 w-3.5" />
+              {t('Terminal')}
+            </Button>
+          </div>
 
           <div className="flex items-center gap-2">
             <TokenUsageRing />

@@ -5,16 +5,18 @@ import { ChatTimeline } from '@/components/chat/chat-timeline';
 import { ChatInput } from '@/components/chat/chat-input';
 import { ThreadSidebar } from '@/components/chat/thread-sidebar';
 import type { GlobalView } from '@/types/views';
+import { DiagnosticsPanel } from '@/components/diagnostics/diagnostics-panel';
 import { SessionPanel } from '@/components/chat/session-panel';
 import { FilesPanel } from '@/components/files/files-panel';
 import { TerminalView } from '@/components/terminal/terminal-view';
 import { LoginPage } from '@/components/login';
 import { SnackbarContainer } from '@/components/snackbar/snackbar-container';
+import { TerminalRiskGate } from '@/components/terminal/terminal-risk-gate';
 import { CodexStatusBanner } from '@/components/codex-status-banner';
 import { useCodexSocket } from '@/hooks/use-codex-socket';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useFilesStore } from '@/stores/files-store';
-import { filesGetRoots, filesAddRoot } from '@/generated/api';
+import { authLogin, filesGetRoots, filesAddRoot } from '@/generated/api';
 import { getApiToken, setApiToken, clearApiToken } from '@/auth-token';
 import { resetSocket } from '@/socket';
 
@@ -49,9 +51,23 @@ function App() {
       });
   }, []);
 
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      clearApiToken();
+      resetSocket();
+      setAuthenticated(false);
+    };
+    window.addEventListener('codex-webui:auth-expired', handleAuthExpired);
+    return () => window.removeEventListener('codex-webui:auth-expired', handleAuthExpired);
+  }, []);
+
   const handleLogin = useCallback(async (apiKey: string): Promise<boolean> => {
-    setApiToken(apiKey);
     try {
+      const { data: loginData } = await authLogin({
+        body: { apiKey },
+        throwOnError: true,
+      });
+      setApiToken(loginData.accessToken);
       const { data } = await filesGetRoots({ throwOnError: true });
       setHomeDir(data.homeDir);
       resetSocket();
@@ -102,7 +118,11 @@ function App() {
         <ThreadSidebar activeView={globalView} onViewChange={handleViewChange} />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <ChatHeader dark={dark} onToggleDark={() => setDark((d) => !d)} />
+          <ChatHeader
+            dark={dark}
+            onToggleDark={() => setDark((d) => !d)}
+            onToggleDiagnostics={() => handleViewChange(globalView === 'diagnostics' ? 'chat' : 'diagnostics')}
+          />
           <CodexStatusBanner />
 
           {globalView === 'chat' && (
@@ -132,9 +152,13 @@ function App() {
 
           {globalView === 'files' && <FilesPanel />}
 
+          {globalView === 'diagnostics' && <DiagnosticsPanel />}
+
           {globalView === 'terminal' && (
             <div className="min-h-0 flex-1">
-              <TerminalView cwd={homeDir ?? '/'} />
+              <TerminalRiskGate onCancel={() => setGlobalView('chat')}>
+                <TerminalView cwd={homeDir ?? '/'} />
+              </TerminalRiskGate>
             </div>
           )}
         </div>
