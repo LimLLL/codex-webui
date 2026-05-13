@@ -10,6 +10,14 @@ import { useConnectionStore } from '../stores/connection-store';
 import { useTimelineStore } from '../stores/timeline-store';
 import { useFilesStore } from '../stores/files-store';
 import { handleNotification, type NotificationContext } from './notification-handlers';
+import { tokenUsageReadThreadTokenUsage } from '@/generated/api/sdk.gen';
+import i18n from '@/i18n';
+
+type CodexLifecycleEvent =
+  | { type: 'appServerRestarting'; generation: number; delayMs: number }
+  | { type: 'appServerUnavailable'; generation: number; message: string }
+  | { type: 'appServerReady'; generation: number; restarted: boolean }
+  | { type: 'autoResumeCompleted'; generation: number; resumedThreadIds: string[]; failedThreadIds: string[] };
 
 export function useCodexSocket(enabled = true) {
   const setConnected = useConnectionStore((s) => s.setConnected);
@@ -29,6 +37,9 @@ export function useCodexSocket(enabled = true) {
     addSystemError,
     setTokenUsage,
     setThreadStatus,
+    setActiveTurnId,
+    clearActiveTurn,
+    hydrateTokenUsage,
     setThreadTitle,
     resolveApprovalByRequestId,
   } = useTimelineStore();
@@ -38,7 +49,13 @@ export function useCodexSocket(enabled = true) {
 
     const socket = getSocket();
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      const { threadId: activeId, threadMode: mode } = useTimelineStore.getState();
+      if (activeId && mode === 'live') {
+        socket.emit('thread.subscribe', { threadId: activeId });
+      }
+    });
     socket.on('disconnect', () => setConnected(false));
 
     // Build context object for the notification dispatcher
@@ -56,6 +73,8 @@ export function useCodexSocket(enabled = true) {
       addSystemError,
       setTokenUsage,
       setThreadStatus,
+      setActiveTurnId,
+      clearActiveTurn,
       setThreadTitle,
       resolveApprovalByRequestId,
     };
@@ -66,6 +85,46 @@ export function useCodexSocket(enabled = true) {
         handleNotification(notification.method, notification.params, ctx);
       },
     );
+
+    socket.on('codex.lifecycle', (event: CodexLifecycleEvent) => {
+      const activeThreadId = useTimelineStore.getState().threadId;
+
+      if (event.type === 'appServerUnavailable') {
+        clearActiveTurn();
+        setThreadStatus({ type: 'systemError' });
+      }
+
+      if (event.type === 'appServerRestarting') {
+        clearActiveTurn();
+        setThreadStatus({ type: 'systemError' });
+        if (activeThreadId) {
+          addSystemMessage(
+            i18n.t('Codex app-server is restarting. Waiting to resume this thread.'),
+            'warning',
+          );
+        }
+      }
+
+      if (event.type === 'appServerReady') {
+        void queryClient.invalidateQueries();
+      }
+
+      if (event.type !== 'autoResumeCompleted' || !activeThreadId) return;
+
+      if (event.failedThreadIds.includes(activeThreadId)) {
+        addSystemMessage(i18n.t('Auto-resume failed. Reopen this thread to retry.'), 'error');
+        return;
+      }
+
+      if (event.resumedThreadIds.includes(activeThreadId)) {
+        addSystemMessage(i18n.t('Thread resumed after app-server restart.'), 'info');
+        void tokenUsageReadThreadTokenUsage({ path: { threadId: activeThreadId } })
+          .then(({ data }) => data && hydrateTokenUsage(data.turns))
+          .catch(() =>
+            addSystemMessage(i18n.t('Token usage recovery failed after resume.'), 'warning'),
+          );
+      }
+    });
 
     // File watcher events → invalidate affected file queries
     socket.on('fs.changed', (event: { event: string; path: string }) => {
@@ -129,6 +188,7 @@ export function useCodexSocket(enabled = true) {
       socket.off('connect');
       socket.off('disconnect');
       socket.off('codex.notification');
+      socket.off('codex.lifecycle');
       socket.off('codex.serverRequest');
       socket.off('fs.changed');
     };
@@ -148,6 +208,9 @@ export function useCodexSocket(enabled = true) {
     addSystemError,
     setTokenUsage,
     setThreadStatus,
+    setActiveTurnId,
+    clearActiveTurn,
+    hydrateTokenUsage,
     setThreadTitle,
     resolveApprovalByRequestId,
   ]);

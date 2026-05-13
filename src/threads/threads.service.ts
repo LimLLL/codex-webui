@@ -74,6 +74,16 @@ export class ThreadsService {
   }
 
   /**
+   * Sends additional user input to the currently active turn.
+   *
+   * @param params - Turn steer parameters including the active turn precondition
+   * @returns The turn id accepted by app-server
+   */
+  async steerTurn(params: v2.TurnSteerParams): Promise<v2.TurnSteerResponse> {
+    return this.codex.request<v2.TurnSteerResponse>('turn/steer', params);
+  }
+
+  /**
    * Interrupts an in-progress turn.
    *
    * @param threadId - The thread identifier

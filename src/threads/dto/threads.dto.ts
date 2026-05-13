@@ -28,6 +28,18 @@ export class StartTurnDto {
   input!: TextTurnInputDto[];
 }
 
+/** Request body for steering the current active turn. */
+export class SteerTurnDto {
+  @ApiProperty({ type: () => [TextTurnInputDto], minItems: 1 })
+  input!: TextTurnInputDto[];
+}
+
+/** Response body for steering the current active turn. */
+export class TurnSteerResponseDto {
+  @ApiProperty()
+  turnId!: string;
+}
+
 /** Request body for rolling back turns from a thread. */
 export class ThreadRollbackRequestDto {
   @ApiProperty({ minimum: 1, type: Number })

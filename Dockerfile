@@ -44,12 +44,14 @@ ENV NODE_ENV=production
 RUN corepack enable && corepack prepare pnpm@latest --activate
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile --prod
-# Rebuild node-pty for this runtime environment
-RUN npx --yes node-gyp rebuild --directory=node_modules/node-pty || true
+# Rebuild native addons for this runtime environment
+RUN npx --yes node-gyp rebuild --directory=node_modules/node-pty || true \
+  && npx --yes node-gyp rebuild --directory=node_modules/better-sqlite3 || true
 
-# Copy built assets
+# Copy built assets and drizzle migrations
 COPY --from=backend-builder /app/dist ./dist/
 COPY --from=backend-builder /app/public ./public/
+COPY drizzle/ ./drizzle/
 
 # Create volume mount points and set ownership for non-root user
 RUN mkdir -p /workspaces /codex-home /app/logs \

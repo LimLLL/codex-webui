@@ -9,11 +9,13 @@ import { AppService } from './app.service';
 import { ApiKeyGuard } from './auth/api-key.guard';
 import { AuthModule } from './auth/auth.module';
 import { CodexModule } from './codex/codex.module';
+import { DatabaseModule } from './database/database.module';
 import { FilesModule } from './files/files.module';
 import { LogsModule } from './logs/logs.module';
 import { ModelsModule } from './models/models.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { ThreadsModule } from './threads/threads.module';
+import { TokenUsageModule } from './token-usage/token-usage.module';
 
 const isDev = process.env.NODE_ENV !== 'production';
 
@@ -70,10 +72,12 @@ const PINO_REDACT = {
       exclude: ['/api/(.*)'],
     }),
     AuthModule,
+    DatabaseModule,
     CodexModule,
     FilesModule,
     TerminalModule,
     ThreadsModule,
+    TokenUsageModule,
     ModelsModule,
     LogsModule,
   ],

@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { appGetStatus, authLogin, authLogout, codexStatusGetStatus, codexStatusUpdateApprovalPolicy, codexStatusUpdateSandboxMode, filesAddRoot, filesDeletePath, filesGetMetadata, filesGetRoots, filesReadFile, filesReadTree, filesWriteFile, logsExportDiagnostics, logsListLogs, modelsListModels, type Options, threadsArchiveThread, threadsCompactThread, threadsForkThread, threadsInterruptTurn, threadsListThreads, threadsReadThread, threadsResumeThread, threadsRollbackThread, threadsSetThreadName, threadsStartThread, threadsStartTurn, threadsUnarchiveThread } from '../sdk.gen';
-import type { AppGetStatusData, AppGetStatusResponse, AuthLoginData, AuthLoginError, AuthLoginResponse, AuthLogoutData, AuthLogoutResponse, CodexStatusGetStatusData, CodexStatusGetStatusError, CodexStatusGetStatusResponse, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyError, CodexStatusUpdateApprovalPolicyResponse, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeError, CodexStatusUpdateSandboxModeResponse, FilesAddRootData, FilesAddRootError, FilesAddRootResponse, FilesDeletePathData, FilesDeletePathError, FilesDeletePathResponse, FilesGetMetadataData, FilesGetMetadataError, FilesGetMetadataResponse, FilesGetRootsData, FilesGetRootsError, FilesGetRootsResponse, FilesReadFileData, FilesReadFileError, FilesReadFileResponse, FilesReadTreeData, FilesReadTreeError, FilesReadTreeResponse, FilesWriteFileData, FilesWriteFileError, FilesWriteFileResponse, LogsExportDiagnosticsData, LogsExportDiagnosticsError, LogsExportDiagnosticsResponse, LogsListLogsData, LogsListLogsError, LogsListLogsResponse, ModelsListModelsData, ModelsListModelsError, ModelsListModelsResponse, ThreadsArchiveThreadData, ThreadsArchiveThreadError, ThreadsArchiveThreadResponse, ThreadsCompactThreadData, ThreadsCompactThreadError, ThreadsCompactThreadResponse, ThreadsForkThreadData, ThreadsForkThreadError, ThreadsForkThreadResponse, ThreadsInterruptTurnData, ThreadsInterruptTurnError, ThreadsInterruptTurnResponse, ThreadsListThreadsData, ThreadsListThreadsError, ThreadsListThreadsResponse, ThreadsReadThreadData, ThreadsReadThreadError, ThreadsReadThreadResponse, ThreadsResumeThreadData, ThreadsResumeThreadError, ThreadsResumeThreadResponse, ThreadsRollbackThreadData, ThreadsRollbackThreadError, ThreadsRollbackThreadResponse, ThreadsSetThreadNameData, ThreadsSetThreadNameError, ThreadsSetThreadNameResponse, ThreadsStartThreadData, ThreadsStartThreadError, ThreadsStartThreadResponse, ThreadsStartTurnData, ThreadsStartTurnError, ThreadsStartTurnResponse, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadError, ThreadsUnarchiveThreadResponse } from '../types.gen';
+import { appGetStatus, authLogin, authLogout, codexStatusGetStatus, codexStatusUpdateApprovalPolicy, codexStatusUpdateSandboxMode, filesAddRoot, filesDeletePath, filesGetMetadata, filesGetRoots, filesReadFile, filesReadTree, filesWriteFile, logsExportDiagnostics, logsListLogs, modelsListModels, type Options, threadsArchiveThread, threadsCompactThread, threadsForkThread, threadsInterruptTurn, threadsListThreads, threadsReadThread, threadsResumeThread, threadsRollbackThread, threadsSetThreadName, threadsStartThread, threadsStartTurn, threadsSteerTurn, threadsUnarchiveThread, tokenUsageReadThreadTokenUsage } from '../sdk.gen';
+import type { AppGetStatusData, AppGetStatusResponse, AuthLoginData, AuthLoginError, AuthLoginResponse, AuthLogoutData, AuthLogoutResponse, CodexStatusGetStatusData, CodexStatusGetStatusError, CodexStatusGetStatusResponse, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyError, CodexStatusUpdateApprovalPolicyResponse, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeError, CodexStatusUpdateSandboxModeResponse, FilesAddRootData, FilesAddRootError, FilesAddRootResponse, FilesDeletePathData, FilesDeletePathError, FilesDeletePathResponse, FilesGetMetadataData, FilesGetMetadataError, FilesGetMetadataResponse, FilesGetRootsData, FilesGetRootsError, FilesGetRootsResponse, FilesReadFileData, FilesReadFileError, FilesReadFileResponse, FilesReadTreeData, FilesReadTreeError, FilesReadTreeResponse, FilesWriteFileData, FilesWriteFileError, FilesWriteFileResponse, LogsExportDiagnosticsData, LogsExportDiagnosticsError, LogsExportDiagnosticsResponse, LogsListLogsData, LogsListLogsError, LogsListLogsResponse, ModelsListModelsData, ModelsListModelsError, ModelsListModelsResponse, ThreadsArchiveThreadData, ThreadsArchiveThreadError, ThreadsArchiveThreadResponse, ThreadsCompactThreadData, ThreadsCompactThreadError, ThreadsCompactThreadResponse, ThreadsForkThreadData, ThreadsForkThreadError, ThreadsForkThreadResponse, ThreadsInterruptTurnData, ThreadsInterruptTurnError, ThreadsInterruptTurnResponse, ThreadsListThreadsData, ThreadsListThreadsError, ThreadsListThreadsResponse, ThreadsReadThreadData, ThreadsReadThreadError, ThreadsReadThreadResponse, ThreadsResumeThreadData, ThreadsResumeThreadError, ThreadsResumeThreadResponse, ThreadsRollbackThreadData, ThreadsRollbackThreadError, ThreadsRollbackThreadResponse, ThreadsSetThreadNameData, ThreadsSetThreadNameError, ThreadsSetThreadNameResponse, ThreadsStartThreadData, ThreadsStartThreadError, ThreadsStartThreadResponse, ThreadsStartTurnData, ThreadsStartTurnError, ThreadsStartTurnResponse, ThreadsSteerTurnData, ThreadsSteerTurnError, ThreadsSteerTurnResponse, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadError, ThreadsUnarchiveThreadResponse, TokenUsageReadThreadTokenUsageData, TokenUsageReadThreadTokenUsageError, TokenUsageReadThreadTokenUsageResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -410,6 +410,23 @@ export const threadsStartTurnMutation = (options?: Partial<Options<ThreadsStartT
 };
 
 /**
+ * Send mid-turn user input to an active turn
+ */
+export const threadsSteerTurnMutation = (options?: Partial<Options<ThreadsSteerTurnData>>): UseMutationOptions<ThreadsSteerTurnResponse, ThreadsSteerTurnError, Options<ThreadsSteerTurnData>> => {
+    const mutationOptions: UseMutationOptions<ThreadsSteerTurnResponse, ThreadsSteerTurnError, Options<ThreadsSteerTurnData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await threadsSteerTurn({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
  * Interrupt an in-progress turn
  */
 export const threadsInterruptTurnMutation = (options?: Partial<Options<ThreadsInterruptTurnData>>): UseMutationOptions<ThreadsInterruptTurnResponse, ThreadsInterruptTurnError, Options<ThreadsInterruptTurnData>> => {
@@ -527,6 +544,24 @@ export const threadsSetThreadNameMutation = (options?: Partial<Options<ThreadsSe
     };
     return mutationOptions;
 };
+
+export const tokenUsageReadThreadTokenUsageQueryKey = (options: Options<TokenUsageReadThreadTokenUsageData>) => createQueryKey('tokenUsageReadThreadTokenUsage', options);
+
+/**
+ * Read persisted token usage snapshots for a thread
+ */
+export const tokenUsageReadThreadTokenUsageOptions = (options: Options<TokenUsageReadThreadTokenUsageData>) => queryOptions<TokenUsageReadThreadTokenUsageResponse, TokenUsageReadThreadTokenUsageError, TokenUsageReadThreadTokenUsageResponse, ReturnType<typeof tokenUsageReadThreadTokenUsageQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await tokenUsageReadThreadTokenUsage({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: tokenUsageReadThreadTokenUsageQueryKey(options)
+});
 
 export const modelsListModelsQueryKey = (options?: Options<ModelsListModelsData>) => createQueryKey('modelsListModels', options);
 

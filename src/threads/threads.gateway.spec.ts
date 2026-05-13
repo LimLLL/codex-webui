@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ThreadsGateway } from './threads.gateway';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { AuthService } from '../auth/auth.service';
+import { ActiveThreadRegistryService } from './active-thread-registry.service';
 
 describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
@@ -20,6 +21,12 @@ describe('ThreadsGateway', () => {
     authenticateToken: jest.fn(),
   };
 
+  const mockActiveThreads = {
+    subscribe: jest.fn(),
+    unsubscribe: jest.fn(),
+    removeSocket: jest.fn(),
+  };
+
   const mockServer = {
     to: jest.fn().mockReturnThis(),
     emit: jest.fn(),
@@ -31,6 +38,7 @@ describe('ThreadsGateway', () => {
         ThreadsGateway,
         { provide: CodexProcessManager, useValue: mockManager },
         { provide: AuthService, useValue: mockAuthService },
+        { provide: ActiveThreadRegistryService, useValue: mockActiveThreads },
       ],
     }).compile();
 
@@ -48,6 +56,7 @@ describe('ThreadsGateway', () => {
       threadId: 't1',
     });
     expect(client.join).toHaveBeenCalledWith('thread:t1');
+    expect(mockActiveThreads.subscribe).toHaveBeenCalledWith('c1', 't1');
     expect(result).toEqual({ ok: true });
   });
 
@@ -57,6 +66,7 @@ describe('ThreadsGateway', () => {
       threadId: 't1',
     });
     expect(client.leave).toHaveBeenCalledWith('thread:t1');
+    expect(mockActiveThreads.unsubscribe).toHaveBeenCalledWith('c1', 't1');
     expect(result).toEqual({ ok: true });
   });
 

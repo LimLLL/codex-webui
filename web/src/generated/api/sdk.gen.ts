@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AppGetStatusData, AppGetStatusResponses, AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthLogoutData, AuthLogoutResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyErrors, CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeErrors, CodexStatusUpdateSandboxModeResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, LogsExportDiagnosticsData, LogsExportDiagnosticsErrors, LogsExportDiagnosticsResponses, LogsListLogsData, LogsListLogsErrors, LogsListLogsResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, ThreadsArchiveThreadData, ThreadsArchiveThreadErrors, ThreadsArchiveThreadResponses, ThreadsCompactThreadData, ThreadsCompactThreadErrors, ThreadsCompactThreadResponses, ThreadsForkThreadData, ThreadsForkThreadErrors, ThreadsForkThreadResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsRollbackThreadData, ThreadsRollbackThreadErrors, ThreadsRollbackThreadResponses, ThreadsSetThreadNameData, ThreadsSetThreadNameErrors, ThreadsSetThreadNameResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadErrors, ThreadsUnarchiveThreadResponses } from './types.gen';
+import type { AppGetStatusData, AppGetStatusResponses, AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthLogoutData, AuthLogoutResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyErrors, CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeErrors, CodexStatusUpdateSandboxModeResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, LogsExportDiagnosticsData, LogsExportDiagnosticsErrors, LogsExportDiagnosticsResponses, LogsListLogsData, LogsListLogsErrors, LogsListLogsResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, ThreadsArchiveThreadData, ThreadsArchiveThreadErrors, ThreadsArchiveThreadResponses, ThreadsCompactThreadData, ThreadsCompactThreadErrors, ThreadsCompactThreadResponses, ThreadsForkThreadData, ThreadsForkThreadErrors, ThreadsForkThreadResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsRollbackThreadData, ThreadsRollbackThreadErrors, ThreadsRollbackThreadResponses, ThreadsSetThreadNameData, ThreadsSetThreadNameErrors, ThreadsSetThreadNameResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses, ThreadsSteerTurnData, ThreadsSteerTurnErrors, ThreadsSteerTurnResponses, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadErrors, ThreadsUnarchiveThreadResponses, TokenUsageReadThreadTokenUsageData, TokenUsageReadThreadTokenUsageErrors, TokenUsageReadThreadTokenUsageResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -196,6 +196,19 @@ export const threadsStartTurn = <ThrowOnError extends boolean = false>(options: 
 });
 
 /**
+ * Send mid-turn user input to an active turn
+ */
+export const threadsSteerTurn = <ThrowOnError extends boolean = false>(options: Options<ThreadsSteerTurnData, ThrowOnError>) => (options.client ?? client).post<ThreadsSteerTurnResponses, ThreadsSteerTurnErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/threads/{threadId}/turns/{turnId}/steer',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Interrupt an in-progress turn
  */
 export const threadsInterruptTurn = <ThrowOnError extends boolean = false>(options: Options<ThreadsInterruptTurnData, ThrowOnError>) => (options.client ?? client).post<ThreadsInterruptTurnResponses, ThreadsInterruptTurnErrors, ThrowOnError>({
@@ -264,6 +277,15 @@ export const threadsSetThreadName = <ThrowOnError extends boolean = false>(optio
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+/**
+ * Read persisted token usage snapshots for a thread
+ */
+export const tokenUsageReadThreadTokenUsage = <ThrowOnError extends boolean = false>(options: Options<TokenUsageReadThreadTokenUsageData, ThrowOnError>) => (options.client ?? client).get<TokenUsageReadThreadTokenUsageResponses, TokenUsageReadThreadTokenUsageErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/threads/{threadId}/token-usage',
+    ...options
 });
 
 /**

@@ -1,5 +1,5 @@
 /** Overview view: pinned archive group + workspace groups with collapse. */
-import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Eye, Plus } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,6 +33,7 @@ interface Props {
   onToggleCollapse: (key: string) => void;
   onOpenArchivedDetail: () => void;
   onOpenWorkspaceDetail: (cwd: string) => void;
+  onCreateInWorkspace: (cwd: string) => void;
   renderThreadRow: (thread: ThreadDto, archived: boolean) => React.ReactNode;
 }
 
@@ -44,6 +45,7 @@ export function WorkspaceOverview({
   onToggleCollapse,
   onOpenArchivedDetail,
   onOpenWorkspaceDetail,
+  onCreateInWorkspace,
   renderThreadRow,
 }: Props) {
   const { t } = useTranslation();
@@ -83,10 +85,12 @@ export function WorkspaceOverview({
           </button>
           <button
             type="button"
-            className="shrink-0 cursor-pointer whitespace-nowrap text-xs text-muted-foreground hover:text-foreground hover:underline"
+            className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
             onClick={onOpenArchivedDetail}
+            aria-label={t('View more')}
+            title={t('View more')}
           >
-            {t('View more')}
+            <Eye className="h-3.5 w-3.5" />
           </button>
         </div>
         <AnimatePresence initial={false}>
@@ -127,15 +131,28 @@ export function WorkspaceOverview({
                   : <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform" />}
                 <span className="truncate">{workspaceLabel(group.cwd)}</span>
               </button>
-              {group.threads.length >= 5 && (
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
-                  className="shrink-0 cursor-pointer whitespace-nowrap text-xs text-muted-foreground hover:text-foreground hover:underline"
-                  onClick={() => onOpenWorkspaceDetail(group.cwd)}
+                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  onClick={() => onCreateInWorkspace(group.cwd)}
+                  aria-label={t('New thread in this workspace')}
+                  title={t('New thread in this workspace')}
                 >
-                  {t('View more')}
+                  <Plus className="h-3.5 w-3.5" />
                 </button>
-              )}
+                {group.threads.length >= 5 && (
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                    onClick={() => onOpenWorkspaceDetail(group.cwd)}
+                    aria-label={t('View more')}
+                    title={t('View more')}
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
             <AnimatePresence initial={false}>
               {!collapsed && (

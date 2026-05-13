@@ -12,12 +12,25 @@ import {
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
+  WsException,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
+import { ActiveThreadRegistryService } from './active-thread-registry.service';
+
+export type CodexSocketLifecycleEvent =
+  | { type: 'appServerRestarting'; generation: number; delayMs: number }
+  | { type: 'appServerUnavailable'; generation: number; message: string }
+  | { type: 'appServerReady'; generation: number; restarted: boolean }
+  | {
+      type: 'autoResumeCompleted';
+      generation: number;
+      resumedThreadIds: string[];
+      failedThreadIds: string[];
+    };
 
 @WebSocketGateway({ namespace: '/ws', cors: { origin: '*' } })
 export class ThreadsGateway
@@ -31,6 +44,7 @@ export class ThreadsGateway
   constructor(
     private readonly codexManager: CodexProcessManager,
     private readonly authService: AuthService,
+    private readonly activeThreads: ActiveThreadRegistryService,
   ) {}
 
   afterInit(): void {
@@ -63,6 +77,7 @@ export class ThreadsGateway
 
   handleDisconnect(client: Socket): void {
     this.logger.debug(`Client disconnected: ${client.id}`);
+    this.activeThreads.removeSocket(client.id);
   }
 
   /**
@@ -72,10 +87,12 @@ export class ThreadsGateway
   @SubscribeMessage('thread.subscribe')
   handleSubscribe(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { threadId: string },
+    @MessageBody() data: { threadId?: unknown } | null | undefined,
   ): { ok: boolean } {
-    const room = `thread:${data.threadId}`;
+    const threadId = this.parseThreadId(data);
+    const room = `thread:${threadId}`;
     void client.join(room);
+    this.activeThreads.subscribe(client.id, threadId);
     this.logger.debug(`Client ${client.id} subscribed to ${room}`);
     return { ok: true };
   }
@@ -84,10 +101,12 @@ export class ThreadsGateway
   @SubscribeMessage('thread.unsubscribe')
   handleUnsubscribe(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { threadId: string },
+    @MessageBody() data: { threadId?: unknown } | null | undefined,
   ): { ok: boolean } {
-    const room = `thread:${data.threadId}`;
+    const threadId = this.parseThreadId(data);
+    const room = `thread:${threadId}`;
     void client.leave(room);
+    this.activeThreads.unsubscribe(client.id, threadId);
     this.logger.debug(`Client ${client.id} unsubscribed from ${room}`);
     return { ok: true };
   }
@@ -141,6 +160,23 @@ export class ThreadsGateway
     if (client) {
       client.respondToServerRequest(data.id, data.result);
     }
+  }
+
+  /** Emits WebUI lifecycle events that are not app-server notifications. */
+  emitLifecycle(event: CodexSocketLifecycleEvent): void {
+    this.server.emit('codex.lifecycle', event);
+  }
+
+  /** Validates thread room payloads from untrusted socket clients. */
+  private parseThreadId(
+    data: { threadId?: unknown } | null | undefined,
+  ): string {
+    const threadId =
+      typeof data?.threadId === 'string' ? data.threadId.trim() : '';
+    if (!threadId) {
+      throw new WsException('threadId must be a non-empty string');
+    }
+    return threadId;
   }
 
   /** Extracts auth token from socket handshake (mirrors ApiKeyGuard logic). */

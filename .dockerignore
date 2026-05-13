@@ -2,7 +2,7 @@ node_modules
 web/node_modules
 dist
 public
-logs
+/logs
 coverage
 .git
 .env

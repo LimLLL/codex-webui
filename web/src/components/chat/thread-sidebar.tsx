@@ -22,6 +22,7 @@ import {
   threadsStartThreadMutation,
   threadsUnarchiveThreadMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
+import { tokenUsageReadThreadTokenUsage } from '@/generated/api/sdk.gen';
 import type { ThreadDto } from '@/generated/api';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { showSnackbar } from '@/stores/snackbar-store';
@@ -33,6 +34,7 @@ import { ThreadRow } from './sidebar/thread-row';
 import { WorkspaceOverview } from './sidebar/workspace-overview';
 import { WorkspaceDetail } from './sidebar/workspace-detail';
 import { RenameDialog, ConfirmDialog } from './sidebar/sidebar-dialogs';
+import { DirectoryPickerDialog } from './sidebar/directory-picker-dialog';
 
 interface Props {
   activeView: GlobalView;
@@ -48,6 +50,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
   const setReadOnlyThread = useTimelineStore((s) => s.setReadOnlyThread);
   const clearThread = useTimelineStore((s) => s.clearThread);
   const hydrateTimeline = useTimelineStore((s) => s.hydrateTimeline);
+  const hydrateTokenUsage = useTimelineStore((s) => s.hydrateTokenUsage);
   const setThreadTitle = useTimelineStore((s) => s.setThreadTitle);
   const addSystemError = useTimelineStore((s) => s.addSystemError);
   const setLoading = useTimelineStore((s) => s.setLoading);
@@ -61,6 +64,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
   const [renameThread, setRenameThread] = useState<ThreadDto | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+  const [dirPickerOpen, setDirPickerOpen] = useState(false);
 
   // ── Queries ─────────────────────────────────────────────────────────
   const overviewThreadsQuery = useQuery({
@@ -98,6 +102,9 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
     onSuccess: (res) => {
       setThreadTitle(threadLabel(res.thread));
       hydrateTimeline(res.thread.turns, res.cwd);
+      void tokenUsageReadThreadTokenUsage({ path: { threadId: res.thread.id } })
+        .then(({ data }) => data && hydrateTokenUsage(data.turns))
+        .catch(() => undefined);
     },
     onError: () => setLoading(false),
   });
@@ -113,6 +120,9 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
         }),
       );
       setReadOnlyThread(res.thread);
+      void tokenUsageReadThreadTokenUsage({ path: { threadId: res.thread.id } })
+        .then(({ data }) => data && hydrateTokenUsage(data.turns))
+        .catch(() => undefined);
       onViewChange('chat');
     } catch {
       setLoading(false);
@@ -172,6 +182,9 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
     onSuccess: (res) => {
       setActiveThread(res.thread.id, res.cwd, threadLabel(res.thread));
       hydrateTimeline(res.thread.turns, res.cwd);
+      void tokenUsageReadThreadTokenUsage({ path: { threadId: res.thread.id } })
+        .then(({ data }) => data && hydrateTokenUsage(data.turns))
+        .catch(() => undefined);
       invalidateThreads();
       onViewChange('chat');
     },
@@ -285,7 +298,9 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
           size="icon"
           variant="ghost"
           className="h-6 w-6"
-          onClick={() => { createThread.mutate({ body: {} }); onViewChange('chat'); }}
+          aria-label={t('New workspace thread')}
+          title={t('New workspace thread')}
+          onClick={() => setDirPickerOpen(true)}
         >
           <Plus className="h-3.5 w-3.5" />
         </Button>
@@ -301,6 +316,7 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
             onToggleCollapse={toggleCollapse}
             onOpenArchivedDetail={openArchivedDetail}
             onOpenWorkspaceDetail={openWorkspaceDetail}
+            onCreateInWorkspace={(cwd) => { createThread.mutate({ body: { cwd } }); onViewChange('chat'); }}
             renderThreadRow={renderThreadRow}
           />
         ) : (
@@ -331,6 +347,11 @@ export function ThreadSidebar({ activeView, onViewChange }: Props) {
         pending={archiveThread.isPending || compactThread.isPending}
         onConfirm={confirmCurrentAction}
         onClose={() => setConfirmAction(null)}
+      />
+      <DirectoryPickerDialog
+        open={dirPickerOpen}
+        onClose={() => setDirPickerOpen(false)}
+        onSelect={(cwd) => { createThread.mutate({ body: { cwd } }); onViewChange('chat'); }}
       />
     </aside>
   );

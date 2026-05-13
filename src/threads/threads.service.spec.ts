@@ -69,6 +69,22 @@ describe('ThreadsService', () => {
     });
   });
 
+  it('should call turn/steer', async () => {
+    mockCodex.request.mockResolvedValue({ turnId: 'turn1' });
+
+    await service.steerTurn({
+      threadId: 't1',
+      expectedTurnId: 'turn1',
+      input: [{ type: 'text', text: 'keep going' }] as never,
+    });
+
+    expect(mockCodex.request).toHaveBeenCalledWith('turn/steer', {
+      threadId: 't1',
+      expectedTurnId: 'turn1',
+      input: [{ type: 'text', text: 'keep going' }],
+    });
+  });
+
   it('should call turn/interrupt', async () => {
     mockCodex.request.mockResolvedValue({});
 

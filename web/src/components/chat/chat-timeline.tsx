@@ -26,6 +26,7 @@ import {
   threadsListThreadsQueryKey,
   threadsRollbackThreadMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
+import { tokenUsageReadThreadTokenUsage } from '@/generated/api/sdk.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { TimelineEntry } from '@/types/timeline';
 import { TurnBlock } from './turn-block';
@@ -59,6 +60,7 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const threadMode = useTimelineStore((s) => s.threadMode);
   const loading = useTimelineStore((s) => s.loading);
   const hydrateTimeline = useTimelineStore((s) => s.hydrateTimeline);
+  const hydrateTokenUsage = useTimelineStore((s) => s.hydrateTokenUsage);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [rollbackTarget, setRollbackTarget] = useState<{
     numTurns: number;
@@ -71,6 +73,9 @@ export function ChatTimeline({ onEditMessage }: Props) {
     onSuccess: (res) => {
       const content = rollbackTarget?.content;
       hydrateTimeline(res.thread.turns, res.thread.cwd);
+      void tokenUsageReadThreadTokenUsage({ path: { threadId: res.thread.id } })
+        .then(({ data }) => data && hydrateTokenUsage(data.turns))
+        .catch(() => undefined);
       setRollbackTarget(null);
       void queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
       if (content) onEditMessage?.(content);

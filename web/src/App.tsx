@@ -31,6 +31,7 @@ function App() {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const sessionPanelHeight = 300;
 
+  const threadId = useTimelineStore((s) => s.threadId);
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const setRootDir = useFilesStore((s) => s.setRootDir);
 
@@ -141,12 +142,14 @@ function App() {
                 </div>
               )}
 
-              <ChatInput
-                value={input}
-                onChange={setInput}
-                panelOpen={sessionPanelOpen}
-                onTogglePanel={() => setSessionPanelOpen((o) => !o)}
-              />
+              {threadId && (
+                <ChatInput
+                  value={input}
+                  onChange={setInput}
+                  panelOpen={sessionPanelOpen}
+                  onTogglePanel={() => setSessionPanelOpen((o) => !o)}
+                />
+              )}
             </>
           )}
 

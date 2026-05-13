@@ -39,12 +39,14 @@ import {
   ThreadListResponseDto,
   ThreadReadResponseDto,
   ThreadResumeResponseDto,
+  SteerTurnDto,
   ThreadRollbackRequestDto,
   ThreadRollbackResponseDto,
   ThreadSetNameRequestDto,
   ThreadStartResponseDto,
   ThreadUnarchiveResponseDto,
   TurnStartResponseDto,
+  TurnSteerResponseDto,
 } from './dto/threads.dto';
 
 @ApiTags('threads')
@@ -147,6 +149,26 @@ export class ThreadsController {
     }
     return this.threadsService.startTurn({
       threadId,
+      input: body.input as never,
+    });
+  }
+
+  @Post(':threadId/turns/:turnId/steer')
+  @ApiOperation({ summary: 'Send mid-turn user input to an active turn' })
+  @ApiBody({ type: SteerTurnDto })
+  @ApiCreatedResponse({ type: TurnSteerResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async steerTurn(
+    @Param('threadId') threadId: string,
+    @Param('turnId') turnId: string,
+    @Body() body: SteerTurnDto,
+  ) {
+    if (!Array.isArray(body.input) || body.input.length === 0) {
+      throw new BadRequestException('input must be a non-empty array');
+    }
+    return this.threadsService.steerTurn({
+      threadId,
+      expectedTurnId: turnId,
       input: body.input as never,
     });
   }

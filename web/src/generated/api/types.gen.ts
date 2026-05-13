@@ -704,12 +704,46 @@ export type StartTurnDto = {
     input: Array<TextTurnInputDto>;
 };
 
+export type SteerTurnDto = {
+    input: Array<TextTurnInputDto>;
+};
+
+export type TurnSteerResponseDto = {
+    turnId: string;
+};
+
 export type ThreadRollbackRequestDto = {
     numTurns: number;
 };
 
 export type ThreadSetNameRequestDto = {
     name: string;
+};
+
+export type TokenUsageBreakdownDto = {
+    totalTokens: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+};
+
+export type ThreadTokenUsageDto = {
+    total: TokenUsageBreakdownDto;
+    last: TokenUsageBreakdownDto;
+    modelContextWindow: number | null;
+};
+
+export type TurnTokenUsageDto = {
+    turnId: string;
+    usage: ThreadTokenUsageDto;
+    updatedAt: number;
+};
+
+export type ThreadTokenUsageResponseDto = {
+    threadId: string;
+    turns: Array<TurnTokenUsageDto>;
+    latest: TurnTokenUsageDto | null;
 };
 
 export type LogEntryDto = {
@@ -1132,6 +1166,29 @@ export type ThreadsStartTurnResponses = {
 
 export type ThreadsStartTurnResponse = ThreadsStartTurnResponses[keyof ThreadsStartTurnResponses];
 
+export type ThreadsSteerTurnData = {
+    body: SteerTurnDto;
+    path: {
+        threadId: string;
+        turnId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/turns/{turnId}/steer';
+};
+
+export type ThreadsSteerTurnErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsSteerTurnError = ThreadsSteerTurnErrors[keyof ThreadsSteerTurnErrors];
+
+export type ThreadsSteerTurnResponses = {
+    201: TurnSteerResponseDto;
+};
+
+export type ThreadsSteerTurnResponse = ThreadsSteerTurnResponses[keyof ThreadsSteerTurnResponses];
+
 export type ThreadsInterruptTurnData = {
     body?: never;
     path: {
@@ -1281,6 +1338,27 @@ export type ThreadsSetThreadNameResponses = {
 };
 
 export type ThreadsSetThreadNameResponse = ThreadsSetThreadNameResponses[keyof ThreadsSetThreadNameResponses];
+
+export type TokenUsageReadThreadTokenUsageData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/token-usage';
+};
+
+export type TokenUsageReadThreadTokenUsageErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type TokenUsageReadThreadTokenUsageError = TokenUsageReadThreadTokenUsageErrors[keyof TokenUsageReadThreadTokenUsageErrors];
+
+export type TokenUsageReadThreadTokenUsageResponses = {
+    200: ThreadTokenUsageResponseDto;
+};
+
+export type TokenUsageReadThreadTokenUsageResponse = TokenUsageReadThreadTokenUsageResponses[keyof TokenUsageReadThreadTokenUsageResponses];
 
 export type ModelsListModelsData = {
     body?: never;

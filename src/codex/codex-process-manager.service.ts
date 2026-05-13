@@ -16,6 +16,11 @@ import {
 } from './codex-jsonrpc-client';
 import type { InitializeResponse } from './codex-schema';
 
+export type CodexLifecycleEvent =
+  | { type: 'appServerRestarting'; generation: number; delayMs: number }
+  | { type: 'appServerReady'; generation: number; restarted: boolean }
+  | { type: 'appServerUnavailable'; generation: number; message: string };
+
 @Injectable()
 export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CodexProcessManager.name);
@@ -23,12 +28,18 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
   private initResult: InitializeResponse | null = null;
   private restarting = false;
   private destroyed = false;
+  private generation = 0;
 
   /** Listeners registered via onNotification/onServerRequest before the client is ready. */
   private readonly eventForwarders: Array<{
     event: keyof CodexJsonRpcClientEvents;
     handler: (...args: unknown[]) => void;
   }> = [];
+
+  /** Process-level lifecycle listeners used by gateways and recovery services. */
+  private readonly lifecycleHandlers = new Set<
+    (event: CodexLifecycleEvent) => void
+  >();
 
   constructor(private readonly config: ConfigService) {}
 
@@ -65,6 +76,26 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
     this.eventForwarders.push({ event, handler });
     if (this.client) {
       this.client.on(event, handler);
+    }
+  }
+
+  /** Registers a process lifecycle listener. Returns an unsubscribe function. */
+  addLifecycleListener(
+    handler: (event: CodexLifecycleEvent) => void,
+  ): () => void {
+    this.lifecycleHandlers.add(handler);
+    return () => this.lifecycleHandlers.delete(handler);
+  }
+
+  private emitLifecycle(event: CodexLifecycleEvent): void {
+    for (const handler of this.lifecycleHandlers) {
+      try {
+        handler(event);
+      } catch (err) {
+        this.logger.warn(
+          `Lifecycle listener failed: ${(err as Error).message}`,
+        );
+      }
     }
   }
 
@@ -109,6 +140,11 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
       if (this.client === currentClient) {
         this.client = null;
         this.initResult = null;
+        this.emitLifecycle({
+          type: 'appServerUnavailable',
+          generation: this.generation,
+          message: `Codex app-server exited (code=${code}, signal=${signal})`,
+        });
       }
       if (!this.destroyed) {
         void this.restart();
@@ -124,9 +160,15 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
         },
         capabilities: { experimentalApi: true },
       });
+      this.generation += 1;
       this.logger.log(
         `Codex app-server initialized (codexHome=${this.initResult.codexHome}, platform=${this.initResult.platformOs})`,
       );
+      this.emitLifecycle({
+        type: 'appServerReady',
+        generation: this.generation,
+        restarted: this.generation > 1,
+      });
     } catch (err) {
       this.logger.error(
         `Failed to initialize codex app-server: ${(err as Error).message}`,
@@ -146,6 +188,11 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
     this.restarting = true;
     const delayMs = 3000;
     this.logger.log(`Restarting codex app-server in ${delayMs}ms...`);
+    this.emitLifecycle({
+      type: 'appServerRestarting',
+      generation: this.generation,
+      delayMs,
+    });
     await new Promise((r) => setTimeout(r, delayMs));
     this.restarting = false;
     if (!this.destroyed) {

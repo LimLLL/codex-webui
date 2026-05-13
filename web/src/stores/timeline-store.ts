@@ -119,6 +119,8 @@ interface TimelineState {
   latestTokenUsage: ThreadTokenUsage | null;
   /** Active thread status from app-server. */
   threadStatus: ThreadStatusType | null;
+  /** Active turn id observed from a fresh turn/started notification. */
+  activeTurnId: string | null;
   /** Request IDs resolved before their approval card arrived (out-of-order). */
   pendingResolvedRequestIds: Set<string>;
 
@@ -162,6 +164,12 @@ interface TimelineState {
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   /** Updates active thread status. */
   setThreadStatus: (status: ThreadStatusType | null) => void;
+  /** Stores the currently steerable turn id. */
+  setActiveTurnId: (turnId: string | null) => void;
+  /** Clears the active turn and marks the active turn as no longer loading. */
+  clearActiveTurn: () => void;
+  /** Hydrates token usage snapshots fetched from the backend. */
+  hydrateTokenUsage: (turns: Array<{ turnId: string; usage: ThreadTokenUsage }>) => void;
   /** Resolves an approval by its JSON-RPC requestId (for serverRequest/resolved). */
   resolveApprovalByRequestId: (requestId: string | number) => void;
 }
@@ -178,6 +186,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   tokenUsageByTurn: {},
   latestTokenUsage: null,
   threadStatus: null,
+  activeTurnId: null,
   pendingResolvedRequestIds: new Set(),
 
   setActiveThread: (threadId: string, cwd?: string | null, title?: string | null) => {
@@ -199,6 +208,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       tokenUsageByTurn: {},
       latestTokenUsage: null,
       threadStatus: null,
+      activeTurnId: null,
       pendingResolvedRequestIds: new Set(),
     });
   },
@@ -220,6 +230,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       tokenUsageByTurn: {},
       latestTokenUsage: null,
       threadStatus: thread.status as ThreadStatusType,
+      activeTurnId: null,
       pendingResolvedRequestIds: new Set(),
     });
   },
@@ -241,6 +252,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       tokenUsageByTurn: {},
       latestTokenUsage: null,
       threadStatus: null,
+      activeTurnId: null,
       pendingResolvedRequestIds: new Set(),
     });
   },
@@ -250,6 +262,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       threadCwd: cwd ?? get().threadCwd,
       loading: false,
       timeline: turnsToTimeline(turns),
+      activeTurnId: null,
     });
   },
 
@@ -406,6 +419,21 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
   setThreadStatus: (status) => {
     set({ threadStatus: status });
+  },
+
+  setActiveTurnId: (turnId) => set({ activeTurnId: turnId }),
+
+  clearActiveTurn: () => set({ activeTurnId: null, loading: false }),
+
+  hydrateTokenUsage: (turns) => {
+    const byTurn: Record<string, ThreadTokenUsage> = {};
+    for (const turn of turns) {
+      byTurn[turn.turnId] = turn.usage;
+    }
+    set({
+      tokenUsageByTurn: byTurn,
+      latestTokenUsage: turns.at(-1)?.usage ?? null,
+    });
   },
 
   resolveApprovalByRequestId: (requestId) => {

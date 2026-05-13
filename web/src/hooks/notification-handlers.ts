@@ -37,6 +37,8 @@ export interface NotificationContext {
   addSystemError: (message: string) => void;
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatus: (status: ThreadStatusType | null) => void;
+  setActiveTurnId: (turnId: string | null) => void;
+  clearActiveTurn: () => void;
   setThreadTitle: (title: string | null) => void;
   resolveApprovalByRequestId: (requestId: string | number) => void;
 }
@@ -267,6 +269,7 @@ const handleTurnCompleted: Handler = (params, ctx) => {
 
   ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
   ctx.setLoading(false);
+  ctx.clearActiveTurn();
 
   if (
     turn?.status === 'failed' &&
@@ -305,6 +308,7 @@ const handleError: Handler = (params, ctx) => {
         ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
       }
       ctx.setLoading(false);
+      ctx.clearActiveTurn();
     }
   }
 };
@@ -391,6 +395,7 @@ const handleTurnStarted: Handler = (params, ctx) => {
   if (!turnId || ctx.threadId !== threadId) return;
   ctx.updateCurrentTurn(turnId, () => ({ items: [], completed: false }));
   ctx.setLoading(true);
+  ctx.setActiveTurnId(turnId);
 };
 
 const handleThreadCompacted: Handler = (params, ctx) => {
