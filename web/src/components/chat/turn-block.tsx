@@ -3,7 +3,6 @@
  * Contains all items (reasoning, tool calls, messages) under one avatar.
  */
 import { Bot, Loader2 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import type { TimelineEntry, TurnItem } from '@/types/timeline';
@@ -16,15 +15,6 @@ import { DiffViewer } from './turn-items/diff-viewer';
 import { ApprovalItem } from './turn-items/approval-item';
 import { TurnTokenFooter } from './turn-token-footer';
 import { useTimelineStore } from '@/stores/timeline-store';
-
-const entryVariants = {
-  hidden: { opacity: 0, y: 10 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { type: 'spring' as const, stiffness: 400, damping: 30 },
-  },
-};
 
 interface Props {
   entry: Extract<TimelineEntry, { kind: 'turn' }>;
@@ -56,12 +46,7 @@ function ItemWithApproval({ item }: { item: TurnItem }) {
 export function TurnBlock({ entry }: Props) {
   const { t } = useTranslation();
   return (
-    <motion.div
-      variants={entryVariants}
-      initial="hidden"
-      animate="visible"
-      className="mb-6 flex gap-3"
-    >
+    <div className="mb-6 flex gap-3">
       <Avatar className="mt-1 h-8 w-8 shrink-0">
         <AvatarFallback className="glass-1 bg-transparent">
           <Bot className="h-4 w-4" />
@@ -84,6 +69,6 @@ export function TurnBlock({ entry }: Props) {
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }

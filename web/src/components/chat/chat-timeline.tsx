@@ -1,8 +1,10 @@
 /**
- * Renders the scrollable message timeline.
+ * Virtualized scrollable message timeline.
+ * Uses TanStack Virtual for efficient rendering of long conversations.
  */
-import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { useCallback, useEffect, useRef } from 'react';
+import { useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bot, Loader2, Pencil } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -21,7 +23,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   threadsListThreadsQueryKey,
   threadsRollbackThreadMutation,
@@ -32,21 +33,17 @@ import type { TimelineEntry } from '@/types/timeline';
 import { TurnBlock } from './turn-block';
 import { MarkdownRenderer } from './markdown-renderer';
 
-const entryVariants = {
-  hidden: { opacity: 0, y: 10 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { type: 'spring' as const, stiffness: 400, damping: 30 },
-  },
-};
-
 /** Counts how many turns need to be rolled back when editing this user message. */
 function computeRollbackTurns(timeline: TimelineEntry[], userIndex: number): number {
   const turnEntries = timeline
     .slice(userIndex)
     .filter((e): e is Extract<TimelineEntry, { kind: 'turn' }> => e.kind === 'turn');
   return turnEntries.length;
+}
+
+/** Returns true if the scroll container is near the bottom. */
+function isNearBottom(el: HTMLElement, threshold = 120): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
 }
 
 interface Props {
@@ -62,7 +59,6 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const hydrateTimeline = useTimelineStore((s) => s.hydrateTimeline);
   const hydrateTokenUsage = useTimelineStore((s) => s.hydrateTokenUsage);
   const hydrateTurnDiffs = useTimelineStore((s) => s.hydrateTurnDiffs);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [rollbackTarget, setRollbackTarget] = useState<{
     numTurns: number;
     content: string;
@@ -89,102 +85,127 @@ export function ChatTimeline({ onEditMessage }: Props) {
 
   const canRollback = threadMode === 'live' && !loading && !rollbackThread.isPending;
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [timeline]);
+  // ── Virtualizer ─────────────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevCountRef = useRef(timeline.length);
+  const shouldAutoScroll = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
 
-  return (
-    <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block">
-      <div className="px-4 py-6 md:px-6">
-        {timeline.length === 0 && loading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col items-center justify-center py-24 text-muted-foreground"
-          >
+  const virtualizer = useVirtualizer({
+    count: timeline.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 80,
+    overscan: 5,
+  });
+
+  // Track whether user is near bottom for auto-scroll decisions
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) {
+      shouldAutoScroll.current = isNearBottom(el);
+    }
+  }, []);
+
+  // Cleanup pending animation frames
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    };
+  }, []);
+
+  // Keep bottom pinned during streaming (content changes) and new entries.
+  // Smooth scroll for appended entries; instant jump for hydration (0→many).
+  useEffect(() => {
+    const previousCount = prevCountRef.current;
+    const appended = timeline.length > previousCount;
+    prevCountRef.current = timeline.length;
+
+    if (timeline.length === 0 || !shouldAutoScroll.current) return;
+
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      virtualizer.scrollToIndex(timeline.length - 1, {
+        align: 'end',
+        behavior: previousCount > 0 && appended ? 'smooth' : 'auto',
+      });
+    });
+  }, [timeline, virtualizer]);
+
+  // Scroll to bottom on initial load / thread switch
+  useEffect(() => {
+    if (timeline.length > 0) {
+      shouldAutoScroll.current = true;
+      virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' });
+    }
+    // Only on threadId change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+
+  const virtualItems = virtualizer.getVirtualItems();
+
+  // ── Empty states ────────────────────────────────────────────────────
+  if (timeline.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
             <Loader2 className="mb-3 h-8 w-8 animate-spin opacity-40" />
             <p className="text-sm">{t('Loading...')}</p>
-          </motion.div>
-        )}
-
-        {timeline.length === 0 && !loading && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center py-24 text-muted-foreground"
-          >
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
             <Bot className="mb-4 h-12 w-12 opacity-30" />
             <p className="text-sm">
               {threadId
                 ? t('Send a message to start the conversation.')
                 : t('Create a new thread to begin.')}
             </p>
-          </motion.div>
+          </div>
         )}
+      </div>
+    );
+  }
 
-        <AnimatePresence initial={false}>
-          {timeline.map((entry, i) => {
-            if (entry.kind === 'user') {
-              const numTurns = computeRollbackTurns(timeline, i);
+  // ── Virtualized list ────────────────────────────────────────────────
+  return (
+    <>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <div
+          className="relative px-4 md:px-6"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          <div
+            className="absolute left-0 top-0 w-full px-4 md:px-6"
+            style={{ transform: `translateY(${virtualItems[0]?.start ?? 0}px)` }}
+          >
+            {virtualItems.map((virtualItem) => {
+              const entry = timeline[virtualItem.index];
               return (
-                <motion.div
-                  key={i}
-                  variants={entryVariants}
-                  initial="hidden"
-                  animate="visible"
-                  className="group/user mb-4 flex flex-col items-end"
+                <div
+                  key={virtualItem.key}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  className="py-2"
                 >
-                  <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-3 text-white [&_a]:text-blue-200 [&_a]:underline [&_code]:bg-white/15" style={{ boxShadow: '0 8px 24px rgba(59, 130, 246, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(0, 0, 0, 0.12)' }}>
-                    <MarkdownRenderer content={entry.content} completed={true} />
-                  </div>
-                  {canRollback && numTurns > 0 && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label={t('Edit this message')}
-                          className="mt-1 flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/user:opacity-100"
-                          onClick={() => setRollbackTarget({ numTurns, content: entry.content })}
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {t('Edit this message')}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </motion.div>
+                  <TimelineEntryRow
+                    entry={entry}
+                    index={virtualItem.index}
+                    timeline={timeline}
+                    canRollback={canRollback}
+                    onRollback={setRollbackTarget}
+                    t={t}
+                  />
+                </div>
               );
-            }
-
-            if (entry.kind === 'system') {
-              const severity = entry.severity ?? 'error';
-              const colorMap = {
-                info: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-                warning: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
-                error: 'bg-destructive/10 text-destructive',
-              } as const;
-              return (
-                <motion.div
-                  key={i}
-                  variants={entryVariants}
-                  initial="hidden"
-                  animate="visible"
-                  className="mb-4 text-center"
-                >
-                  <span className={`inline-block rounded-lg px-3 py-1.5 text-sm ${colorMap[severity]}`}>
-                    {entry.content}
-                  </span>
-                </motion.div>
-              );
-            }
-
-            return <TurnBlock key={entry.turnId} entry={entry} />;
-          })}
-        </AnimatePresence>
-
-        <div ref={bottomRef} />
+            })}
+          </div>
+        </div>
       </div>
 
       <AlertDialog open={rollbackTarget !== null} onOpenChange={(open) => !open && setRollbackTarget(null)}>
@@ -212,6 +233,75 @@ export function ChatTimeline({ onEditMessage }: Props) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </ScrollArea>
+    </>
   );
+}
+
+/** Renders a single timeline entry (user message, system message, or turn block). */
+function TimelineEntryRow({
+  entry,
+  index,
+  timeline,
+  canRollback,
+  onRollback,
+  t,
+}: {
+  entry: TimelineEntry;
+  index: number;
+  timeline: TimelineEntry[];
+  canRollback: boolean;
+  onRollback: (target: { numTurns: number; content: string }) => void;
+  t: (key: string) => string;
+}) {
+  if (entry.kind === 'user') {
+    const numTurns = computeRollbackTurns(timeline, index);
+    return (
+      <div className="group/user flex flex-col items-end">
+        <div
+          className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-3 text-white [&_a]:text-blue-200 [&_a]:underline [&_code]:bg-white/15"
+          style={{
+            boxShadow:
+              '0 8px 24px rgba(59, 130, 246, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(0, 0, 0, 0.12)',
+          }}
+        >
+          <MarkdownRenderer content={entry.content} completed={true} />
+        </div>
+        {canRollback && numTurns > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('Edit this message')}
+                className="mt-1 flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/user:opacity-100"
+                onClick={() => onRollback({ numTurns, content: entry.content })}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {t('Edit this message')}
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    );
+  }
+
+  if (entry.kind === 'system') {
+    const severity = entry.severity ?? 'error';
+    const colorMap = {
+      info: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+      warning: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
+      error: 'bg-destructive/10 text-destructive',
+    } as const;
+    return (
+      <div className="text-center">
+        <span className={`inline-block rounded-lg px-3 py-1.5 text-sm ${colorMap[severity]}`}>
+          {entry.content}
+        </span>
+      </div>
+    );
+  }
+
+  return <TurnBlock entry={entry} />;
 }
