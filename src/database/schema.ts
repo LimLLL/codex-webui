@@ -54,3 +54,22 @@ export const turnDiffs = sqliteTable(
 
 export type TurnDiffRow = typeof turnDiffs.$inferSelect;
 export type InsertTurnDiffRow = typeof turnDiffs.$inferInsert;
+
+/** Generic runtime-configurable settings seeded from code-owned definitions. */
+export const settings = sqliteTable(
+  'settings',
+  {
+    key: text('key').primaryKey(),
+    value: text('value'),
+    type: text('type').notNull(),
+    category: text('category').notNull(),
+    description: text('description').notNull(),
+    defaultValue: text('default_value').notNull(),
+    constraints: text('constraints').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('idx_settings_category').on(table.category)],
+);
+
+export type SettingRow = typeof settings.$inferSelect;
+export type InsertSettingRow = typeof settings.$inferInsert;

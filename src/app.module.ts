@@ -13,6 +13,7 @@ import { DatabaseModule } from './database/database.module';
 import { FilesModule } from './files/files.module';
 import { LogsModule } from './logs/logs.module';
 import { ModelsModule } from './models/models.module';
+import { SettingsModule } from './settings/settings.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { ThreadsModule } from './threads/threads.module';
 import { TokenUsageModule } from './token-usage/token-usage.module';
@@ -79,6 +80,7 @@ const PINO_REDACT = {
     DatabaseModule,
     CodexModule,
     FilesModule,
+    SettingsModule,
     TerminalModule,
     ThreadsModule,
     TokenUsageModule,

@@ -10,8 +10,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import {
+  isSecuritySettingKey,
+  SECURITY_SETTING_KEYS,
+} from '../settings/settings.definitions';
+import { SettingsService } from '../settings/settings.service';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
@@ -98,22 +103,65 @@ interface ExistingAncestor {
 }
 
 @Injectable()
-export class FilesService {
+export class FilesService implements OnModuleDestroy {
   private readonly logger = new Logger(FilesService.name);
-  private readonly workspaceRoots = new Set<string>();
+  /** Roots dynamically added via addWorkspaceRoot (e.g. thread cwd). */
+  private readonly dynamicRoots = new Set<string>();
+  /** Union of configured roots (from setting/env) + dynamicRoots + home. */
+  private workspaceRoots = new Set<string>();
+  private unregisterSettingsChange: (() => void) | null = null;
 
-  constructor(private readonly config: ConfigService) {
-    const roots = this.config.get<string>('WORKSPACE_ROOTS') ?? '';
-    for (const root of roots
+  constructor(private readonly settingsService: SettingsService) {
+    this.rebuildWorkspaceRoots();
+    this.unregisterSettingsChange = this.settingsService.onChange((event) => {
+      if (!isSecuritySettingKey(event.key)) return;
+      this.rebuildWorkspaceRoots();
+      this.logger.log('Workspace roots updated from runtime settings');
+    });
+  }
+
+  onModuleDestroy(): void {
+    if (this.unregisterSettingsChange) {
+      this.unregisterSettingsChange();
+      this.unregisterSettingsChange = null;
+    }
+  }
+
+  /** Rebuilds the workspace roots set from the runtime setting. */
+  private rebuildWorkspaceRoots(): void {
+    const rootsStr =
+      this.settingsService.getStringSetting(
+        SECURITY_SETTING_KEYS.workspaceRoots,
+      ) ?? '';
+    const next = new Set<string>();
+    for (const root of rootsStr
       .split(',')
       .map((r) => r.trim())
       .filter(Boolean)) {
-      this.workspaceRoots.add(this.resolveExistingDirectorySync(root));
+      try {
+        next.add(this.resolveExistingDirectorySync(root));
+      } catch {
+        this.logger.warn(`Skipping invalid workspace root: ${root}`);
+      }
+    }
+    // Home directory is always included
+    next.add(fsSync.realpathSync(os.homedir()));
+
+    // Prune dynamic roots that no longer fall within any configured root
+    for (const dynamicRoot of this.dynamicRoots) {
+      const stillAllowed = [...next].some((root) =>
+        this.isPathInside(dynamicRoot, root),
+      );
+      if (!stillAllowed) {
+        this.dynamicRoots.delete(dynamicRoot);
+        this.logger.warn(
+          `Removed dynamic workspace root outside current settings: ${dynamicRoot}`,
+        );
+      }
     }
 
-    // Home directory is always an allowed root
-    const home = fsSync.realpathSync(os.homedir());
-    this.workspaceRoots.add(home);
+    // Merge configured + surviving dynamic
+    this.workspaceRoots = new Set([...next, ...this.dynamicRoots]);
   }
 
   /**
@@ -132,8 +180,9 @@ export class FilesService {
     }
 
     if (!this.workspaceRoots.has(resolved)) {
+      this.dynamicRoots.add(resolved);
       this.workspaceRoots.add(resolved);
-      this.logger.log(`Registered workspace root: ${resolved}`);
+      this.logger.log(`Registered dynamic workspace root: ${resolved}`);
     }
   }
 

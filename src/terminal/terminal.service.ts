@@ -13,7 +13,6 @@ import {
   Logger,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import * as pty from 'node-pty';
@@ -23,6 +22,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { basename } from 'node:path';
 import { FilesService } from '../files/files.service';
+import {
+  isTerminalSettingKey,
+  TERMINAL_SETTING_DEFAULTS,
+  TERMINAL_SETTING_KEYS,
+} from '../settings/settings.definitions';
+import { SettingsService } from '../settings/settings.service';
 import type {
   TerminalClosedEvent,
   TerminalConfig,
@@ -34,9 +39,12 @@ import type {
   TerminalStatus,
 } from './terminal.types';
 
-const DEFAULT_MAX_SESSIONS = 10;
-const DEFAULT_GRACE_MS = 45_000;
-const DEFAULT_SCROLLBACK = 5_000;
+const DEFAULT_TERMINAL_CONFIG: TerminalConfig = {
+  maxSessions: TERMINAL_SETTING_DEFAULTS.maxSessions,
+  graceMs: TERMINAL_SETTING_DEFAULTS.graceMs,
+  scrollback: TERMINAL_SETTING_DEFAULTS.scrollback,
+  defaultCwd: null,
+};
 const MIN_COLS = 20;
 const MAX_COLS = 300;
 const MIN_ROWS = 5;
@@ -72,13 +80,21 @@ export class TerminalService implements OnModuleDestroy {
   private readonly logger = new Logger(TerminalService.name);
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly events = new EventEmitter();
-  private readonly config: TerminalConfig;
+  private config: TerminalConfig = { ...DEFAULT_TERMINAL_CONFIG };
+  private unregisterSettingsChange: (() => void) | null = null;
 
   constructor(
     private readonly filesService: FilesService,
-    private readonly configService: ConfigService,
+    private readonly settingsService: SettingsService,
   ) {
     this.config = this.loadConfig();
+    this.unregisterSettingsChange = this.settingsService.onChange((event) => {
+      if (!isTerminalSettingKey(event.key)) return;
+      this.config = this.loadConfig();
+      this.logger.log(
+        'Terminal config updated; changes apply to new terminals and future detach timers.',
+      );
+    });
     this.events.setMaxListeners(20);
   }
 
@@ -87,10 +103,14 @@ export class TerminalService implements OnModuleDestroy {
       this.cleanupSession(session, 'module destroy');
     }
     this.sessions.clear();
+    if (this.unregisterSettingsChange) {
+      this.unregisterSettingsChange();
+      this.unregisterSettingsChange = null;
+    }
     this.events.removeAllListeners();
   }
 
-  /** Returns terminal runtime limits derived from environment variables. */
+  /** Returns terminal runtime limits derived from settings/env/defaults. */
   getConfig(): TerminalConfig {
     return { ...this.config };
   }
@@ -322,47 +342,22 @@ export class TerminalService implements OnModuleDestroy {
     return () => this.events.off(eventName, listener);
   }
 
+  /** Builds terminal config from runtime settings (DB > env > default). */
   private loadConfig(): TerminalConfig {
     return {
-      maxSessions: this.readIntegerEnv(
-        'WEBUI_TERMINAL_MAX_SESSIONS',
-        DEFAULT_MAX_SESSIONS,
-        1,
-        50,
+      maxSessions: this.settingsService.getNumberSetting(
+        TERMINAL_SETTING_KEYS.maxSessions,
       ),
-      graceMs: this.readIntegerEnv(
-        'WEBUI_TERMINAL_GRACE_MS',
-        DEFAULT_GRACE_MS,
-        10_000,
-        300_000,
+      graceMs: this.settingsService.getNumberSetting(
+        TERMINAL_SETTING_KEYS.graceMs,
       ),
-      scrollback: this.readIntegerEnv(
-        'WEBUI_TERMINAL_SCROLLBACK',
-        DEFAULT_SCROLLBACK,
-        100,
-        50_000,
+      scrollback: this.settingsService.getNumberSetting(
+        TERMINAL_SETTING_KEYS.scrollback,
       ),
-      defaultCwd: this.readStringEnv('DEFAULT_TERMINAL_CWD'),
+      defaultCwd: this.settingsService.getStringSetting(
+        TERMINAL_SETTING_KEYS.defaultCwd,
+      ),
     };
-  }
-
-  private readStringEnv(key: string): string | null {
-    const value = this.configService.get<string>(key) ?? process.env[key];
-    const trimmed = value?.trim();
-    return trimmed ? trimmed : null;
-  }
-
-  private readIntegerEnv(
-    key: string,
-    fallback: number,
-    min: number,
-    max: number,
-  ): number {
-    const raw = this.readStringEnv(key);
-    if (!raw) return fallback;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return fallback;
-    return Math.min(max, Math.max(min, parsed));
   }
 
   private resolveShell(): string {

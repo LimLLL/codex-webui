@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
 import { FilesModule } from '../files/files.module';
+import { SettingsModule } from '../settings/settings.module';
 import { TerminalGateway } from './terminal.gateway';
 import { TerminalService } from './terminal.service';
 
 @Module({
-  imports: [ConfigModule, FilesModule],
+  imports: [FilesModule, SettingsModule],
   providers: [TerminalService, TerminalGateway],
   exports: [TerminalService],
 })

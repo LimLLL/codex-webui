@@ -4,12 +4,13 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
+import { SECURITY_SETTING_KEYS } from '../settings/settings.definitions';
+import { SettingsService } from '../settings/settings.service';
 import { FilesService, type FileUploadInput } from './files.service';
 
 describe('FilesService', () => {
@@ -38,11 +39,12 @@ describe('FilesService', () => {
       providers: [
         FilesService,
         {
-          provide: ConfigService,
+          provide: SettingsService,
           useValue: {
-            get: (key: string) =>
-              key === 'WORKSPACE_ROOTS' ? tmpDir : undefined,
-          },
+            getStringSetting: (key: string) =>
+              key === SECURITY_SETTING_KEYS.workspaceRoots ? tmpDir : null,
+            onChange: () => () => {},
+          } satisfies Partial<SettingsService>,
         },
       ],
     }).compile();

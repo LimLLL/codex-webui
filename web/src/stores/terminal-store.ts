@@ -32,6 +32,7 @@ interface TerminalState {
   configLoaded: boolean;
 
   fetchConfig: () => Promise<TerminalConfig>;
+  refreshConfig: () => Promise<TerminalConfig>;
   ensureContext: (contextKey: string, cwd?: string, autoCreate?: boolean) => Promise<void>;
   listContext: (contextKey: string) => Promise<TerminalMetadata[]>;
   createTerminal: (contextKey: string, cwd?: string) => Promise<TerminalMetadata | null>;
@@ -103,6 +104,10 @@ export const useTerminalStore = create<TerminalState>()(
 
       fetchConfig: async () => {
         if (get().configLoaded) return get().config;
+        return get().refreshConfig();
+      },
+
+      refreshConfig: async () => {
         const response = await emitAck('terminal.config', {});
         if (response.ok && response.config) {
           set({ config: response.config, configLoaded: true });
