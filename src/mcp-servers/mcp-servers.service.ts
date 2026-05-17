@@ -23,4 +23,14 @@ export class McpServersService {
       'config/mcpServer/reload',
     );
   }
+
+  /** Starts an OAuth login flow for an MCP server and returns the browser URL. */
+  startOauthLogin(
+    params: v2.McpServerOauthLoginParams,
+  ): Promise<v2.McpServerOauthLoginResponse> {
+    return this.codex.request<v2.McpServerOauthLoginResponse>(
+      'mcpServer/oauth/login',
+      params,
+    );
+  }
 }

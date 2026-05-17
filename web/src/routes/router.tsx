@@ -18,8 +18,21 @@ import { FilesRoute } from './files-route';
 import { TerminalRoute } from './terminal-route';
 import { DiagnosticsRoute } from './diagnostics-route';
 import { SettingsPage } from '@/components/settings/settings-page';
+import { IntegrationsPage } from '@/components/integrations/integrations-page';
 
 export type LoginSearch = { redirect: string };
+export type IntegrationsSearch = { tab: 'plugins' | 'apps' | 'mcps' };
+
+const INTEGRATION_TABS = ['plugins', 'apps', 'mcps'] as const;
+
+function sanitizeIntegrationsSearch(search: Record<string, unknown>): IntegrationsSearch {
+  const tab = search.tab;
+  return {
+    tab: INTEGRATION_TABS.includes(tab as IntegrationsSearch['tab'])
+      ? (tab as IntegrationsSearch['tab'])
+      : 'plugins',
+  };
+}
 
 /** Sanitizes redirect target to prevent open-redirect attacks. */
 function sanitizeRedirect(value: unknown): string {
@@ -106,6 +119,14 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+/** Integrations page (plugins, apps, MCPs). */
+const integrationsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/integrations',
+  validateSearch: sanitizeIntegrationsSearch,
+  component: IntegrationsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authenticatedRoute.addChildren([
@@ -115,6 +136,7 @@ const routeTree = rootRoute.addChildren([
     terminalRoute,
     diagnosticsRoute,
     settingsRoute,
+    integrationsRoute,
   ]),
 ]);
 

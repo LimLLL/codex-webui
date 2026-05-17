@@ -4,7 +4,7 @@
  * state, queries, mutations, and view routing.
  */
 import { useMemo, useState } from 'react';
-import { FolderOpen, Plus, Settings, Terminal } from 'lucide-react';
+import { FolderOpen, Puzzle, Plus, Settings, Terminal } from 'lucide-react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -35,11 +35,12 @@ import { RenameDialog, ConfirmDialog } from './sidebar/sidebar-dialogs';
 import { DirectoryPickerDialog } from './sidebar/directory-picker-dialog';
 
 /** Derives the active "view" from the current route path. */
-function useActiveView(): 'chat' | 'files' | 'terminal' | 'diagnostics' | 'settings' | 'other' {
+function useActiveView(): 'chat' | 'files' | 'terminal' | 'diagnostics' | 'settings' | 'integrations' | 'other' {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (pathname.startsWith('/files')) return 'files';
   if (pathname.startsWith('/terminal')) return 'terminal';
   if (pathname.startsWith('/diagnostics')) return 'diagnostics';
+  if (pathname.startsWith('/integrations')) return 'integrations';
   if (pathname.startsWith('/settings')) return 'settings';
   if (pathname === '/' || pathname.startsWith('/t/')) return 'chat';
   return 'other';
@@ -326,6 +327,19 @@ export function ThreadSidebar() {
         >
           <Terminal className="h-4 w-4 shrink-0" />
           {t('Terminal')}
+        </button>
+        <button
+          type="button"
+          onClick={() => void navigate({ to: '/integrations' })}
+          className={cn(
+            'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
+            activeView === 'integrations'
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          )}
+        >
+          <Puzzle className="h-4 w-4 shrink-0" />
+          {t('Integrations')}
         </button>
         <button
           type="button"

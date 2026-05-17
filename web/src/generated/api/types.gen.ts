@@ -197,7 +197,7 @@ export type CodexConfigResponseDto = {
 };
 
 export type ConfigEditDto = {
-    keyPath: 'profile' | 'model' | 'review_model' | 'model_provider' | 'model_context_window' | 'model_auto_compact_token_limit' | 'instructions' | 'developer_instructions' | 'compact_prompt' | 'model_reasoning_effort' | 'model_reasoning_summary' | 'model_verbosity' | 'web_search' | 'service_tier';
+    keyPath: 'profile' | 'model' | 'review_model' | 'model_provider' | 'model_context_window' | 'model_auto_compact_token_limit' | 'instructions' | 'developer_instructions' | 'compact_prompt' | 'model_reasoning_effort' | 'model_reasoning_summary' | 'model_verbosity' | 'web_search' | 'service_tier' | string | string;
     value: number | string | boolean | Array<unknown> | {
         [key: string]: unknown;
     } | null;
@@ -308,6 +308,63 @@ export type AccountRateLimitsResponseDto = {
     rateLimitsByLimitId: {
         [key: string]: RateLimitSnapshotDto;
     } | null;
+};
+
+export type AppBrandingDto = {
+    category: string | null;
+    developer: string | null;
+    website: string | null;
+    privacyPolicy: string | null;
+    termsOfService: string | null;
+    isDiscoverableApp: boolean;
+};
+
+export type AppReviewDto = {
+    status: string;
+};
+
+export type AppScreenshotDto = {
+    url: string | null;
+    fileId: string | null;
+    userPrompt: string;
+};
+
+export type AppMetadataDto = {
+    review: AppReviewDto | null;
+    categories: Array<string> | null;
+    subCategories: Array<string> | null;
+    seoDescription: string | null;
+    screenshots: Array<AppScreenshotDto> | null;
+    developer: string | null;
+    version: string | null;
+    versionId: string | null;
+    versionNotes: string | null;
+    firstPartyType: string | null;
+    firstPartyRequiresInstall: boolean | null;
+    showInComposerWhenUnlinked: boolean | null;
+};
+
+export type AppInfoDto = {
+    id: string;
+    name: string;
+    description: string | null;
+    logoUrl: string | null;
+    logoUrlDark: string | null;
+    distributionChannel: string | null;
+    branding: AppBrandingDto | null;
+    appMetadata: AppMetadataDto | null;
+    labels: {
+        [key: string]: string;
+    } | null;
+    installUrl: string | null;
+    isAccessible: boolean;
+    isEnabled: boolean;
+    pluginDisplayNames: Array<string>;
+};
+
+export type AppsListResponseDto = {
+    data: Array<AppInfoDto>;
+    nextCursor: string | null;
 };
 
 export type FileEntryDto = {
@@ -428,6 +485,22 @@ export type SkillsListResponseDto = {
     data: Array<number | string | boolean | Array<unknown> | {
         [key: string]: unknown;
     }>;
+};
+
+export type SkillsConfigWriteRequestDto = {
+    /**
+     * Path-based skill selector.
+     */
+    path?: string;
+    /**
+     * Name-based skill selector fallback.
+     */
+    name?: string;
+    enabled: boolean;
+};
+
+export type SkillsConfigWriteResponseDto = {
+    effectiveEnabled: boolean;
 };
 
 export type GranularApprovalOptionsDto = {
@@ -1059,6 +1132,112 @@ export type ThreadTokenUsageResponseDto = {
     latest: TurnTokenUsageDto | null;
 };
 
+export type MarketplaceInterfaceDto = {
+    displayName: string | null;
+};
+
+export type PluginInterfaceDto = {
+    displayName: string | null;
+    shortDescription: string | null;
+    longDescription: string | null;
+    developerName: string | null;
+    category: string | null;
+    capabilities: Array<string>;
+    websiteUrl: string | null;
+    privacyPolicyUrl: string | null;
+    termsOfServiceUrl: string | null;
+    defaultPrompt: Array<string> | null;
+    brandColor: string | null;
+    composerIcon: string | null;
+    logo: string | null;
+    screenshots: Array<string>;
+};
+
+export type PluginSummaryDto = {
+    id: string;
+    name: string;
+    source: {
+        [key: string]: unknown;
+    };
+    installed: boolean;
+    enabled: boolean;
+    installPolicy: 'NOT_AVAILABLE' | 'AVAILABLE' | 'INSTALLED_BY_DEFAULT';
+    authPolicy: 'ON_INSTALL' | 'ON_USE';
+    interface: PluginInterfaceDto | null;
+};
+
+export type PluginMarketplaceEntryDto = {
+    name: string;
+    path: string;
+    interface: MarketplaceInterfaceDto | null;
+    plugins: Array<PluginSummaryDto>;
+};
+
+export type MarketplaceLoadErrorInfoDto = {
+    marketplacePath: string;
+    message: string;
+};
+
+export type PluginListResponseDto = {
+    marketplaces: Array<PluginMarketplaceEntryDto>;
+    marketplaceLoadErrors: Array<MarketplaceLoadErrorInfoDto>;
+    remoteSyncError: string | null;
+    featuredPluginIds: Array<string>;
+};
+
+export type PluginSkillSummaryDto = {
+    name: string;
+    description: string;
+    shortDescription: string | null;
+    path: string;
+    enabled: boolean;
+    interface: number | string | boolean | Array<unknown> | {
+        [key: string]: unknown;
+    } | null;
+};
+
+export type PluginAppSummaryDto = {
+    id: string;
+    name: string;
+    description: string | null;
+    installUrl: string | null;
+    needsAuth: boolean;
+};
+
+export type PluginDetailDto = {
+    marketplaceName: string;
+    marketplacePath: string;
+    summary: PluginSummaryDto;
+    description: string | null;
+    skills: Array<PluginSkillSummaryDto>;
+    apps: Array<PluginAppSummaryDto>;
+    mcpServers: Array<string>;
+};
+
+export type PluginReadResponseDto = {
+    plugin: PluginDetailDto;
+};
+
+export type PluginInstallRequestDto = {
+    marketplacePath: string;
+    pluginName: string;
+    forceRemoteSync?: boolean;
+};
+
+export type PluginInstallResponseDto = {
+    authPolicy: 'ON_INSTALL' | 'ON_USE';
+    appsNeedingAuth: Array<PluginAppSummaryDto>;
+};
+
+export type PluginUninstallRequestDto = {
+    pluginId: string;
+    forceRemoteSync?: boolean;
+};
+
+export type PluginUninstallResponseDto = {
+    [key: string]: unknown;
+};
+
 export type TurnDiffEntryDto = {
     turnId: string;
     diff: string;
@@ -1110,6 +1289,16 @@ export type McpServersListResponseDto = {
         [key: string]: unknown;
     }>;
     nextCursor: string | null;
+};
+
+export type McpServerOauthLoginRequestDto = {
+    name: string;
+    scopes?: Array<string>;
+    timeoutSecs?: number;
+};
+
+export type McpServerOauthLoginResponseDto = {
+    authorizationUrl: string;
 };
 
 export type AppGetStatusData = {
@@ -1524,6 +1713,31 @@ export type AccountReadRateLimitsResponses = {
 
 export type AccountReadRateLimitsResponse = AccountReadRateLimitsResponses[keyof AccountReadRateLimitsResponses];
 
+export type AppsListAppsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+        threadId?: string;
+        forceRefetch?: boolean;
+    };
+    url: '/api/apps';
+};
+
+export type AppsListAppsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type AppsListAppsError = AppsListAppsErrors[keyof AppsListAppsErrors];
+
+export type AppsListAppsResponses = {
+    200: AppsListResponseDto;
+};
+
+export type AppsListAppsResponse = AppsListAppsResponses[keyof AppsListAppsResponses];
+
 export type FilesReadTreeData = {
     body?: never;
     path?: never;
@@ -1898,6 +2112,26 @@ export type SkillsListSkillsResponses = {
 
 export type SkillsListSkillsResponse = SkillsListSkillsResponses[keyof SkillsListSkillsResponses];
 
+export type SkillsWriteSkillConfigData = {
+    body: SkillsConfigWriteRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/skills/config';
+};
+
+export type SkillsWriteSkillConfigErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type SkillsWriteSkillConfigError = SkillsWriteSkillConfigErrors[keyof SkillsWriteSkillConfigErrors];
+
+export type SkillsWriteSkillConfigResponses = {
+    200: SkillsConfigWriteResponseDto;
+};
+
+export type SkillsWriteSkillConfigResponse = SkillsWriteSkillConfigResponses[keyof SkillsWriteSkillConfigResponses];
+
 export type ThreadsListThreadsData = {
     body?: never;
     path?: never;
@@ -2258,6 +2492,92 @@ export type TokenUsageReadThreadTokenUsageResponses = {
 
 export type TokenUsageReadThreadTokenUsageResponse = TokenUsageReadThreadTokenUsageResponses[keyof TokenUsageReadThreadTokenUsageResponses];
 
+export type PluginsListPluginsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        forceRemoteSync?: boolean;
+        cwds?: Array<unknown>;
+    };
+    url: '/api/plugins';
+};
+
+export type PluginsListPluginsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type PluginsListPluginsError = PluginsListPluginsErrors[keyof PluginsListPluginsErrors];
+
+export type PluginsListPluginsResponses = {
+    200: PluginListResponseDto;
+};
+
+export type PluginsListPluginsResponse = PluginsListPluginsResponses[keyof PluginsListPluginsResponses];
+
+export type PluginsReadPluginData = {
+    body?: never;
+    path?: never;
+    query: {
+        marketplacePath: string;
+        pluginName: string;
+    };
+    url: '/api/plugins/detail';
+};
+
+export type PluginsReadPluginErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type PluginsReadPluginError = PluginsReadPluginErrors[keyof PluginsReadPluginErrors];
+
+export type PluginsReadPluginResponses = {
+    200: PluginReadResponseDto;
+};
+
+export type PluginsReadPluginResponse = PluginsReadPluginResponses[keyof PluginsReadPluginResponses];
+
+export type PluginsInstallPluginData = {
+    body: PluginInstallRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/plugins/install';
+};
+
+export type PluginsInstallPluginErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type PluginsInstallPluginError = PluginsInstallPluginErrors[keyof PluginsInstallPluginErrors];
+
+export type PluginsInstallPluginResponses = {
+    200: PluginInstallResponseDto;
+};
+
+export type PluginsInstallPluginResponse = PluginsInstallPluginResponses[keyof PluginsInstallPluginResponses];
+
+export type PluginsUninstallPluginData = {
+    body: PluginUninstallRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/plugins/uninstall';
+};
+
+export type PluginsUninstallPluginErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type PluginsUninstallPluginError = PluginsUninstallPluginErrors[keyof PluginsUninstallPluginErrors];
+
+export type PluginsUninstallPluginResponses = {
+    200: PluginUninstallResponseDto;
+};
+
+export type PluginsUninstallPluginResponse = PluginsUninstallPluginResponses[keyof PluginsUninstallPluginResponses];
+
 export type TurnDiffReadThreadTurnDiffsData = {
     body?: never;
     path: {
@@ -2387,3 +2707,23 @@ export type McpServersReloadAllResponses = {
 };
 
 export type McpServersReloadAllResponse = McpServersReloadAllResponses[keyof McpServersReloadAllResponses];
+
+export type McpServersStartOauthLoginData = {
+    body: McpServerOauthLoginRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/mcp-servers/oauth/login';
+};
+
+export type McpServersStartOauthLoginErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type McpServersStartOauthLoginError = McpServersStartOauthLoginErrors[keyof McpServersStartOauthLoginErrors];
+
+export type McpServersStartOauthLoginResponses = {
+    200: McpServerOauthLoginResponseDto;
+};
+
+export type McpServersStartOauthLoginResponse = McpServersStartOauthLoginResponses[keyof McpServersStartOauthLoginResponses];

@@ -31,8 +31,8 @@ import { CodexService } from './codex.service';
 import type { v2 } from './codex-schema';
 import type { JsonValue } from './codex-schema/serde_json/JsonValue';
 import {
-  CODEX_CONFIG_EDITABLE_KEYS,
   CodexConfigResponseDto,
+  isCodexConfigEditableKey,
   RawConfigResponseDto,
   RawConfigWriteResponseDto,
   UpdateCodexConfigDto,
@@ -162,9 +162,7 @@ export class CodexConfigController {
       }
 
       const keyPath = edit.keyPath.trim();
-      if (
-        !(CODEX_CONFIG_EDITABLE_KEYS as readonly string[]).includes(keyPath)
-      ) {
+      if (!isCodexConfigEditableKey(keyPath)) {
         throw new BadRequestException(`Unsupported config key: ${keyPath}`);
       }
 

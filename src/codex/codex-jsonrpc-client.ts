@@ -7,6 +7,12 @@ import { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
+/**
+ * JSON replacer that converts BigInt to Number for serialization.
+ * Targeted fix — does not change undefined/null semantics like toJsonSafe.
+ */
+const bigintReplacer = (_key: string, value: unknown): unknown =>
+  typeof value === 'bigint' ? Number(value) : value;
 import type {
   InitializeParams,
   InitializeResponse,
@@ -186,7 +192,10 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
 
   /** Writes a raw JSONL line: {"ts","dir","msg"} — each line is valid JSON. */
   private writeJsonl(dir: 'in' | 'out', msg: unknown): void {
-    const line = JSON.stringify({ ts: new Date().toISOString(), dir, msg });
+    const line = JSON.stringify(
+      { ts: new Date().toISOString(), dir, msg },
+      bigintReplacer,
+    );
     this.jsonlStream.write(line + '\n');
   }
 
@@ -279,6 +288,6 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
     if (!stdin || !stdin.writable) {
       throw new Error('Process stdin not writable');
     }
-    stdin.write(JSON.stringify(message) + '\n');
+    stdin.write(JSON.stringify(message, bigintReplacer) + '\n');
   }
 }

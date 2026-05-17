@@ -2,7 +2,7 @@
 
 import { type Client, formDataBodySerializer, type Options as Options2, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AccountCancelLoginData, AccountCancelLoginErrors, AccountCancelLoginResponses, AccountLoginData, AccountLoginErrors, AccountLoginResponses, AccountLogoutData, AccountLogoutErrors, AccountLogoutResponses, AccountReadAccountData, AccountReadAccountErrors, AccountReadAccountResponses, AccountReadRateLimitsData, AccountReadRateLimitsErrors, AccountReadRateLimitsResponses, AppGetStatusData, AppGetStatusResponses, AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthLogoutData, AuthLogoutResponses, ChatUploadAttachmentData, ChatUploadAttachmentErrors, ChatUploadAttachmentResponses, CodexConfigReadConfigData, CodexConfigReadConfigErrors, CodexConfigReadConfigResponses, CodexConfigReadRawConfigData, CodexConfigReadRawConfigErrors, CodexConfigReadRawConfigResponses, CodexConfigUpdateConfigData, CodexConfigUpdateConfigErrors, CodexConfigUpdateConfigResponses, CodexConfigUpdateRawConfigData, CodexConfigUpdateRawConfigErrors, CodexConfigUpdateRawConfigResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyErrors, CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeErrors, CodexStatusUpdateSandboxModeResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesCopyPathData, FilesCopyPathErrors, FilesCopyPathResponses, FilesCreateDirectoryData, FilesCreateDirectoryErrors, FilesCreateDirectoryResponses, FilesCreateFileData, FilesCreateFileErrors, FilesCreateFileResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesDownloadFileData, FilesDownloadFileErrors, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesMovePathData, FilesMovePathErrors, FilesMovePathResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesRenamePathData, FilesRenamePathErrors, FilesRenamePathResponses, FilesServeFileData, FilesServeFileErrors, FilesUploadFilesData, FilesUploadFilesErrors, FilesUploadFilesResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, LogsExportDiagnosticsData, LogsExportDiagnosticsErrors, LogsExportDiagnosticsResponses, LogsListLogsData, LogsListLogsErrors, LogsListLogsResponses, McpServersListServersData, McpServersListServersErrors, McpServersListServersResponses, McpServersReloadAllData, McpServersReloadAllErrors, McpServersReloadAllResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, PendingApprovalsListPendingData, PendingApprovalsListPendingResponses, PendingApprovalsRespondData, PendingApprovalsRespondResponses, SettingsGetSettingData, SettingsGetSettingErrors, SettingsGetSettingResponses, SettingsListSettingsData, SettingsListSettingsErrors, SettingsListSettingsResponses, SettingsResetSettingData, SettingsResetSettingErrors, SettingsResetSettingResponses, SettingsUpdateSettingData, SettingsUpdateSettingErrors, SettingsUpdateSettingResponses, SettingsUpdateSettingsData, SettingsUpdateSettingsErrors, SettingsUpdateSettingsResponses, SkillsListSkillsData, SkillsListSkillsErrors, SkillsListSkillsResponses, ThreadsArchiveThreadData, ThreadsArchiveThreadErrors, ThreadsArchiveThreadResponses, ThreadsCompactThreadData, ThreadsCompactThreadErrors, ThreadsCompactThreadResponses, ThreadsForkThreadData, ThreadsForkThreadErrors, ThreadsForkThreadResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListLoadedThreadsData, ThreadsListLoadedThreadsErrors, ThreadsListLoadedThreadsResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsRollbackThreadData, ThreadsRollbackThreadErrors, ThreadsRollbackThreadResponses, ThreadsSetThreadNameData, ThreadsSetThreadNameErrors, ThreadsSetThreadNameResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses, ThreadsSteerTurnData, ThreadsSteerTurnErrors, ThreadsSteerTurnResponses, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadErrors, ThreadsUnarchiveThreadResponses, TokenUsageReadThreadTokenUsageData, TokenUsageReadThreadTokenUsageErrors, TokenUsageReadThreadTokenUsageResponses, TurnDiffReadThreadTurnDiffsData, TurnDiffReadThreadTurnDiffsErrors, TurnDiffReadThreadTurnDiffsResponses } from './types.gen';
+import type { AccountCancelLoginData, AccountCancelLoginErrors, AccountCancelLoginResponses, AccountLoginData, AccountLoginErrors, AccountLoginResponses, AccountLogoutData, AccountLogoutErrors, AccountLogoutResponses, AccountReadAccountData, AccountReadAccountErrors, AccountReadAccountResponses, AccountReadRateLimitsData, AccountReadRateLimitsErrors, AccountReadRateLimitsResponses, AppGetStatusData, AppGetStatusResponses, AppsListAppsData, AppsListAppsErrors, AppsListAppsResponses, AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthLogoutData, AuthLogoutResponses, ChatUploadAttachmentData, ChatUploadAttachmentErrors, ChatUploadAttachmentResponses, CodexConfigReadConfigData, CodexConfigReadConfigErrors, CodexConfigReadConfigResponses, CodexConfigReadRawConfigData, CodexConfigReadRawConfigErrors, CodexConfigReadRawConfigResponses, CodexConfigUpdateConfigData, CodexConfigUpdateConfigErrors, CodexConfigUpdateConfigResponses, CodexConfigUpdateRawConfigData, CodexConfigUpdateRawConfigErrors, CodexConfigUpdateRawConfigResponses, CodexStatusGetStatusData, CodexStatusGetStatusErrors, CodexStatusGetStatusResponses, CodexStatusUpdateApprovalPolicyData, CodexStatusUpdateApprovalPolicyErrors, CodexStatusUpdateApprovalPolicyResponses, CodexStatusUpdateSandboxModeData, CodexStatusUpdateSandboxModeErrors, CodexStatusUpdateSandboxModeResponses, FilesAddRootData, FilesAddRootErrors, FilesAddRootResponses, FilesCopyPathData, FilesCopyPathErrors, FilesCopyPathResponses, FilesCreateDirectoryData, FilesCreateDirectoryErrors, FilesCreateDirectoryResponses, FilesCreateFileData, FilesCreateFileErrors, FilesCreateFileResponses, FilesDeletePathData, FilesDeletePathErrors, FilesDeletePathResponses, FilesDownloadFileData, FilesDownloadFileErrors, FilesGetMetadataData, FilesGetMetadataErrors, FilesGetMetadataResponses, FilesGetRootsData, FilesGetRootsErrors, FilesGetRootsResponses, FilesMovePathData, FilesMovePathErrors, FilesMovePathResponses, FilesReadFileData, FilesReadFileErrors, FilesReadFileResponses, FilesReadTreeData, FilesReadTreeErrors, FilesReadTreeResponses, FilesRenamePathData, FilesRenamePathErrors, FilesRenamePathResponses, FilesServeFileData, FilesServeFileErrors, FilesUploadFilesData, FilesUploadFilesErrors, FilesUploadFilesResponses, FilesWriteFileData, FilesWriteFileErrors, FilesWriteFileResponses, LogsExportDiagnosticsData, LogsExportDiagnosticsErrors, LogsExportDiagnosticsResponses, LogsListLogsData, LogsListLogsErrors, LogsListLogsResponses, McpServersListServersData, McpServersListServersErrors, McpServersListServersResponses, McpServersReloadAllData, McpServersReloadAllErrors, McpServersReloadAllResponses, McpServersStartOauthLoginData, McpServersStartOauthLoginErrors, McpServersStartOauthLoginResponses, ModelsListModelsData, ModelsListModelsErrors, ModelsListModelsResponses, PendingApprovalsListPendingData, PendingApprovalsListPendingResponses, PendingApprovalsRespondData, PendingApprovalsRespondResponses, PluginsInstallPluginData, PluginsInstallPluginErrors, PluginsInstallPluginResponses, PluginsListPluginsData, PluginsListPluginsErrors, PluginsListPluginsResponses, PluginsReadPluginData, PluginsReadPluginErrors, PluginsReadPluginResponses, PluginsUninstallPluginData, PluginsUninstallPluginErrors, PluginsUninstallPluginResponses, SettingsGetSettingData, SettingsGetSettingErrors, SettingsGetSettingResponses, SettingsListSettingsData, SettingsListSettingsErrors, SettingsListSettingsResponses, SettingsResetSettingData, SettingsResetSettingErrors, SettingsResetSettingResponses, SettingsUpdateSettingData, SettingsUpdateSettingErrors, SettingsUpdateSettingResponses, SettingsUpdateSettingsData, SettingsUpdateSettingsErrors, SettingsUpdateSettingsResponses, SkillsListSkillsData, SkillsListSkillsErrors, SkillsListSkillsResponses, SkillsWriteSkillConfigData, SkillsWriteSkillConfigErrors, SkillsWriteSkillConfigResponses, ThreadsArchiveThreadData, ThreadsArchiveThreadErrors, ThreadsArchiveThreadResponses, ThreadsCompactThreadData, ThreadsCompactThreadErrors, ThreadsCompactThreadResponses, ThreadsForkThreadData, ThreadsForkThreadErrors, ThreadsForkThreadResponses, ThreadsInterruptTurnData, ThreadsInterruptTurnErrors, ThreadsInterruptTurnResponses, ThreadsListLoadedThreadsData, ThreadsListLoadedThreadsErrors, ThreadsListLoadedThreadsResponses, ThreadsListThreadsData, ThreadsListThreadsErrors, ThreadsListThreadsResponses, ThreadsReadThreadData, ThreadsReadThreadErrors, ThreadsReadThreadResponses, ThreadsResumeThreadData, ThreadsResumeThreadErrors, ThreadsResumeThreadResponses, ThreadsRollbackThreadData, ThreadsRollbackThreadErrors, ThreadsRollbackThreadResponses, ThreadsSetThreadNameData, ThreadsSetThreadNameErrors, ThreadsSetThreadNameResponses, ThreadsStartThreadData, ThreadsStartThreadErrors, ThreadsStartThreadResponses, ThreadsStartTurnData, ThreadsStartTurnErrors, ThreadsStartTurnResponses, ThreadsSteerTurnData, ThreadsSteerTurnErrors, ThreadsSteerTurnResponses, ThreadsUnarchiveThreadData, ThreadsUnarchiveThreadErrors, ThreadsUnarchiveThreadResponses, TokenUsageReadThreadTokenUsageData, TokenUsageReadThreadTokenUsageErrors, TokenUsageReadThreadTokenUsageResponses, TurnDiffReadThreadTurnDiffsData, TurnDiffReadThreadTurnDiffsErrors, TurnDiffReadThreadTurnDiffsResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -244,6 +244,15 @@ export const accountReadRateLimits = <ThrowOnError extends boolean = false>(opti
 });
 
 /**
+ * List Codex apps/connectors
+ */
+export const appsListApps = <ThrowOnError extends boolean = false>(options?: Options<AppsListAppsData, ThrowOnError>) => (options?.client ?? client).get<AppsListAppsResponses, AppsListAppsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/apps',
+    ...options
+});
+
+/**
  * Read directory tree (one level, lazy load)
  */
 export const filesReadTree = <ThrowOnError extends boolean = false>(options: Options<FilesReadTreeData, ThrowOnError>) => (options.client ?? client).get<FilesReadTreeResponses, FilesReadTreeErrors, ThrowOnError>({
@@ -418,6 +427,19 @@ export const skillsListSkills = <ThrowOnError extends boolean = false>(options: 
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/skills',
     ...options
+});
+
+/**
+ * Update Codex skill enablement config
+ */
+export const skillsWriteSkillConfig = <ThrowOnError extends boolean = false>(options: Options<SkillsWriteSkillConfigData, ThrowOnError>) => (options.client ?? client).post<SkillsWriteSkillConfigResponses, SkillsWriteSkillConfigErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/skills/config',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**
@@ -598,6 +620,50 @@ export const tokenUsageReadThreadTokenUsage = <ThrowOnError extends boolean = fa
 });
 
 /**
+ * List Codex plugin marketplaces
+ */
+export const pluginsListPlugins = <ThrowOnError extends boolean = false>(options?: Options<PluginsListPluginsData, ThrowOnError>) => (options?.client ?? client).get<PluginsListPluginsResponses, PluginsListPluginsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/plugins',
+    ...options
+});
+
+/**
+ * Read Codex plugin detail
+ */
+export const pluginsReadPlugin = <ThrowOnError extends boolean = false>(options: Options<PluginsReadPluginData, ThrowOnError>) => (options.client ?? client).get<PluginsReadPluginResponses, PluginsReadPluginErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/plugins/detail',
+    ...options
+});
+
+/**
+ * Install Codex plugin
+ */
+export const pluginsInstallPlugin = <ThrowOnError extends boolean = false>(options: Options<PluginsInstallPluginData, ThrowOnError>) => (options.client ?? client).post<PluginsInstallPluginResponses, PluginsInstallPluginErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/plugins/install',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Uninstall Codex plugin
+ */
+export const pluginsUninstallPlugin = <ThrowOnError extends boolean = false>(options: Options<PluginsUninstallPluginData, ThrowOnError>) => (options.client ?? client).post<PluginsUninstallPluginResponses, PluginsUninstallPluginErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/plugins/uninstall',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Read persisted turn-level diffs for a thread
  */
 export const turnDiffReadThreadTurnDiffs = <ThrowOnError extends boolean = false>(options: Options<TurnDiffReadThreadTurnDiffsData, ThrowOnError>) => (options.client ?? client).get<TurnDiffReadThreadTurnDiffsResponses, TurnDiffReadThreadTurnDiffsErrors, ThrowOnError>({
@@ -649,4 +715,17 @@ export const mcpServersReloadAll = <ThrowOnError extends boolean = false>(option
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/mcp-servers/reload',
     ...options
+});
+
+/**
+ * Start MCP server OAuth login
+ */
+export const mcpServersStartOauthLogin = <ThrowOnError extends boolean = false>(options: Options<McpServersStartOauthLoginData, ThrowOnError>) => (options.client ?? client).post<McpServersStartOauthLoginResponses, McpServersStartOauthLoginErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/mcp-servers/oauth/login',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });

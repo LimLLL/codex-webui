@@ -5,6 +5,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { LoggerModule } from 'nestjs-pino';
 import { join } from 'node:path';
 import { AccountModule } from './account/account.module';
+import { AppsModule } from './apps/apps.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ApiKeyGuard } from './auth/api-key.guard';
@@ -17,6 +18,7 @@ import { LogsModule } from './logs/logs.module';
 import { McpServersModule } from './mcp-servers/mcp-servers.module';
 import { ModelsModule } from './models/models.module';
 import { PendingApprovalsModule } from './pending-approvals/pending-approvals.module';
+import { PluginsModule } from './plugins/plugins.module';
 import { SettingsModule } from './settings/settings.module';
 import { SkillsModule } from './skills/skills.module';
 import { TerminalModule } from './terminal/terminal.module';
@@ -109,6 +111,7 @@ const PINO_REDACT = {
     DatabaseModule,
     CodexModule,
     AccountModule,
+    AppsModule,
     FilesModule,
     SettingsModule,
     SkillsModule,
@@ -116,6 +119,7 @@ const PINO_REDACT = {
     ThreadsModule,
     PendingApprovalsModule,
     TokenUsageModule,
+    PluginsModule,
     TurnDiffModule,
     ModelsModule,
     LogsModule,

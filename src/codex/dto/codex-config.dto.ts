@@ -25,6 +25,34 @@ export const CODEX_CONFIG_EDITABLE_KEYS = [
   'service_tier',
 ] as const;
 
+export const APP_CONFIG_EDITABLE_FIELDS = [
+  'enabled',
+  'destructive_enabled',
+  'open_world_enabled',
+  'default_tools_approval_mode',
+  'default_tools_enabled',
+] as const;
+
+export const APP_TOOL_CONFIG_EDITABLE_FIELDS = [
+  'enabled',
+  'approval_mode',
+] as const;
+
+export const APP_CONFIG_EDITABLE_KEY_PATTERNS = [
+  `^apps\\.[A-Za-z0-9_-]+\\.(${APP_CONFIG_EDITABLE_FIELDS.join('|')})$`,
+  `^apps\\.[A-Za-z0-9_-]+\\.tools\\.[A-Za-z0-9_-]+\\.(${APP_TOOL_CONFIG_EDITABLE_FIELDS.join('|')})$`,
+] as const;
+
+/** Returns true when a key path is supported by the curated config editor. */
+export function isCodexConfigEditableKey(keyPath: string): boolean {
+  if ((CODEX_CONFIG_EDITABLE_KEYS as readonly string[]).includes(keyPath)) {
+    return true;
+  }
+  return APP_CONFIG_EDITABLE_KEY_PATTERNS.some((pattern) =>
+    new RegExp(pattern).test(keyPath),
+  );
+}
+
 const JSON_OBJECT_SCHEMA = {
   type: 'object',
   additionalProperties: true,
@@ -44,8 +72,16 @@ export class UpdateSandboxModeDto {
 
 /** Single curated config edit accepted by PATCH /api/codex/config. */
 export class ConfigEditDto {
-  @ApiProperty({ enum: CODEX_CONFIG_EDITABLE_KEYS })
-  keyPath!: (typeof CODEX_CONFIG_EDITABLE_KEYS)[number];
+  @ApiProperty({
+    oneOf: [
+      { type: 'string', enum: [...CODEX_CONFIG_EDITABLE_KEYS] },
+      ...APP_CONFIG_EDITABLE_KEY_PATTERNS.map((pattern) => ({
+        type: 'string',
+        pattern,
+      })),
+    ],
+  })
+  keyPath!: string;
 
   @ApiProperty(jsonValueSchema(true))
   value!: unknown;

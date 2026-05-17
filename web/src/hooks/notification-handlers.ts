@@ -7,6 +7,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import {
   accountReadAccountQueryKey,
   accountReadRateLimitsQueryKey,
+  appsListAppsQueryKey,
   codexStatusGetStatusQueryKey,
   mcpServersListServersQueryKey,
   threadsListThreadsQueryKey,
@@ -129,6 +130,17 @@ function debouncedInvalidateMcpServers(queryClient: QueryClient): void {
     void queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
     invalidateMcpTimer = null;
   }, 500);
+}
+
+/** Matches generated TanStack Query keys whose first element has `{ _id: id }`. */
+function queryHasId(query: { queryKey: readonly unknown[] }, id: string): boolean {
+  const first = query.queryKey[0];
+  return (
+    typeof first === 'object' &&
+    first !== null &&
+    '_id' in first &&
+    (first as { _id?: unknown })._id === id
+  );
 }
 
 function invalidateAccountQueries(queryClient: QueryClient): void {
@@ -554,7 +566,27 @@ const handleAccountRateLimitsUpdated: Handler = (params, ctx) => {
 };
 
 const handleSkillsChanged: Handler = (_params, ctx) => {
-  void ctx.queryClient.invalidateQueries({ queryKey: ['skills'] });
+  void ctx.queryClient.invalidateQueries({
+    predicate: (query) => queryHasId(query, 'skillsListSkills'),
+  });
+};
+
+/** Invalidate apps query when app list changes (e.g. after plugin install). */
+const handleAppListUpdated: Handler = (_params, ctx) => {
+  void ctx.queryClient.invalidateQueries({ queryKey: appsListAppsQueryKey() });
+};
+
+/** Refresh MCP status and show toast after OAuth login completes. */
+const handleMcpOauthLoginCompleted: Handler = (params, ctx) => {
+  void ctx.queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
+  const name = typeof params.name === 'string' ? params.name : 'MCP server';
+  const success = params.success === true;
+  if (success) {
+    showSnackbar(i18n.t('{{name}} login completed', { name }), 'success');
+  } else {
+    const error = typeof params.error === 'string' ? params.error : '';
+    showSnackbar(i18n.t('{{name}} login failed: {{error}}', { name, error }), 'error');
+  }
 };
 
 function isMcpStartupStatus(value: unknown): value is McpServerStartupState {
@@ -573,8 +605,6 @@ const TIER3_METHODS = new Set([
   'rawResponseItem/completed',
   'command/exec/outputDelta',
   'item/commandExecution/terminalInteraction',
-  'mcpServer/oauthLogin/completed',
-  'app/list/updated',
   'fs/changed',
   'item/reasoning/summaryPartAdded',
   'item/reasoning/textDelta',
@@ -631,6 +661,8 @@ const HANDLERS: Record<string, Handler> = {
   'thread/compacted': handleThreadCompacted,
   'model/rerouted': handleModelRerouted,
   'skills/changed': handleSkillsChanged,
+  'app/list/updated': handleAppListUpdated,
+  'mcpServer/oauthLogin/completed': handleMcpOauthLoginCompleted,
 };
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 /** REST controller for MCP server status and reload operations. */
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -11,6 +12,7 @@ import {
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiBody,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -22,6 +24,8 @@ import { ApiErrorResponseDto } from '../common/dto/api-responses.dto';
 import { McpServersService } from './mcp-servers.service';
 import {
   MCP_SERVER_STATUS_DETAIL_VALUES,
+  McpServerOauthLoginRequestDto,
+  McpServerOauthLoginResponseDto,
   McpServersListResponseDto,
 } from './dto/mcp-servers.dto';
 import type { v2 } from '../codex/codex-schema';
@@ -66,6 +70,19 @@ export class McpServersController {
     return this.mcpServersService.reloadAll();
   }
 
+  /** Starts an OAuth login flow for one MCP server. */
+  @Post('oauth/login')
+  @ApiOperation({ summary: 'Start MCP server OAuth login' })
+  @ApiBody({ type: McpServerOauthLoginRequestDto })
+  @ApiOkResponse({ type: McpServerOauthLoginResponseDto })
+  startOauthLogin(
+    @Body() body: McpServerOauthLoginRequestDto | undefined,
+  ): Promise<v2.McpServerOauthLoginResponse> {
+    return this.mcpServersService.startOauthLogin(
+      this.parseOauthLoginBody(body),
+    );
+  }
+
   private parseLimit(value?: string): number | undefined {
     if (!value) return undefined;
     const limit = Number(value);
@@ -85,5 +102,47 @@ export class McpServersController {
       throw new BadRequestException('Invalid MCP server detail');
     }
     return value as v2.McpServerStatusDetail;
+  }
+
+  private parseOauthLoginBody(
+    body: McpServerOauthLoginRequestDto | undefined,
+  ): v2.McpServerOauthLoginParams {
+    if (!body) throw new BadRequestException('Request body is required');
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) throw new BadRequestException('name is required');
+
+    return {
+      name,
+      scopes: this.parseScopes(body.scopes),
+      timeoutSecs: this.parseTimeoutSecs(body.timeoutSecs),
+    };
+  }
+
+  private parseScopes(value: unknown): string[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('scopes must be an array of strings');
+    }
+
+    const scopes = value.map((scope) => {
+      if (typeof scope !== 'string' || !scope.trim()) {
+        throw new BadRequestException('scopes must contain non-empty strings');
+      }
+      return scope.trim();
+    });
+    return scopes.length > 0 ? scopes : undefined;
+  }
+
+  private parseTimeoutSecs(value: unknown): bigint | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'number' || !Number.isInteger(value)) {
+      throw new BadRequestException('timeoutSecs must be an integer');
+    }
+    if (value < 1 || value > 600) {
+      throw new BadRequestException(
+        'timeoutSecs must be an integer between 1 and 600',
+      );
+    }
+    return BigInt(value);
   }
 }

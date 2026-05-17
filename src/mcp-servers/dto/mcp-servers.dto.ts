@@ -42,3 +42,21 @@ export class McpServersReloadResponseDto {
   @ApiProperty()
   ok!: boolean;
 }
+
+/** Request body for mcpServer/oauth/login. */
+export class McpServerOauthLoginRequestDto {
+  @ApiProperty()
+  name!: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  scopes?: string[];
+
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 600 })
+  timeoutSecs?: number;
+}
+
+/** Response for mcpServer/oauth/login. */
+export class McpServerOauthLoginResponseDto {
+  @ApiProperty()
+  authorizationUrl!: string;
+}
