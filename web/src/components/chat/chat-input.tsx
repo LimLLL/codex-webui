@@ -87,9 +87,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // ── Mention hook ─────────────────────────────────────────
   const {
     mentionOpen,
-    mentionQuery,
     mentionSelectedIndex,
-    mentionFilteredRef,
+    mentionFiltered,
+    mentionLoading,
+    browseRelative,
     detectMention,
     handleMentionSelect,
     handleMentionNavigate,
@@ -98,6 +99,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   } = useChatMention({
     textareaRef,
     valueRef,
+    cwd: threadCwd,
     setValue,
     setAttachments,
     toRelativePath,
@@ -196,10 +198,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
         <MentionPopover
           open={mentionOpen}
-          query={mentionQuery}
-          cwd={threadCwd}
+          browseRelative={browseRelative}
+          filtered={mentionFiltered}
+          isLoading={mentionLoading}
           selectedIndex={mentionSelectedIndex}
-          filteredRef={mentionFilteredRef}
           onSelect={handleMentionSelect}
           onNavigate={handleMentionNavigate}
           onNavigateUp={handleMentionNavigateUp}

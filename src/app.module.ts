@@ -36,10 +36,18 @@ const rollTarget = {
   },
 };
 
+/** Strips access_token query param from URL strings to prevent JWT leakage in logs. */
+function sanitizeUrl(url: string): string {
+  return url.replace(/([?&])access_token=[^&]*/g, '$1access_token=[Redacted]');
+}
+
 const PINO_REDACT = {
   paths: [
     'req.headers["authorization"]',
     'req.headers["cookie"]',
+    // File preview URLs may carry RFC 6750 query tokens
+    'req.query.access_token',
+    'req.query["access_token"]',
     'res.headers["set-cookie"]',
     'token',
     'accessToken',
@@ -72,6 +80,21 @@ const PINO_REDACT = {
             }
           : rollTarget,
         redact: PINO_REDACT,
+        serializers: {
+          req(req: { url?: string; [k: string]: unknown }) {
+            // pino-http default serializer fields + sanitized URL
+            return {
+              id: req.id,
+              method: req.method,
+              url: typeof req.url === 'string' ? sanitizeUrl(req.url) : req.url,
+              query: req.query,
+              params: req.params,
+              headers: req.headers,
+              remoteAddress: req.remoteAddress,
+              remotePort: req.remotePort,
+            };
+          },
+        },
       },
     }),
     ServeStaticModule.forRoot({

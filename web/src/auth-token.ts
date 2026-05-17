@@ -22,3 +22,14 @@ export function getAuthorizationHeader(): string | null {
   const token = getApiToken();
   return token ? `Bearer ${token}` : null;
 }
+
+/**
+ * Builds a URL to the `/api/files/serve` endpoint with inline auth token.
+ * Suitable for `<img src>`, `<embed src>`, etc. that cannot set Authorization headers.
+ */
+export function buildFileServeUrl(filePath: string): string {
+  const token = getApiToken();
+  const params = new URLSearchParams({ path: filePath });
+  if (token) params.set('access_token', token);
+  return `/api/files/serve?${params.toString()}`;
+}

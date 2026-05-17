@@ -217,6 +217,40 @@ export class FilesController {
     return this.filesService.getMetadata(filePath);
   }
 
+  @Get('serve')
+  @ApiOperation({
+    summary: 'Serve a file inline with correct Content-Type (for img/pdf/etc.)',
+  })
+  @ApiQuery({ name: 'path', required: true, description: 'File path' })
+  @ApiQuery({
+    name: 'access_token',
+    required: false,
+    type: String,
+    description: 'JWT token (RFC 6750 §2.3 fallback for <img>/<video> tags)',
+  })
+  @ApiProduces('application/octet-stream')
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async serveFile(@Query('path') filePath: string, @Res() reply: FastifyReply) {
+    const download = await this.filesService.prepareDownload(filePath);
+    const mimeType = guessMimeType(download.filename);
+    reply.header('Content-Type', mimeType);
+    reply.header('Content-Length', download.size);
+    reply.header(
+      'Content-Disposition',
+      this.buildInlineDisposition(download.filename),
+    );
+    // Security: prevent MIME sniffing, XSS via SVG/HTML, token leakage via Referrer
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'no-referrer');
+    reply.header(
+      'Content-Security-Policy',
+      "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'unsafe-inline'",
+    );
+    // no-store: URL may carry access_token query param (RFC 6750 §2.3 cache caveat)
+    reply.header('Cache-Control', 'private, no-store');
+    return reply.send(download.stream);
+  }
+
   @Get('download')
   @ApiOperation({ summary: 'Download a file' })
   @ApiQuery({ name: 'path', required: true, description: 'File path' })
@@ -342,4 +376,55 @@ export class FilesController {
     const fallback = filename.replace(/[\r\n"\\]/g, '_');
     return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
   }
+
+  /** Builds a Content-Disposition inline header for browser rendering. */
+  private buildInlineDisposition(filename: string): string {
+    const fallback = filename.replace(/[\r\n"\\]/g, '_');
+    return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  }
+}
+
+/** Maps file extension to MIME type for inline serving. */
+function guessMimeType(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  const MIME_MAP: Record<string, string> = {
+    // Images
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    ico: 'image/x-icon',
+    bmp: 'image/bmp',
+    avif: 'image/avif',
+    // Documents
+    pdf: 'application/pdf',
+    // Text / code
+    html: 'text/html',
+    css: 'text/css',
+    js: 'text/javascript',
+    mjs: 'text/javascript',
+    json: 'application/json',
+    xml: 'application/xml',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    // Media
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    // Archives
+    zip: 'application/zip',
+    gz: 'application/gzip',
+    tar: 'application/x-tar',
+    // Fonts
+    woff: 'font/woff',
+    woff2: 'font/woff2',
+    ttf: 'font/ttf',
+    otf: 'font/otf',
+  };
+  return MIME_MAP[ext] ?? 'application/octet-stream';
 }

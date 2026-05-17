@@ -2,7 +2,7 @@
  * Thread route component — resumes/reads a thread by URL param.
  * Selecting a thread no longer clears other live thread state.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -45,6 +45,27 @@ export function ThreadView() {
   const setThreadStatusForThread = useTimelineStore((s) => s.setThreadStatusForThread);
   const setActiveTurnIdForThread = useTimelineStore((s) => s.setActiveTurnIdForThread);
   const setLoadingForThread = useTimelineStore((s) => s.setLoadingForThread);
+
+  // Pending file open request from @mention click or image badge click.
+  // Uses { path, seq } so re-clicking the same file still triggers a new open.
+  const openSeqRef = useRef(0);
+  const [pendingOpenFile, setPendingOpenFile] = useState<{ path: string; seq: number } | null>(null);
+
+  // Listen for codex-webui:open-file events from chat message badges
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent<{ path: string }>).detail?.path;
+      if (!path) return;
+      setSessionPanelOpen(true);
+      setPendingOpenFile({ path, seq: ++openSeqRef.current });
+    };
+    window.addEventListener('codex-webui:open-file', handler);
+    return () => window.removeEventListener('codex-webui:open-file', handler);
+  }, []);
+
+  const handleFileOpened = useCallback(() => {
+    setPendingOpenFile(null);
+  }, []);
 
   const resumeThread = useMutation({
     ...threadsResumeThreadMutation(),
@@ -130,6 +151,9 @@ export function ThreadView() {
                 threadId={threadId}
                 cwd={threadCwd!}
                 onClose={() => setSessionPanelOpen(false)}
+                openFile={pendingOpenFile?.path ?? null}
+                openFileSeq={pendingOpenFile?.seq ?? -1}
+                onFileOpened={handleFileOpened}
               />
             </div>
           </ResizablePanel>

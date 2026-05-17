@@ -1620,6 +1620,31 @@ export type FilesGetMetadataResponses = {
 
 export type FilesGetMetadataResponse = FilesGetMetadataResponses[keyof FilesGetMetadataResponses];
 
+export type FilesServeFileData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * File path
+         */
+        path: string;
+        /**
+         * JWT token (RFC 6750 §2.3 fallback for <img>/<video> tags)
+         */
+        access_token?: string;
+    };
+    url: '/api/files/serve';
+};
+
+export type FilesServeFileErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+    403: ApiErrorResponseDto;
+    404: ApiErrorResponseDto;
+};
+
+export type FilesServeFileError = FilesServeFileErrors[keyof FilesServeFileErrors];
+
 export type FilesDownloadFileData = {
     body?: never;
     path?: never;

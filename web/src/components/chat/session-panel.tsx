@@ -2,7 +2,7 @@
  * Session-level bottom panel with file tree + file tabs + shared terminal tabs.
  * Appears below the chat timeline.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { FileCode, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { FileTree } from '@/components/files/file-tree';
@@ -19,6 +19,12 @@ interface Props {
   threadId: string;
   cwd: string;
   onClose: () => void;
+  /** File path to open (from @mention or image badge click). */
+  openFile?: string | null;
+  /** Monotonic sequence number — ensures re-clicking the same file triggers a new open. */
+  openFileSeq?: number;
+  /** Called after the file has been opened in a tab. */
+  onFileOpened?: () => void;
 }
 
 interface FileTab {
@@ -34,7 +40,7 @@ function terminalIdFromTab(tab: string): string | null {
   return tab.startsWith('terminal:') ? tab.slice('terminal:'.length) : null;
 }
 
-export function SessionPanel({ threadId, cwd, onClose }: Props) {
+export function SessionPanel({ threadId, cwd, onClose, openFile, openFileSeq, onFileOpened }: Props) {
   const { t } = useTranslation();
   useTerminalSocketEvents();
   const contextKey = `thread:${threadId}`;
@@ -73,6 +79,25 @@ export function SessionPanel({ threadId, cwd, onClose }: Props) {
     [selectFile],
   );
 
+  // Open a file when requested externally (from @mention click, image badge, etc.)
+  // Ref-backed seq avoids re-triggering on unrelated renders; useEffect avoids parent
+  // state updates during child render.
+  const lastProcessedSeqRef = useRef(-1);
+  useEffect(() => {
+    if (!openFile || openFileSeq == null || openFileSeq === lastProcessedSeqRef.current) {
+      return;
+    }
+    lastProcessedSeqRef.current = openFileSeq;
+    const name = openFile.split('/').pop() ?? openFile;
+    setFileTabs((prev) => {
+      if (prev.some((t) => t.path === openFile)) return prev;
+      return [...prev, { path: openFile, name }];
+    });
+    setActiveTab(openFile);
+    selectFile(openFile);
+    onFileOpened?.();
+  }, [openFile, openFileSeq, onFileOpened, selectFile]);
+
   const closeTab = useCallback(
     (path: string) => {
       setFileTabs((prev) => {
@@ -110,52 +135,55 @@ export function SessionPanel({ threadId, cwd, onClose }: Props) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center border-b border-border bg-muted/20">
-          <TerminalTabs
-            contextKey={contextKey}
-            cwd={cwd}
-            activeTerminalId={activeTerminalId}
-            onSelectTerminal={handleSelectTerminal}
-            className="min-w-0 flex-1"
-          />
+          {/* Scrollable tab strip — terminal tabs and file tabs flow naturally */}
+          <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+            <TerminalTabs
+              contextKey={contextKey}
+              cwd={cwd}
+              activeTerminalId={activeTerminalId}
+              onSelectTerminal={handleSelectTerminal}
+              className="shrink-0"
+            />
 
-          {fileTabs.map((tab) => (
-            <button
-              key={tab.path}
-              type="button"
-              onClick={() => {
-                setActiveTab(tab.path);
-                void selectFile(tab.path);
-              }}
-              className={cn(
-                'group flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
-                activeTab === tab.path
-                  ? 'border-b-2 border-primary text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <FileCode className="h-3 w-3" />
-              {tab.name}
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.path);
+            {fileTabs.map((tab) => (
+              <button
+                key={tab.path}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.path);
+                  void selectFile(tab.path);
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') closeTab(tab.path);
-                }}
-                className="ml-1 rounded p-0.5 opacity-0 hover:bg-muted group-hover:opacity-100"
+                className={cn(
+                  'group flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
+                  activeTab === tab.path
+                    ? 'border-b-2 border-primary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
               >
-                <X className="h-2.5 w-2.5" />
-              </span>
-            </button>
-          ))}
+                <FileCode className="h-3 w-3" />
+                {tab.name}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.path);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') closeTab(tab.path);
+                  }}
+                  className="ml-1 rounded p-0.5 opacity-0 hover:bg-muted group-hover:opacity-100"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </span>
+              </button>
+            ))}
+          </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="px-2 py-1.5 text-muted-foreground hover:text-foreground"
+            className="shrink-0 px-2 py-1.5 text-muted-foreground hover:text-foreground"
             title={t('Close panel')}
           >
             <X className="h-3.5 w-3.5" />

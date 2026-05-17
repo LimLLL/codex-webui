@@ -1,10 +1,13 @@
 /**
- * Manages @ mention popover state: detection, navigation, selection.
- * Used by ChatInput to drive the MentionPopover component.
+ * Manages @ mention popover state: detection, navigation, selection, filtering.
+ * Filtering is done here (not in MentionPopover) so keyboard handlers can
+ * read `mentionFiltered` directly without ref-sync across components.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { filesReadTreeOptions } from '@/generated/api/@tanstack/react-query.gen';
 import type { MentionResult } from '@/components/chat/mention-popover';
-import { escapeMentionPath } from '@/lib/mention-utils';
+import { escapeMentionPath, unescapeMentionPath } from '@/lib/mention-utils';
 import type { ChatFileAttachment } from '@/types/attachments';
 
 let mentionIdCounter = 0;
@@ -20,9 +23,27 @@ function hasUnescapedWhitespace(value: string): boolean {
   return false;
 }
 
+/**
+ * Parses the query into a browse directory (relative to cwd) and a filter string.
+ * e.g., "src/components/ch" → { browseRelative: "src/components", filter: "ch" }
+ */
+function parseQuery(query: string) {
+  const lastSlash = query.lastIndexOf('/');
+  if (lastSlash < 0) {
+    return { browseRelative: '', browsePath: '', filterText: unescapeMentionPath(query) };
+  }
+  const browseRelative = query.slice(0, lastSlash);
+  return {
+    browseRelative,
+    browsePath: unescapeMentionPath(browseRelative),
+    filterText: unescapeMentionPath(query.slice(lastSlash + 1)),
+  };
+}
+
 interface UseChatMentionParams {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   valueRef: React.RefObject<string>;
+  cwd: string | null;
   setValue: React.Dispatch<React.SetStateAction<string>>;
   setAttachments: React.Dispatch<React.SetStateAction<import('@/types/attachments').ChatAttachment[]>>;
   toRelativePath: (absolutePath: string) => string;
@@ -31,6 +52,7 @@ interface UseChatMentionParams {
 export function useChatMention({
   textareaRef,
   valueRef,
+  cwd,
   setValue,
   setAttachments,
   toRelativePath,
@@ -39,7 +61,27 @@ export function useChatMention({
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStart, setMentionStart] = useState(-1);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
-  const mentionFilteredRef = useRef<MentionResult[]>([]);
+
+  // ── Query + filtering (lifted from MentionPopover) ────────
+  const { browseRelative, browsePath, filterText } = parseQuery(mentionQuery);
+  const browseDir = !cwd ? '' : !browsePath ? cwd : `${cwd}/${browsePath}`;
+
+  const { data: entries, isLoading: mentionLoading } = useQuery({
+    ...filesReadTreeOptions({ query: { root: browseDir } }),
+    enabled: mentionOpen && Boolean(browseDir),
+  });
+
+  const lowerFilter = filterText.toLowerCase();
+  const mentionFiltered: MentionResult[] = useMemo(
+    () =>
+      entries
+        ? entries
+            .filter((e) => e.name.toLowerCase().includes(lowerFilter))
+            .slice(0, 20)
+            .map((e) => ({ name: e.name, path: e.path, type: e.type as 'file' | 'directory' }))
+        : [],
+    [entries, lowerFilter],
+  );
 
   /** Called on every textarea value change to detect ` @` trigger. */
   const detectMention = useCallback((newValue: string) => {
@@ -50,11 +92,9 @@ export function useChatMention({
     const atIndex = textBeforeCursor.lastIndexOf('@');
 
     if (atIndex >= 0) {
-      // Only trigger when @ is preceded by space/newline or at start
       const charBefore = atIndex > 0 ? textBeforeCursor[atIndex - 1] : ' ';
       if (charBefore === ' ' || charBefore === '\n' || atIndex === 0) {
         const q = textBeforeCursor.slice(atIndex + 1);
-        // Allow / and escaped spaces for path navigation; close on unescaped whitespace
         if (!hasUnescapedWhitespace(q)) {
           setMentionOpen(true);
           setMentionQuery(q);
@@ -78,7 +118,6 @@ export function useChatMention({
     setValue(before + inserted + after);
     setMentionOpen(false);
 
-    // displayName stores the escaped form for matching in buildInput
     setAttachments((prev) => [
       ...prev,
       { type: 'mention', id: nextMentionId(), displayName: escapedPath, path: result.path } as ChatFileAttachment,
@@ -122,7 +161,7 @@ export function useChatMention({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setMentionSelectedIndex((i) => Math.min(i + 1, mentionFilteredRef.current.length - 1));
+      setMentionSelectedIndex((i) => Math.min(i + 1, mentionFiltered.length - 1));
       return true;
     }
     if (e.key === 'ArrowUp') {
@@ -131,7 +170,7 @@ export function useChatMention({
       return true;
     }
     if (e.key === 'ArrowRight') {
-      const item = mentionFilteredRef.current[mentionSelectedIndex];
+      const item = mentionFiltered[mentionSelectedIndex];
       if (item?.type === 'directory') {
         e.preventDefault();
         handleMentionNavigate(item.path);
@@ -140,7 +179,7 @@ export function useChatMention({
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
-      const item = mentionFilteredRef.current[mentionSelectedIndex];
+      const item = mentionFiltered[mentionSelectedIndex];
       if (item) {
         if (item.type === 'directory') {
           handleMentionNavigate(item.path);
@@ -156,13 +195,15 @@ export function useChatMention({
       return true;
     }
     return false;
-  }, [mentionOpen, mentionSelectedIndex, handleMentionSelect, handleMentionNavigate]);
+  }, [mentionOpen, mentionSelectedIndex, mentionFiltered, handleMentionSelect, handleMentionNavigate]);
 
   return {
     mentionOpen,
     mentionQuery,
     mentionSelectedIndex,
-    mentionFilteredRef,
+    mentionFiltered,
+    mentionLoading,
+    browseRelative,
     setMentionOpen,
     detectMention,
     handleMentionSelect,

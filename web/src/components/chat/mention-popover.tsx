@@ -1,13 +1,10 @@
 /**
  * Popover triggered by @ in ChatInput for file/directory search.
- * Supports path-based navigation: typing `/` drills into directories.
- * Click directory = navigate into; click file = select as mention.
+ * Pure display component — filtering and query are managed by useChatMention hook.
  */
 import { useEffect, useRef } from 'react';
 import { File, Folder, Loader2, Paperclip } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { filesReadTreeOptions } from '@/generated/api/@tanstack/react-query.gen';
 import { unescapeMentionPath } from '@/lib/mention-utils';
 import { cn } from '@/lib/utils';
 
@@ -19,13 +16,13 @@ export interface MentionResult {
 
 interface Props {
   open: boolean;
-  /** Full text after @, may include path segments (e.g., "src/components/ch"). */
-  query: string;
-  /** Thread cwd root. */
-  cwd: string | null;
+  /** Breadcrumb path segments (relative, e.g. "src/components"). */
+  browseRelative: string;
+  /** Pre-filtered mention results from the parent hook. */
+  filtered: MentionResult[];
+  /** Whether the directory listing is still loading. */
+  isLoading: boolean;
   selectedIndex: number;
-  /** Ref filled with filtered items so parent can read current selection on Enter. */
-  filteredRef: React.RefObject<MentionResult[]>;
   /** Called when a file is selected (or directory is pinned). */
   onSelect: (result: MentionResult) => void;
   /** Called when user navigates into a directory (click or Enter on dir). */
@@ -34,52 +31,9 @@ interface Props {
   onNavigateUp: (relativePath: string) => void;
 }
 
-/**
- * Parses the query into a browse directory (relative to cwd) and a filter string.
- * e.g., "src/components/ch" → { browseRelative: "src/components", filter: "ch" }
- * e.g., "src/" → { browseRelative: "src", filter: "" }
- * e.g., "main" → { browseRelative: "", filter: "main" }
- */
-function parseQuery(query: string) {
-  const lastSlash = query.lastIndexOf('/');
-  if (lastSlash < 0) {
-    return { browseRelative: '', browsePath: '', filterText: unescapeMentionPath(query) };
-  }
-  const browseRelative = query.slice(0, lastSlash);
-  return {
-    browseRelative,
-    browsePath: unescapeMentionPath(browseRelative),
-    filterText: unescapeMentionPath(query.slice(lastSlash + 1)),
-  };
-}
-
-export function MentionPopover({ open, query, cwd, selectedIndex, filteredRef, onSelect, onNavigate, onNavigateUp }: Props) {
+export function MentionPopover({ open, browseRelative, filtered, isLoading, selectedIndex, onSelect, onNavigate, onNavigateUp }: Props) {
   const { t } = useTranslation();
   const listRef = useRef<HTMLDivElement>(null);
-
-  const { browseRelative, browsePath, filterText } = parseQuery(query);
-
-  // Resolve the directory to fetch: cwd + unescaped browse path
-  const browseDir = !cwd ? '' : !browsePath ? cwd : `${cwd}/${browsePath}`;
-
-  const { data: entries, isLoading } = useQuery({
-    ...filesReadTreeOptions({ query: { root: browseDir } }),
-    enabled: open && Boolean(browseDir),
-  });
-
-  // Filter entries by the unescaped text after last /
-  const lowerFilter = filterText.toLowerCase();
-  const filtered: MentionResult[] = entries
-    ? entries
-        .filter((e) => e.name.toLowerCase().includes(lowerFilter))
-        .slice(0, 20)
-        .map((e) => ({ name: e.name, path: e.path, type: e.type as 'file' | 'directory' }))
-    : [];
-
-  // Sync filtered items to parent ref
-  useEffect(() => {
-    filteredRef.current = filtered;
-  }, [filtered, filteredRef]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -90,7 +44,6 @@ export function MentionPopover({ open, query, cwd, selectedIndex, filteredRef, o
 
   if (!open) return null;
 
-  // Breadcrumb showing current navigation path
   const pathSegments = browseRelative ? browseRelative.split('/') : [];
 
   return (
@@ -141,7 +94,6 @@ export function MentionPopover({ open, query, cwd, selectedIndex, filteredRef, o
               )}
             >
               {entry.type === 'directory' ? (
-                /* Directory: click name area = navigate in; 📎 at right = mention dir */
                 <>
                   <button
                     type="button"
@@ -151,7 +103,6 @@ export function MentionPopover({ open, query, cwd, selectedIndex, filteredRef, o
                     <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 truncate">{entry.name}</span>
                   </button>
-                  {/* Attach directory as mention */}
                   <button
                     type="button"
                     title={t('Attach to chat')}
@@ -162,7 +113,6 @@ export function MentionPopover({ open, query, cwd, selectedIndex, filteredRef, o
                   </button>
                 </>
               ) : (
-                /* File: click = select */
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
