@@ -13,9 +13,7 @@ services:
       PORT: 8172
       WEBUI_API_KEY: ${WEBUI_API_KEY:?Set WEBUI_API_KEY in .env}
       WORKSPACE_ROOTS: /workspaces
-      # Model provider API keys
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - root_home:/root
       - workspaces:/workspaces

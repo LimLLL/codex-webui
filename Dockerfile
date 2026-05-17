@@ -91,7 +91,7 @@ RUN npm install -g \
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Create app directories
-RUN mkdir -p /root/.codex /root/.claude /workspaces /app/logs
+RUN mkdir -p /root/.codex /workspaces /app/logs
 
 # ── App installation ─────────────────────────────────────────────────
 WORKDIR /app
@@ -136,7 +136,7 @@ else
 fi
 
 # Ensure directories exist (in case volume is pre-populated but partial)
-mkdir -p /root/.codex /root/.claude /workspaces /app/logs
+mkdir -p /root/.codex /workspaces /app/logs
 
 exec "$@"
 EOF
