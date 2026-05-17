@@ -1,8 +1,8 @@
 # ── Stage 1: Frontend build ──────────────────────────────────────────
 FROM node:22-bookworm-slim AS frontend-builder
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /app/web
-COPY pnpm-workspace.yaml /app/
+COPY pnpm-workspace.yaml ./
 COPY web/package.json web/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
@@ -13,7 +13,7 @@ FROM node:22-bookworm-slim AS backend-builder
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -89,7 +89,7 @@ RUN npm install -g \
     mcp-remote
 
 # Enable corepack for pnpm (needed for native addon rebuild)
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 
 # Create app directories
 RUN mkdir -p /root/.codex /workspaces /app/logs
