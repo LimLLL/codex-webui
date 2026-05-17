@@ -40,6 +40,7 @@ import {
   StartTurnDto,
   ThreadForkResponseDto,
   ThreadListResponseDto,
+  ThreadLoadedListResponseDto,
   ThreadReadResponseDto,
   ThreadResumeResponseDto,
   SteerTurnDto,
@@ -131,6 +132,27 @@ export class ThreadsController {
       searchTerm,
       cwd,
       sortKey: sortKey,
+    });
+  }
+
+  @Get('loaded')
+  @ApiOperation({ summary: 'List loaded thread IDs' })
+  @ApiQuery({ name: 'cursor', required: false })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiOkResponse({ type: ThreadLoadedListResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async listLoadedThreads(
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    if (parsedLimit !== undefined && (isNaN(parsedLimit) || parsedLimit < 1)) {
+      throw new BadRequestException('limit must be a positive number');
+    }
+
+    return this.threadsService.listLoadedThreads({
+      cursor,
+      limit: parsedLimit,
     });
   }
 

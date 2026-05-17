@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import { getSocket } from '../socket';
 import type { TimelineEntry, TurnItem, TurnPlanState } from '../types/timeline';
-import type { ApprovalRequest, ResolvableApprovalDecision } from '../types/approval';
+import type { ApprovalRequest, ResolvableApprovalDecision, UserInputRequest } from '../types/approval';
 import type { ThreadDto, TurnDto, FileUpdateChangeDto } from '../generated/api';
 import type { ThreadTokenUsage, ThreadStatusType } from '../types/codex-notifications';
 
@@ -23,6 +23,7 @@ export interface ThreadRuntimeState {
   loading: boolean;
   expandedReasoning: Set<string>;
   approvals: Record<string, ApprovalRequest>;
+  userInputRequests: Record<string, UserInputRequest>;
   tokenUsageByTurn: Record<string, ThreadTokenUsage>;
   latestTokenUsage: ThreadTokenUsage | null;
   threadStatus: ThreadStatusType | null;
@@ -158,6 +159,7 @@ function createRuntime(input: ThreadRuntimeInput): ThreadRuntimeState {
     loading: false,
     expandedReasoning: new Set<string>(),
     approvals: {},
+    userInputRequests: {},
     tokenUsageByTurn: {},
     latestTokenUsage: null,
     threadStatus: null,
@@ -178,6 +180,7 @@ function runtimeFromSelected(state: TimelineState): ThreadRuntimeState | null {
     loading: state.loading,
     expandedReasoning: state.expandedReasoning,
     approvals: state.approvals,
+    userInputRequests: state.userInputRequests,
     tokenUsageByTurn: state.tokenUsageByTurn,
     latestTokenUsage: state.latestTokenUsage,
     threadStatus: state.threadStatus,
@@ -203,6 +206,7 @@ function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineSta
       loading: false,
       expandedReasoning: new Set<string>(),
       approvals: {},
+      userInputRequests: {},
       tokenUsageByTurn: {},
       latestTokenUsage: null,
       threadStatus: null,
@@ -219,6 +223,7 @@ function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineSta
     loading: runtime.loading,
     expandedReasoning: runtime.expandedReasoning,
     approvals: runtime.approvals,
+    userInputRequests: runtime.userInputRequests,
     tokenUsageByTurn: runtime.tokenUsageByTurn,
     latestTokenUsage: runtime.latestTokenUsage,
     threadStatus: runtime.threadStatus,
@@ -240,6 +245,25 @@ function hasPendingApproval(runtime: ThreadRuntimeState | null): boolean {
     runtime.threadStatus.activeFlags.includes('waitingOnApproval');
   const cardBlocked = Object.values(runtime.approvals).some((approval) => approval.status === 'pending');
   return flagBlocked || cardBlocked;
+}
+
+/** Ensures a turn entry exists in timeline for a given turnId (needed for request-only cards). */
+function ensureTurnEntry(timeline: TimelineEntry[], turnId: string): TimelineEntry[] {
+  if (timeline.some((entry) => entry.kind === 'turn' && entry.turnId === turnId)) {
+    return timeline;
+  }
+  return [...timeline, { kind: 'turn', turnId, items: [], completed: false }];
+}
+
+/** After hydration, preserve turn entries for pending user-input requests. */
+function ensureUserInputTurnEntries(
+  timeline: TimelineEntry[],
+  requests: Record<string, UserInputRequest>,
+): TimelineEntry[] {
+  return Object.values(requests).reduce(
+    (next, req) => ensureTurnEntry(next, req.turnId),
+    timeline,
+  );
 }
 
 function updateRuntimeCurrentTurn(
@@ -334,6 +358,7 @@ interface TimelineState {
   loading: boolean;
   expandedReasoning: Set<string>;
   approvals: Record<string, ApprovalRequest>;
+  userInputRequests: Record<string, UserInputRequest>;
   tokenUsageByTurn: Record<string, ThreadTokenUsage>;
   latestTokenUsage: ThreadTokenUsage | null;
   threadStatus: ThreadStatusType | null;
@@ -378,7 +403,9 @@ interface TimelineState {
   expandReasoning: (itemId: string) => void;
   collapseReasoning: (itemId: string) => void;
   addApproval: (approval: ApprovalRequest) => void;
+  addUserInputRequest: (request: UserInputRequest) => void;
   resolveApproval: (itemId: string, decision: ResolvableApprovalDecision) => void;
+  resolveUserInputRequest: (requestId: string | number) => void;
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatus: (status: ThreadStatusType | null) => void;
   setActiveTurnId: (turnId: string | null) => void;
@@ -409,7 +436,9 @@ interface TimelineState {
   appendPlanDeltaForThread: (threadId: string, turnId: string, itemId: string, delta: string) => void;
   setLoadingForThread: (threadId: string, loading: boolean) => void;
   addApprovalForThread: (threadId: string, approval: ApprovalRequest) => void;
+  addUserInputRequestForThread: (threadId: string, request: UserInputRequest) => void;
   resolveApprovalForThread: (threadId: string, itemId: string, decision: ResolvableApprovalDecision) => void;
+  resolveUserInputRequestForThread: (threadId: string, requestId: string | number) => void;
   setTokenUsageForThread: (threadId: string, turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatusForThread: (threadId: string, status: ThreadStatusType | null) => void;
   setActiveTurnIdForThread: (threadId: string, turnId: string | null) => void;
@@ -450,6 +479,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     loading: false,
     expandedReasoning: new Set<string>(),
     approvals: {},
+    userInputRequests: {},
     tokenUsageByTurn: {},
     latestTokenUsage: null,
     threadStatus: null,
@@ -626,9 +656,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
     addApproval: (approval) => get().addApprovalForThread(approval.threadId, approval),
 
+    addUserInputRequest: (request) =>
+      get().addUserInputRequestForThread(request.threadId, request),
+
     resolveApproval: (itemId, decision) => {
       const threadId = selectedThread();
       if (threadId) get().resolveApprovalForThread(threadId, itemId, decision);
+    },
+
+    resolveUserInputRequest: (requestId) => {
+      const threadId = selectedThread();
+      if (threadId) get().resolveUserInputRequestForThread(threadId, requestId);
     },
 
     setTokenUsage: (turnId, usage) => {
@@ -671,7 +709,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ...runtime,
         threadCwd: cwd ?? runtime.threadCwd,
         loading: false,
-        timeline: turnsToTimeline(turns),
+        timeline: ensureUserInputTurnEntries(
+          turnsToTimeline(turns),
+          runtime.userInputRequests,
+        ),
         activeTurnId: null,
         hydrated: true,
       }));
@@ -766,6 +807,24 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       });
     },
 
+    addUserInputRequestForThread: (threadId, request) => {
+      applyThreadUpdate(threadId, (runtime) => {
+        const requestKey = String(request.requestId);
+        const alreadyResolved = runtime.pendingResolvedRequestIds.has(requestKey);
+        const finalRequest: UserInputRequest = alreadyResolved
+          ? { ...request, status: 'resolved' }
+          : request;
+        const pendingResolvedRequestIds = new Set(runtime.pendingResolvedRequestIds);
+        if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
+        return {
+          ...runtime,
+          timeline: ensureTurnEntry(runtime.timeline, request.turnId),
+          userInputRequests: { ...runtime.userInputRequests, [requestKey]: finalRequest },
+          pendingResolvedRequestIds,
+        };
+      });
+    },
+
     resolveApprovalForThread: (threadId, itemId, decision) => {
       applyThreadUpdate(threadId, (runtime) => {
         const existing = runtime.approvals[itemId];
@@ -775,6 +834,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           approvals: {
             ...runtime.approvals,
             [itemId]: { ...existing, status: decision },
+          },
+        };
+      });
+    },
+
+    resolveUserInputRequestForThread: (threadId, requestId) => {
+      const requestKey = String(requestId);
+      applyThreadUpdate(threadId, (runtime) => {
+        const existing = runtime.userInputRequests[requestKey];
+        if (!existing) return runtime;
+        const resolved: UserInputRequest = { ...existing, status: 'resolved' };
+        return {
+          ...runtime,
+          userInputRequests: {
+            ...runtime.userInputRequests,
+            [requestKey]: resolved,
           },
         };
       });
@@ -828,18 +903,31 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     resolveApprovalByRequestIdForThread: (threadId, requestId) => {
       const requestKey = String(requestId);
       applyThreadUpdate(threadId, (runtime) => {
-        const entry = Object.values(runtime.approvals).find(
-          (approval) => String(approval.requestId) === requestKey,
+        const approval = Object.values(runtime.approvals).find(
+          (entry) => String(entry.requestId) === requestKey,
         );
-        if (entry) {
+        if (approval) {
           return {
             ...runtime,
             approvals: {
               ...runtime.approvals,
-              [entry.itemId]: { ...entry, status: 'resolved' },
+              [approval.itemId]: { ...approval, status: 'resolved' },
             },
           };
         }
+
+        const userInput = runtime.userInputRequests[requestKey];
+        if (userInput) {
+          const resolved: UserInputRequest = { ...userInput, status: 'resolved' };
+          return {
+            ...runtime,
+            userInputRequests: {
+              ...runtime.userInputRequests,
+              [requestKey]: resolved,
+            },
+          };
+        }
+
         return {
           ...runtime,
           pendingResolvedRequestIds: new Set(runtime.pendingResolvedRequestIds).add(requestKey),

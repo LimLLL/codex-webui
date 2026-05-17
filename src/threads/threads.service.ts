@@ -43,6 +43,21 @@ export class ThreadsService {
   }
 
   /**
+   * Lists thread IDs currently loaded in the Codex app-server memory.
+   *
+   * @param params - Optional pagination cursor and limit
+   * @returns Paginated loaded thread IDs
+   */
+  async listLoadedThreads(
+    params: v2.ThreadLoadedListParams,
+  ): Promise<v2.ThreadLoadedListResponse> {
+    return this.codex.request<v2.ThreadLoadedListResponse>(
+      'thread/loaded/list',
+      params,
+    );
+  }
+
+  /**
    * Reads a single thread by ID.
    *
    * @param threadId - The thread identifier

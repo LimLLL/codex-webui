@@ -11,6 +11,7 @@ import { showSnackbar } from '@/stores/snackbar-store';
 import { handleNotification, type NotificationContext } from './notification-handlers';
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, threadsResumeThread } from '@/generated/api/sdk.gen';
 import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
+import { userInputFromSocket } from '@/lib/user-input-parsers';
 import i18n from '@/i18n';
 
 type CodexLifecycleEvent =
@@ -217,6 +218,8 @@ export function useCodexSocket(enabled = true) {
       const turnId = params.turnId;
       const itemId = params.itemId;
       const store = useTimelineStore.getState();
+      const title = store.getThreadTitle(reqThreadId);
+      let snackbarMessage: string | null = null;
 
       if (method === 'item/commandExecution/requestApproval') {
         store.addApprovalForThread(reqThreadId, {
@@ -233,6 +236,7 @@ export function useCodexSocket(enabled = true) {
           proposedExecpolicyAmendment: parseStringArray(params.proposedExecpolicyAmendment),
           proposedNetworkPolicyAmendments: parseNetworkAmendments(params.proposedNetworkPolicyAmendments),
         });
+        snackbarMessage = i18n.t('Approval needed in {{thread}}', { thread: title });
       }
 
       if (method === 'item/fileChange/requestApproval') {
@@ -246,19 +250,22 @@ export function useCodexSocket(enabled = true) {
           reason: (params.reason as string) ?? null,
           grantRoot: (params.grantRoot as string) ?? null,
         });
+        snackbarMessage = i18n.t('Approval needed in {{thread}}', { thread: title });
       }
 
-      if (reqThreadId && store.threadId !== reqThreadId) {
-        const title = store.getThreadTitle(reqThreadId);
-        showSnackbar(
-          i18n.t('Approval needed in {{thread}}', { thread: title }),
-          'warning',
-          0,
-          {
-            label: i18n.t('Open thread'),
-            onClick: () => dispatchJumpToThread(reqThreadId),
-          },
-        );
+      if (method === 'item/tool/requestUserInput') {
+        const userInputRequest = userInputFromSocket({ id, params });
+        if (userInputRequest) {
+          store.addUserInputRequestForThread(reqThreadId, userInputRequest);
+          snackbarMessage = i18n.t('Input needed in {{thread}}', { thread: title });
+        }
+      }
+
+      if (snackbarMessage && store.threadId !== reqThreadId) {
+        showSnackbar(snackbarMessage, 'warning', 0, {
+          label: i18n.t('Open thread'),
+          onClick: () => dispatchJumpToThread(reqThreadId),
+        });
       }
     };
 

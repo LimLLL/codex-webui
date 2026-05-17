@@ -918,6 +918,11 @@ export type ThreadListResponseDto = {
     nextCursor: string | null;
 };
 
+export type ThreadLoadedListResponseDto = {
+    data: Array<string>;
+    nextCursor: string | null;
+};
+
 export type ThreadUnarchiveResponseDto = {
     thread: ThreadDto;
 };
@@ -1828,6 +1833,29 @@ export type ThreadsStartThreadResponses = {
 };
 
 export type ThreadsStartThreadResponse = ThreadsStartThreadResponses[keyof ThreadsStartThreadResponses];
+
+export type ThreadsListLoadedThreadsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/threads/loaded';
+};
+
+export type ThreadsListLoadedThreadsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsListLoadedThreadsError = ThreadsListLoadedThreadsErrors[keyof ThreadsListLoadedThreadsErrors];
+
+export type ThreadsListLoadedThreadsResponses = {
+    200: ThreadLoadedListResponseDto;
+};
+
+export type ThreadsListLoadedThreadsResponse = ThreadsListLoadedThreadsResponses[keyof ThreadsListLoadedThreadsResponses];
 
 export type ThreadsReadThreadData = {
     body?: never;

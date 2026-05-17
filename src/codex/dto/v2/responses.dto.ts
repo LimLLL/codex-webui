@@ -62,6 +62,15 @@ export class ThreadListResponseDto {
   nextCursor!: string | null;
 }
 
+/** v2 ThreadLoadedListResponse mirror. */
+export class ThreadLoadedListResponseDto {
+  @ApiProperty({ type: () => [String] })
+  data!: string[];
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  nextCursor!: string | null;
+}
+
 /** v2 ThreadUnarchiveResponse mirror. */
 export class ThreadUnarchiveResponseDto {
   @ApiProperty({ type: () => ThreadDto })

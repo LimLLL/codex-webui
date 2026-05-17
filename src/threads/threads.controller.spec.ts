@@ -8,6 +8,7 @@ describe('ThreadsController rich input validation', () => {
   const threadsService = {
     startTurn: jest.fn(),
     steerTurn: jest.fn(),
+    listLoadedThreads: jest.fn(),
   };
   const filesService = {
     resolveSafePath: jest.fn(),
@@ -22,6 +23,10 @@ describe('ThreadsController rich input validation', () => {
       turn: { id: 'turn1' },
     });
     threadsService.steerTurn.mockResolvedValue({ turnId: 'turn1' });
+    threadsService.listLoadedThreads.mockResolvedValue({
+      data: ['thread1'],
+      nextCursor: null,
+    });
     filesService.resolveSafePath.mockResolvedValue('/workspace/file.ts');
     chatUploadService.resolveStoredUploadPath.mockResolvedValue(
       '/tmp/webui-uploads/image.png',
@@ -31,6 +36,23 @@ describe('ThreadsController rich input validation', () => {
       filesService as never,
       chatUploadService as never,
     );
+  });
+
+  it('lists loaded thread ids with pagination params', async () => {
+    await expect(
+      controller.listLoadedThreads('cursor-1', '20'),
+    ).resolves.toEqual({ data: ['thread1'], nextCursor: null });
+
+    expect(threadsService.listLoadedThreads).toHaveBeenCalledWith({
+      cursor: 'cursor-1',
+      limit: 20,
+    });
+  });
+
+  it('rejects invalid loaded thread limit', async () => {
+    await expect(
+      controller.listLoadedThreads(undefined, '0'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('normalizes missing text_elements to an empty array', async () => {

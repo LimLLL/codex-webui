@@ -54,3 +54,33 @@ export interface ApprovalRequest {
   /** Server-proposed network policy amendments (commandExecution only). */
   proposedNetworkPolicyAmendments?: NetworkPolicyAmendment[] | null;
 }
+
+// ─── User Input Requests (item/tool/requestUserInput) ────────────────────────
+
+/** Option displayed for a server-initiated user input question. */
+export interface UserInputOption {
+  label: string;
+  description: string;
+}
+
+/** Question payload for item/tool/requestUserInput. */
+export interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: UserInputOption[] | null;
+}
+
+/** A pending user-input request from the Codex app-server (EXPERIMENTAL). */
+export interface UserInputRequest {
+  /** JSON-RPC request ID — must be included in the response. */
+  requestId: number | string;
+  kind: 'userInput';
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  status: 'pending' | 'resolved';
+  questions: UserInputQuestion[];
+}

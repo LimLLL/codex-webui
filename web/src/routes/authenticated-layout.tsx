@@ -18,12 +18,13 @@ import { getSocket, resetSocket } from '@/socket';
 import { filesGetRoots, filesAddRoot } from '@/generated/api';
 import {
   pendingApprovalsListPending,
-  threadsListThreads,
+  threadsListLoadedThreads,
   threadsResumeThread,
 } from '@/generated/api/sdk.gen';
 import type { PendingServerRequestDto } from '@/generated/api';
 import type { ApprovalRequest } from '@/types/approval';
 import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
+import { userInputFromPending } from '@/lib/user-input-parsers';
 
 function approvalFromPending(request: PendingServerRequestDto): ApprovalRequest | null {
   const params = request.params;
@@ -71,10 +72,13 @@ export function AuthenticatedLayout() {
 
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const addApprovalForThread = useTimelineStore((s) => s.addApprovalForThread);
+  const addUserInputRequestForThread = useTimelineStore((s) => s.addUserInputRequestForThread);
   const ensureThreadState = useTimelineStore((s) => s.ensureThreadState);
+  const hydrateTimelineForThread = useTimelineStore((s) => s.hydrateTimelineForThread);
   const setLoadingForThread = useTimelineStore((s) => s.setLoadingForThread);
   const setThreadStatusForThread = useTimelineStore((s) => s.setThreadStatusForThread);
   const setActiveTurnIdForThread = useTimelineStore((s) => s.setActiveTurnIdForThread);
+  const setThreadTitleForThread = useTimelineStore((s) => s.setThreadTitleForThread);
   const setActiveThread = useTimelineStore((s) => s.setActiveThread);
   const setRootDir = useFilesStore((s) => s.setRootDir);
   const dark = useThemeStore((s) => s.dark);
@@ -89,54 +93,89 @@ export function AuthenticatedLayout() {
       .catch(() => undefined);
   }, []);
 
-  // Discover active threads and hydrate pending approvals on mount.
+  // Discover loaded threads and hydrate pending approvals on mount.
   useEffect(() => {
     let cancelled = false;
     const socket = getSocket();
 
-    // 1. Discover running threads from thread list and subscribe them.
-    void threadsListThreads({ query: { limit: 50 } })
-      .then(({ data }) => {
+    // 1. Discover loaded threads from app-server memory and subscribe them.
+    const discoverLoadedThreads = async () => {
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+
+      // Paginate up to 3 pages (600 threads max — more than enough for a single user).
+      for (let page = 0; page < 3; page += 1) {
+        const { data } = await threadsListLoadedThreads({
+          query: { limit: 200, ...(cursor ? { cursor } : {}) },
+        });
         if (cancelled || !data) return;
-        for (const thread of data.data) {
-          if (thread.status?.type !== 'active') continue;
-          ensureThreadState({ threadId: thread.id, cwd: thread.cwd, title: thread.name ?? thread.preview });
-          setThreadStatusForThread(thread.id, thread.status);
-          setLoadingForThread(thread.id, true);
-          socket.emit('thread.subscribe', { threadId: thread.id });
+
+        for (const tid of data.data) {
+          if (seen.has(tid)) continue;
+          seen.add(tid);
+
+          ensureThreadState({ threadId: tid });
+          setLoadingForThread(tid, true);
+          socket.emit('thread.subscribe', { threadId: tid });
           useTimelineStore.setState((s) => ({
-            subscribedThreadIds: new Set(s.subscribedThreadIds).add(thread.id),
+            subscribedThreadIds: new Set(s.subscribedThreadIds).add(tid),
           }));
-          // Ensure backend has this thread resumed (dedup makes this safe).
-          void threadsResumeThread({ path: { threadId: thread.id } })
-            .then(({ data }) => {
-              if (cancelled || !data) return;
-              const tid = thread.id;
-              setThreadStatusForThread(tid, data.thread.status);
-              const activeTurn = data.thread.turns?.find((t: { status?: string }) => t.status === 'inProgress');
+
+          // Resume to get full thread state (dedup makes this safe).
+          void threadsResumeThread({ path: { threadId: tid } })
+            .then(({ data: resumeData }) => {
+              if (cancelled || !resumeData) return;
+              hydrateTimelineForThread(
+                tid,
+                resumeData.thread.turns ?? [],
+                resumeData.cwd ?? resumeData.thread.cwd,
+              );
+              setThreadTitleForThread(
+                tid,
+                resumeData.thread.name ?? resumeData.thread.preview ?? null,
+              );
+              setThreadStatusForThread(tid, resumeData.thread.status);
+              const activeTurn = resumeData.thread.turns?.find(
+                (turn: { status?: string }) => turn.status === 'inProgress',
+              );
               setActiveTurnIdForThread(tid, activeTurn?.id ?? null);
               setLoadingForThread(tid, Boolean(activeTurn));
             })
             .catch(() => {
-              if (!cancelled) setLoadingForThread(thread.id, false);
+              if (!cancelled) setLoadingForThread(tid, false);
             });
         }
-      })
-      .catch(() => undefined);
 
-    // 2. Hydrate pending approvals.
+        if (!data.nextCursor) break;
+        cursor = data.nextCursor;
+      }
+    };
+    void discoverLoadedThreads().catch(() => undefined);
+
+    // 2. Hydrate pending approvals and user input requests.
     void pendingApprovalsListPending()
       .then(({ data }) => {
         if (cancelled || !data) return;
         for (const request of data.requests) {
           const approval = approvalFromPending(request);
           if (approval) addApprovalForThread(request.threadId, approval);
+          const userInput = userInputFromPending(request);
+          if (userInput) addUserInputRequestForThread(request.threadId, userInput);
         }
       })
       .catch(() => undefined);
 
     return () => { cancelled = true; };
-  }, [addApprovalForThread, ensureThreadState, setActiveTurnIdForThread, setLoadingForThread, setThreadStatusForThread]);
+  }, [
+    addApprovalForThread,
+    addUserInputRequestForThread,
+    ensureThreadState,
+    hydrateTimelineForThread,
+    setActiveTurnIdForThread,
+    setLoadingForThread,
+    setThreadStatusForThread,
+    setThreadTitleForThread,
+  ]);
 
   // Handle snackbar jump-to-thread actions.
   useEffect(() => {

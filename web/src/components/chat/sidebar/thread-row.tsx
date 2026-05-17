@@ -4,6 +4,7 @@ import {
   ArchiveRestore,
   GitFork,
   Loader2,
+  MessageCircleQuestion,
   MessageSquare,
   Minimize2,
   MoreHorizontal,
@@ -24,10 +25,14 @@ interface Props {
   destructiveDisabled: boolean;
   /** True when any mutation (fork/unarchive) is in-flight for this thread. */
   actionPending: boolean;
-  /** True while this thread has an active turn. */
+  /** True while this thread has an active turn (generating). */
   running?: boolean;
   /** True while this thread has at least one pending approval. */
   pendingApproval?: boolean;
+  /** Number of hydrated pending approvals for this thread. */
+  pendingApprovalCount?: number;
+  /** True while this thread is blocked on user input. */
+  waitingOnUserInput?: boolean;
   onOpen: () => void;
   onRename: () => void;
   onArchive: () => void;
@@ -44,6 +49,8 @@ export function ThreadRow({
   actionPending,
   running = false,
   pendingApproval = false,
+  pendingApprovalCount = 0,
+  waitingOnUserInput = false,
   onOpen,
   onRename,
   onArchive,
@@ -52,6 +59,20 @@ export function ThreadRow({
   onFork,
 }: Props) {
   const { t } = useTranslation();
+
+  // Status icon priority: approval > userInput > generating > idle
+  const statusIcon = pendingApproval ? (
+    <ShieldAlert className="h-3 w-3 shrink-0 animate-pulse text-yellow-500" />
+  ) : waitingOnUserInput ? (
+    <MessageCircleQuestion className="h-3 w-3 shrink-0 animate-pulse text-blue-500" />
+  ) : running ? (
+    <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+  ) : (
+    <MessageSquare className="h-3 w-3 shrink-0" />
+  );
+
+  // Badge text: show count only when > 1 (single approval already indicated by icon)
+  const badgeText = pendingApprovalCount > 9 ? '9+' : String(pendingApprovalCount);
 
   return (
     <div className="group flex items-center gap-0.5 pl-3">
@@ -67,9 +88,13 @@ export function ThreadRow({
               : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
         )}
       >
-        {running ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" /> : <MessageSquare className="h-3 w-3 shrink-0" />}
+        {statusIcon}
         <span className="truncate">{threadLabel(thread)}</span>
-        {pendingApproval && <ShieldAlert className="ml-auto h-3 w-3 shrink-0 text-yellow-500" />}
+        {pendingApprovalCount > 1 && (
+          <span className="ml-auto rounded-full bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-yellow-600 dark:text-yellow-400">
+            {badgeText}
+          </span>
+        )}
       </button>
 
       <Popover>

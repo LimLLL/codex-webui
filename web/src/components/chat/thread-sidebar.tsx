@@ -257,14 +257,22 @@ export function ThreadSidebar() {
     const runtime = thread.id === threadId
       ? { loading, approvals, threadStatus }
       : threadsById[thread.id];
-    const running = Boolean(runtime?.loading);
-    const flagBlocked =
+    const isRunning = Boolean(runtime?.loading);
+    const activeFlags = runtime?.threadStatus?.type === 'active'
+      ? runtime.threadStatus.activeFlags
+      : [];
+    // Count hydrated pending approvals (source of truth for badge).
+    const pendingApprovalCount = Object.values(runtime?.approvals ?? {}).filter(
+      (a) => a.status === 'pending',
+    ).length;
+    const waitingOnApproval =
+      activeFlags.includes('waitingOnApproval') || pendingApprovalCount > 0;
+    const waitingOnUserInput = activeFlags.includes('waitingOnUserInput');
+    // "Generating" = thread active but not blocked on any user-facing request.
+    const generating =
       runtime?.threadStatus?.type === 'active' &&
-      runtime.threadStatus.activeFlags.includes('waitingOnApproval');
-    const cardBlocked = Object.values(runtime?.approvals ?? {}).some(
-      (approval) => approval.status === 'pending',
-    );
-    const pendingApproval = Boolean(flagBlocked || cardBlocked);
+      !waitingOnApproval &&
+      !waitingOnUserInput;
 
     return (
       <ThreadRow
@@ -272,10 +280,12 @@ export function ThreadSidebar() {
         thread={thread}
         archived={archived}
         isActive={thread.id === threadId && activeView === 'chat'}
-        destructiveDisabled={running}
+        destructiveDisabled={isRunning}
         actionPending={forkThread.isPending || unarchiveThread.isPending}
-        running={running}
-        pendingApproval={pendingApproval}
+        running={generating || isRunning}
+        pendingApproval={waitingOnApproval}
+        pendingApprovalCount={pendingApprovalCount}
+        waitingOnUserInput={waitingOnUserInput}
         onOpen={() => { if (archived) void openArchivedThread(thread); else openLiveThread(thread); }}
         onRename={() => startRename(thread)}
         onArchive={() => setConfirmAction({ type: 'archive', thread })}

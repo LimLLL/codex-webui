@@ -53,6 +53,17 @@ describe('ThreadsService', () => {
     });
   });
 
+  it('should call thread/loaded/list with params', async () => {
+    mockCodex.request.mockResolvedValue({ data: ['t1'], nextCursor: null });
+
+    await service.listLoadedThreads({ cursor: 'cursor-1', limit: 20 });
+
+    expect(mockCodex.request).toHaveBeenCalledWith('thread/loaded/list', {
+      cursor: 'cursor-1',
+      limit: 20,
+    });
+  });
+
   it('should call thread/read with includeTurns', async () => {
     mockCodex.request.mockResolvedValue({ thread: { id: 't1' } });
 
