@@ -9,6 +9,7 @@ describe('ThreadsService', () => {
   const mockResumeRegistry = {
     ensureResumed: jest.fn(),
     markResumed: jest.fn(),
+    cacheResponse: jest.fn(),
   };
 
   beforeEach(async () => {

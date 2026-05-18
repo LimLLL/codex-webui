@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { CodexService } from '../codex/codex.service';
 import type { v2 } from '../codex/codex-schema';
+import { isNotMaterializedError } from './thread-errors';
 
 /** Prevents duplicate app-server resume calls for the same thread generation. */
 @Injectable()
@@ -16,6 +17,12 @@ export class ThreadResumeRegistryService {
   private readonly failed = new Map<string, string>();
   /** Monotonic epoch per key — stale in-flight promises check before marking resumed. */
   private readonly epoch = new Map<string, number>();
+  /**
+   * Caches the full resume/start response (resolved settings) per thread.
+   * Used by `readAsResume` to return a complete `ThreadResumeResponse`
+   * even though `thread/read` doesn't include resolved settings.
+   */
+  private readonly responseCache = new Map<string, v2.ThreadResumeResponse>();
 
   constructor(
     private readonly codex: CodexService,
@@ -47,6 +54,7 @@ export class ThreadResumeRegistryService {
       .then((response) => {
         if (this.epoch.get(key) === callEpoch) {
           this.markResumed(threadId);
+          this.responseCache.set(threadId, response);
         }
         return response;
       })
@@ -73,6 +81,15 @@ export class ThreadResumeRegistryService {
     this.failed.delete(key);
   }
 
+  /**
+   * Caches the resolved settings from a start/resume/fork response.
+   * `readAsResume` merges cached settings with a fresh `thread/read`
+   * to return a complete `ThreadResumeResponse`.
+   */
+  cacheResponse(threadId: string, response: v2.ThreadResumeResponse): void {
+    this.responseCache.set(threadId, response);
+  }
+
   /** Returns true when the thread has already been resumed in this generation. */
   isResumed(threadId: string): boolean {
     return this.resumed.has(this.key(threadId));
@@ -84,27 +101,49 @@ export class ThreadResumeRegistryService {
     this.resumed.delete(key);
     this.failed.delete(key);
     this.inFlight.delete(key);
+    this.responseCache.delete(threadId);
     this.bumpEpoch(key);
   }
 
   /**
    * Falls back to thread/read when the thread was already resumed this generation.
-   * Callers only rely on `thread` and `cwd`; other resume-specific fields are absent.
+   * Merges the fresh thread data with cached resolved settings from the
+   * most recent resume/start to return a complete `ThreadResumeResponse`.
+   *
+   * If the thread is not yet materialized (no user messages), `includeTurns`
+   * is unavailable — falls back to reading without turns.
    */
   private async readAsResume(
     threadId: string,
   ): Promise<v2.ThreadResumeResponse> {
-    const response = await this.codex.request<v2.ThreadReadResponse>(
-      'thread/read',
-      {
-        threadId,
-        includeTurns: true,
-      },
+    let thread: v2.ThreadReadResponse['thread'];
+    try {
+      const res = await this.codex.request<v2.ThreadReadResponse>(
+        'thread/read',
+        { threadId, includeTurns: true },
+      );
+      thread = res.thread;
+    } catch (err) {
+      if (!isNotMaterializedError(err)) throw err;
+      this.logger.debug(
+        `Thread ${threadId} not materialized; reading without turns`,
+      );
+      const res = await this.codex.request<v2.ThreadReadResponse>(
+        'thread/read',
+        { threadId, includeTurns: false },
+      );
+      thread = { ...res.thread, turns: [] };
+    }
+
+    // Merge with cached resolved settings (model, approvalPolicy, etc.)
+    const cached = this.responseCache.get(threadId);
+    if (cached) {
+      return { ...cached, thread, cwd: thread.cwd };
+    }
+    // readAsResume is only called when resumed=true, so a cache entry must exist.
+    throw new Error(
+      `Missing cached resume response for already-resumed thread ${threadId}`,
     );
-    return {
-      thread: response.thread,
-      cwd: response.thread.cwd,
-    } as unknown as v2.ThreadResumeResponse;
   }
 
   private key(threadId: string): string {
@@ -131,6 +170,7 @@ export class ThreadResumeRegistryService {
     for (const key of this.epoch.keys()) {
       if (!key.startsWith(prefix)) this.epoch.delete(key);
     }
+    this.responseCache.clear();
     this.logger.debug(
       `Resume registry ready for generation=${currentGeneration}`,
     );

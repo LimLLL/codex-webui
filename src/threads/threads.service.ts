@@ -5,6 +5,7 @@ import { Injectable } from '@nestjs/common';
 import { CodexService } from '../codex/codex.service';
 import type { v2 } from '../codex/codex-schema';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { isNotMaterializedError } from './thread-errors';
 
 @Injectable()
 export class ThreadsService {
@@ -27,6 +28,7 @@ export class ThreadsService {
       params,
     );
     this.resumeRegistry.markResumed(response.thread.id);
+    this.resumeRegistry.cacheResponse(response.thread.id, response);
     return response;
   }
 
@@ -60,6 +62,10 @@ export class ThreadsService {
   /**
    * Reads a single thread by ID.
    *
+   * If `includeTurns` is requested but the thread is not yet materialized
+   * (no user messages), falls back to reading without turns — an
+   * unmaterialized thread has no turns anyway.
+   *
    * @param threadId - The thread identifier
    * @param includeTurns - Whether to include turn history
    * @returns The thread data
@@ -68,10 +74,22 @@ export class ThreadsService {
     threadId: string,
     includeTurns = false,
   ): Promise<v2.ThreadReadResponse> {
-    return this.codex.request<v2.ThreadReadResponse>('thread/read', {
-      threadId,
-      includeTurns,
-    });
+    try {
+      return await this.codex.request<v2.ThreadReadResponse>('thread/read', {
+        threadId,
+        includeTurns,
+      });
+    } catch (err) {
+      // Thread not materialized — retry without turns if that was requested.
+      if (includeTurns && isNotMaterializedError(err)) {
+        const response = await this.codex.request<v2.ThreadReadResponse>(
+          'thread/read',
+          { threadId, includeTurns: false },
+        );
+        return { thread: { ...response.thread, turns: [] } };
+      }
+      throw err;
+    }
   }
 
   /**
@@ -165,6 +183,7 @@ export class ThreadsService {
       },
     );
     this.resumeRegistry.markResumed(response.thread.id);
+    this.resumeRegistry.cacheResponse(response.thread.id, response);
     return response;
   }
 

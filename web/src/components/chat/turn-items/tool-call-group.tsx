@@ -32,6 +32,7 @@ export function ToolCallGroup({ items, children }: Props) {
     <div className="overflow-hidden rounded-lg border border-border/50 bg-muted/30">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50"
       >

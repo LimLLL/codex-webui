@@ -26,30 +26,43 @@ export function ToolCallItem({ item }: Props) {
     prevCompleted.current = item.completed;
   }, [item.completed]);
 
+  const headerClasses = cn(
+    'flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors',
+    hasBody && 'cursor-pointer hover:bg-muted/50',
+  );
+
+  const headerContent = (
+    <>
+      {hasBody && (
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 transition-transform duration-200',
+            open && 'rotate-90',
+          )}
+        />
+      )}
+      <span className="font-medium">
+        {item.toolServer}/{item.toolName}
+      </span>
+      {!item.completed && <Loader2 className="h-3 w-3 animate-spin" />}
+      {item.completed && <span className="text-green-500">{t('done')}</span>}
+    </>
+  );
+
   return (
     <div className="overflow-hidden rounded-lg border border-border/50 bg-muted/30">
-      <button
-        type="button"
-        onClick={() => hasBody && setOpen((v) => !v)}
-        className={cn(
-          'flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors',
-          hasBody && 'cursor-pointer hover:bg-muted/50',
-        )}
-      >
-        {hasBody && (
-          <ChevronRight
-            className={cn(
-              'h-3 w-3 shrink-0 transition-transform duration-200',
-              open && 'rotate-90',
-            )}
-          />
-        )}
-        <span className="font-medium">
-          {item.toolServer}/{item.toolName}
-        </span>
-        {!item.completed && <Loader2 className="h-3 w-3 animate-spin" />}
-        {item.completed && <span className="text-green-500">{t('done')}</span>}
-      </button>
+      {hasBody ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className={headerClasses}
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <div className={headerClasses}>{headerContent}</div>
+      )}
 
       {open && (
         <>

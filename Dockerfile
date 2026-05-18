@@ -102,14 +102,6 @@ RUN pnpm install --frozen-lockfile --prod
 RUN npx --yes node-gyp rebuild --directory=node_modules/node-pty || true \
   && npx --yes node-gyp rebuild --directory=node_modules/better-sqlite3 || true
 
-# Remove build tools no longer needed (saves ~100MB+)
-RUN apt-get purge -y --auto-remove \
-    build-essential pkg-config make g++ \
-    libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
-    libsqlite3-dev libffi-dev liblzma-dev \
-    tk-dev uuid-dev xz-utils \
-  && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm/_npx
-
 # Copy built assets and migrations
 COPY --from=backend-builder /app/dist ./dist/
 COPY --from=backend-builder /app/public ./public/
