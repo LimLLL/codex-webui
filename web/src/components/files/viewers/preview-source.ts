@@ -1,5 +1,6 @@
 /** Source abstraction shared by workspace files and read-only archive entries. */
 import { getApiToken, getAuthorizationHeader, buildFileServeUrl } from '@/auth-token';
+import { withBasePath } from '@/base-path';
 
 export type PreviewSource =
   | { kind: 'file'; filePath: string }
@@ -38,7 +39,7 @@ export function buildPreviewUrl(source: PreviewSource): string {
   const token = getApiToken();
   const params = new URLSearchParams({ path: source.archivePath, entry: source.entryPath });
   if (token) params.set('access_token', token);
-  return `/api/files/archive/entry?${params.toString()}`;
+  return `${withBasePath('/api/files/archive/entry')}?${params.toString()}`;
 }
 
 /** Builds fetch headers for preview API calls that can send Authorization. */

@@ -230,6 +230,41 @@ server {
 
 Docker Compose 中使用时，`proxy_pass` 改为 `http://codex-webui:8172`，并将 `ports` 改为 `expose`。
 
+### 部署到子目录
+
+若公开地址不是域名根目录（例如 `https://cc.example.com/codex/`），前端必须在构建时使用相同的基础路径。该参数会同时配置静态资源、前端路由、REST API 和 Socket.IO 路径：
+
+```bash
+docker build \
+  --build-arg WEBUI_BASE_PATH=/codex/ \
+  --build-arg CODEX_CLI_VERSION=0.149.1 \
+  -t codex-webui:0.149.1-codex .
+```
+
+Nginx 必须保留浏览器侧的 `/codex/` 前缀，并在转发到后端时将它移除。`location` 和 `proxy_pass` 末尾的 `/` 均不可省略：
+
+```nginx
+location = /codex {
+    return 301 /codex/;
+}
+
+location /codex/ {
+    proxy_pass http://127.0.0.1:8172/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Forwarded-Prefix /codex;
+    proxy_read_timeout 300s;
+}
+```
+
+`WEBUI_BASE_PATH` 是 Docker **构建参数**，不是运行时环境变量。修改路径后需要重新构建镜像。若使用 OnlyOffice，请将 `general.publicBaseUrl` 设置为包含子目录的完整地址，例如 `https://cc.example.com/codex`。
+
 ### Caddy
 
 Caddy 自动签发 Let's Encrypt 证书，自动处理 WebSocket 升级：

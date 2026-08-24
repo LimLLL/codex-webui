@@ -5,6 +5,8 @@ WORKDIR /app/web
 COPY web/package.json web/pnpm-lock.yaml* web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+ARG WEBUI_BASE_PATH=/
+ENV WEBUI_BASE_PATH=${WEBUI_BASE_PATH}
 RUN pnpm build
 
 # ── Stage 2: Backend build ───────────────────────────────────────────
@@ -19,7 +21,7 @@ RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY tsconfig*.json nest-cli.json ./
 # Generate codex schema types (needs codex CLI)
-ARG CODEX_CLI_VERSION=0.149.0
+ARG CODEX_CLI_VERSION=0.149.1
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION}
 COPY --from=frontend-builder /app/public ./public/
 RUN pnpm build
@@ -84,7 +86,7 @@ RUN node --version \
  && mise --version
 
 # Install global npm tools (codex + MCP utilities)
-ARG CODEX_CLI_VERSION=0.149.0
+ARG CODEX_CLI_VERSION=0.149.1
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
 RUN npm install -g \
     @openai/codex@${CODEX_CLI_VERSION} \
