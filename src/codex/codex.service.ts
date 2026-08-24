@@ -5,6 +5,7 @@
 import { Injectable } from '@nestjs/common';
 import { CodexProcessManager } from './codex-process-manager.service';
 import type { CodexJsonRpcClient } from './codex-jsonrpc-client';
+import { CodexUnavailableError } from './codex-errors';
 
 @Injectable()
 export class CodexService {
@@ -18,7 +19,7 @@ export class CodexService {
   getClient(): CodexJsonRpcClient {
     const client = this.processManager.getClient();
     if (!client) {
-      throw new Error('Codex app-server is not connected');
+      throw new CodexUnavailableError();
     }
     return client;
   }

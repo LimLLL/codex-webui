@@ -143,7 +143,12 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
         if (block.type === 'localImage' && block.path) images.push(block.path);
         else if (block.type === 'image' && block.url) images.push(block.url);
       }
-      entries.push({ kind: 'user', content: text, ...(images.length > 0 && { images }) });
+      entries.push({
+        kind: 'user',
+        content: text,
+        turnId: turn.id,
+        ...(images.length > 0 && { images }),
+      });
     }
 
     const plan = parsePersistedPlan(items);
@@ -309,6 +314,30 @@ function ensureTurnEntry(timeline: TimelineEntry[], turnId: string): TimelineEnt
     return timeline;
   }
   return [...timeline, { kind: 'turn', turnId, items: [], completed: false }];
+}
+
+/**
+ * Binds a started turn to the optimistically appended user message.
+ *
+ * Messages are rendered before `turn/start` returns, so the newest unbound user
+ * entry is the one this turn belongs to. Without the binding the message would
+ * carry no turn id until the next hydration, and could not be branched.
+ */
+function bindPendingUserMessage(
+  timeline: TimelineEntry[],
+  turnId: string,
+): TimelineEntry[] {
+  if (timeline.some((entry) => entry.kind === 'user' && entry.turnId === turnId)) {
+    return timeline;
+  }
+  const index = timeline.findLastIndex(
+    (entry) => entry.kind === 'user' && entry.turnId === undefined,
+  );
+  if (index < 0) return timeline;
+
+  const next = [...timeline];
+  next[index] = { ...next[index], turnId } as TimelineEntry;
+  return next;
 }
 
 /** After hydration, preserve turn entries for pending user-input requests. */
@@ -1015,7 +1044,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     setActiveTurnIdForThread: (threadId, turnId) => {
-      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, activeTurnId: turnId }));
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        activeTurnId: turnId,
+        timeline: turnId
+          ? bindPendingUserMessage(runtime.timeline, turnId)
+          : runtime.timeline,
+      }));
     },
 
     clearActiveTurnForThread: (threadId) => {

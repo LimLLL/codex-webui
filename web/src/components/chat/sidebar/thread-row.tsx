@@ -33,6 +33,11 @@ interface Props {
   pendingApprovalCount?: number;
   /** True while this thread is blocked on user input. */
   waitingOnUserInput?: boolean;
+  /**
+   * True when message branches descend from this thread. Compaction rewrites
+   * earlier turns, and those branches read this history by reference.
+   */
+  hasBranchDescendants?: boolean;
   onOpen: () => void;
   onRename: () => void;
   onArchive: () => void;
@@ -51,6 +56,7 @@ export function ThreadRow({
   pendingApproval = false,
   pendingApprovalCount = 0,
   waitingOnUserInput = false,
+  hasBranchDescendants = false,
   onOpen,
   onRename,
   onArchive,
@@ -132,7 +138,12 @@ export function ThreadRow({
             <Button
               variant="ghost"
               className="h-7 w-full justify-start gap-2 px-2 text-xs"
-              disabled={destructiveDisabled || actionPending}
+              disabled={destructiveDisabled || actionPending || hasBranchDescendants}
+              title={
+                hasBranchDescendants
+                  ? t('This conversation has message versions branching from it.')
+                  : undefined
+              }
               onClick={onCompact}
             >
               <Minimize2 className="h-3.5 w-3.5" />

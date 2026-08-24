@@ -101,7 +101,6 @@ export const ErrorCode = {
     invalidSortKey: 'threads.invalid_sort_key',
     invalidModel: 'threads.invalid_model',
     invalidEffort: 'threads.invalid_effort',
-    invalidRollbackTurns: 'threads.invalid_rollback_turns',
     invalidName: 'threads.invalid_name',
     invalidInput: 'threads.invalid_input',
     /** Params: { index } */
@@ -114,6 +113,17 @@ export const ErrorCode = {
     invalidInputType: 'threads.invalid_input_type',
     invalidApprovalPolicy: 'threads.invalid_approval_policy',
     invalidSandboxMode: 'threads.invalid_sandbox_mode',
+    paginatedHistoryRequired: 'threads.paginated_history_required',
+    branchEditedTurnRequired: 'threads.branch_edited_turn_required',
+    branchEditedTurnNotFound: 'threads.branch_edited_turn_not_found',
+    branchEditedTurnNotUserMessage:
+      'threads.branch_edited_turn_not_user_message',
+    branchThreadInProgress: 'threads.branch_thread_in_progress',
+    branchInvalidBoundary: 'threads.branch_invalid_boundary',
+    branchForkUnsupported: 'threads.branch_fork_unsupported',
+    branchPrefixMismatch: 'threads.branch_prefix_mismatch',
+    branchMetadataFailed: 'threads.branch_metadata_failed',
+    compactBlockedByDescendants: 'threads.compact_blocked_by_descendants',
   },
 
   // ── Settings ───────────────────────────────────────────────────────
@@ -193,6 +203,8 @@ export const ErrorCode = {
 
   // ── Codex Config ───────────────────────────────────────────────────
   codex: {
+    rpcError: 'codex.rpc_error',
+    serverUnavailable: 'codex.server_unavailable',
     rawContentInvalid: 'codex.raw_content_invalid',
     editsNotArray: 'codex.edits_not_array',
     /** Params: { index } */

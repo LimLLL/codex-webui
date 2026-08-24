@@ -4,11 +4,17 @@
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Send, Square, TerminalSquare } from 'lucide-react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { threadsInterruptTurnMutation, threadsStartTurnMutation, threadsSteerTurnMutation } from '@/generated/api/@tanstack/react-query.gen';
+import {
+  threadsInterruptTurnMutation,
+  threadsListBranchTreesQueryKey,
+  threadsReadBranchTreeQueryKey,
+  threadsStartTurnMutation,
+  threadsSteerTurnMutation,
+} from '@/generated/api/@tanstack/react-query.gen';
 import { cn } from '@/lib/utils';
 import { getApiErrorMessage } from '@/lib/api-error';
 import { useTimelineStore } from '@/stores/timeline-store';
@@ -113,8 +119,22 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   }), [addFileMention]);
 
   // ── Turn mutations ───────────────────────────────────────
+  const queryClient = useQueryClient();
   const startTurn = useMutation({
     ...threadsStartTurnMutation(),
+    onSuccess: (_res, vars) => {
+      // A branch version has no turn until its edited message is sent; the
+      // backend binds it during turn/start, so the cached tree is now stale and
+      // the version switcher would stay hidden until it happened to refetch.
+      void queryClient.invalidateQueries({
+        queryKey: threadsReadBranchTreeQueryKey({
+          path: { threadId: vars.path.threadId },
+        }),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: threadsListBranchTreesQueryKey(),
+      });
+    },
     onError: (err) => addSystemError(getApiErrorMessage(err)),
   });
   const steer = useMutation({

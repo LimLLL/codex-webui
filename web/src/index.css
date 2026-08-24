@@ -115,6 +115,10 @@ body {
   --glass-4-blur: 24px;
   --glass-5-surface: rgba(255, 255, 255, 0.35);
   --glass-5-blur: 40px;
+  /* Modal surfaces sit on the black scrim, where a lightly tinted white panel
+     composites to grey (50% black under 35% white lands near #ACACAC). They
+     therefore stay near-opaque in this theme; see .glass-modal. */
+  --glass-modal-surface: rgba(255, 255, 255, 0.92);
   --glass-border: rgba(255, 255, 255, 0.20);
   --glass-border-subtle: rgba(255, 255, 255, 0.10);
   --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -171,6 +175,9 @@ body {
   --glass-4-blur: 24px;
   --glass-5-surface: rgba(255, 255, 255, 0.16);
   --glass-5-blur: 40px;
+  /* Scrim and surface both darken here, so the plain glass tint already reads
+     correctly and modals need no special case. */
+  --glass-modal-surface: var(--glass-5-surface);
   --glass-border: rgba(255, 255, 255, 0.12);
   --glass-border-subtle: rgba(255, 255, 255, 0.06);
   --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.20);
@@ -246,6 +253,16 @@ body {
 
 .glass-5 {
   background: var(--glass-5-surface);
+  -webkit-backdrop-filter: blur(var(--glass-5-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-5-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow-lg), var(--glass-inset);
+}
+
+/* Glass level 5 for panels layered over a modal scrim. Identical to .glass-5
+   except for the surface tint, which the scrim would otherwise wash out. */
+.glass-modal {
+  background: var(--glass-modal-surface);
   -webkit-backdrop-filter: blur(var(--glass-5-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-5-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-border);

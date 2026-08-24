@@ -5,6 +5,7 @@ import {
   primaryKey,
   sqliteTable,
   text,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 export const tokenUsageSnapshots = sqliteTable(
@@ -125,3 +126,118 @@ export const turnErrors = sqliteTable(
 
 export type TurnErrorRow = typeof turnErrors.$inferSelect;
 export type InsertTurnErrorRow = typeof turnErrors.$inferInsert;
+
+/**
+ * Grouping key stored when the edited message is the first turn, i.e. the
+ * common prefix is empty. Turn ids are uuids, so this never collides.
+ */
+export const BRANCH_START_SENTINEL = '__start__';
+
+/**
+ * One logical message-version group inside a locally tracked branch tree.
+ *
+ * Identified by `(treeRootThreadId, commonPrefixTurnId)`. The grouping key is
+ * the last turn of the common prefix — not the edited turn — because editing
+ * the same logical message from inside a branch names a different edited turn
+ * each time while the prefix stays identical.
+ */
+export const conversationBranchGroups = sqliteTable(
+  'conversation_branch_groups',
+  {
+    groupId: text('group_id').primaryKey(),
+    treeRootThreadId: text('tree_root_thread_id').notNull(),
+    /** Last turn id of the common prefix, or `BRANCH_START_SENTINEL`. */
+    commonPrefixTurnId: text('common_prefix_turn_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('uidx_branch_groups_root_prefix').on(
+      table.treeRootThreadId,
+      table.commonPrefixTurnId,
+    ),
+    index('idx_branch_groups_root').on(table.treeRootThreadId),
+  ],
+);
+
+export type ConversationBranchGroup =
+  typeof conversationBranchGroups.$inferSelect;
+export type InsertConversationBranchGroup =
+  typeof conversationBranchGroups.$inferInsert;
+
+/**
+ * A concrete sibling version for one edited user-message group.
+ *
+ * A thread appears once per group it participates in, so the same thread can
+ * hold several rows: the root thread is the `original` version of every group
+ * created from one of its own turns.
+ */
+export const conversationBranchVersions = sqliteTable(
+  'conversation_branch_versions',
+  {
+    versionId: text('version_id').primaryKey(),
+    groupId: text('group_id').notNull(),
+    threadId: text('thread_id').notNull(),
+    /** 1-based position rendered as `< n/m >`. */
+    versionIndex: integer('version_index').notNull(),
+    /** `original` for the pre-existing continuation, `branch` for forks. */
+    kind: text('kind').notNull(),
+    /** Turn carrying this version's user message; null until the turn starts. */
+    messageTurnId: text('message_turn_id'),
+    previewText: text('preview_text').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('uidx_branch_versions_group_thread').on(
+      table.groupId,
+      table.threadId,
+    ),
+    uniqueIndex('uidx_branch_versions_group_index').on(
+      table.groupId,
+      table.versionIndex,
+    ),
+    index('idx_branch_versions_thread').on(table.threadId),
+    index('idx_branch_versions_group').on(table.groupId),
+  ],
+);
+
+export type ConversationBranchVersion =
+  typeof conversationBranchVersions.$inferSelect;
+export type InsertConversationBranchVersion =
+  typeof conversationBranchVersions.$inferInsert;
+
+/**
+ * Fork edge captured locally because app-server does not expose the boundary.
+ *
+ * Recorded per child thread rather than per version row: a thread has exactly
+ * one origin, but participates in as many version groups as it has edited
+ * turns, so inlining provenance into version rows would duplicate it.
+ */
+export const conversationBranchEdges = sqliteTable(
+  'conversation_branch_edges',
+  {
+    childThreadId: text('child_thread_id').primaryKey(),
+    parentThreadId: text('parent_thread_id').notNull(),
+    treeRootThreadId: text('tree_root_thread_id').notNull(),
+    /** Turn the fork excluded; the child's history stops right before it. */
+    forkBeforeTurnId: text('fork_before_turn_id').notNull(),
+    commonPrefixTurnId: text('common_prefix_turn_id').notNull(),
+    /**
+     * JSON array of turn ids this child inherited from its ancestors, captured
+     * from the fork response. Bounds provenance read-through so a child never
+     * reads per-turn data its parent produced after the fork point.
+     */
+    inheritedTurnIds: text('inherited_turn_ids').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('idx_branch_edges_parent').on(table.parentThreadId),
+    index('idx_branch_edges_root').on(table.treeRootThreadId),
+  ],
+);
+
+export type ConversationBranchEdge =
+  typeof conversationBranchEdges.$inferSelect;
+export type InsertConversationBranchEdge =
+  typeof conversationBranchEdges.$inferInsert;

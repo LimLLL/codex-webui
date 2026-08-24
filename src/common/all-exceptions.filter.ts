@@ -3,6 +3,9 @@
  * { statusCode, errorCode, message, params? }
  *
  * - BusinessException: uses its errorCode + params directly.
+ * - CodexUnavailableError: 503, app-server not connected.
+ * - CodexRpcError: 400 or 502 depending on the JSON-RPC code, with the
+ *   app-server message forwarded so the client can explain the refusal.
  * - Other HttpException: falls back to a status-based error code.
  * - Unknown errors: 500 + http.internal_error.
  */
@@ -14,6 +17,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
+import { CodexRpcError, CodexUnavailableError } from '../codex/codex-errors';
 import { ErrorCode } from './error-codes';
 import type { ErrorCodeValue } from './error-codes';
 import { BusinessException } from './business.exception';
@@ -24,6 +28,9 @@ interface ErrorResponseBody {
   message: string | string[];
   params?: Record<string, string | number>;
 }
+
+/** JSON-RPC "Invalid Request"; app-server's catch-all for rejected calls. */
+const JSONRPC_INVALID_REQUEST = -32600;
 
 /** Maps common HTTP status codes to fallback error codes. */
 const STATUS_FALLBACK_CODES: Partial<Record<number, ErrorCodeValue>> = {
@@ -55,6 +62,32 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
       if (exception.params) body.params = exception.params;
       void response.status(status).send(body);
+      return;
+    }
+
+    if (exception instanceof CodexUnavailableError) {
+      void response.status(503).send({
+        statusCode: 503,
+        errorCode: ErrorCode.codex.serverUnavailable,
+        message: exception.message,
+      } satisfies ErrorResponseBody);
+      return;
+    }
+
+    if (exception instanceof CodexRpcError) {
+      // -32600 is app-server refusing the request as posed (a client problem);
+      // anything else is a transport or internal fault on its side.
+      const status = exception.code === JSONRPC_INVALID_REQUEST ? 400 : 502;
+      const params: Record<string, string | number> = {
+        rpcCode: exception.code,
+      };
+      if (exception.method) params.method = exception.method;
+      void response.status(status).send({
+        statusCode: status,
+        errorCode: ErrorCode.codex.rpcError,
+        message: exception.rpcMessage,
+        params,
+      } satisfies ErrorResponseBody);
       return;
     }
 

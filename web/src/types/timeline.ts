@@ -39,7 +39,17 @@ export interface TurnItem {
 
 /** A user message, system message, or a full AI turn. */
 export type TimelineEntry =
-  | { kind: 'user'; content: string; images?: string[] }
+  | {
+      kind: 'user';
+      content: string;
+      images?: string[];
+      /**
+       * Turn this message opened. Absent between optimistic append and the
+       * `turn/started` notification, which is also exactly the window in which
+       * the message cannot be branched.
+       */
+      turnId?: string;
+    }
   | { kind: 'system'; content: string; severity?: 'info' | 'warning' | 'error'; turnId?: string }
   | {
       kind: 'turn';

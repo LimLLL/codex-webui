@@ -1,5 +1,6 @@
 import { ChildProcess } from 'node:child_process';
 import { EventEmitter, Readable, Writable } from 'node:stream';
+import { CodexRpcError } from './codex-errors';
 import { CodexJsonRpcClient } from './codex-jsonrpc-client';
 
 function createMockProcess(): ChildProcess {
@@ -37,14 +38,22 @@ describe('CodexJsonRpcClient', () => {
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
-  it('should reject request on error response', async () => {
+  it('should reject request on structured error response', async () => {
     const promise = client.request('test/fail', {});
 
     proc.stdout!.push(
-      JSON.stringify({ id: 1, error: { code: -1, message: 'boom' } }) + '\n',
+      JSON.stringify({
+        id: 1,
+        error: { code: -1, message: 'boom', data: { reason: 'bad' } },
+      }) + '\n',
     );
 
-    await expect(promise).rejects.toThrow('RPC error -1: boom');
+    await expect(promise).rejects.toMatchObject({
+      code: -1,
+      data: { reason: 'bad' },
+      method: 'test/fail',
+      requestId: 1,
+    } satisfies Partial<CodexRpcError>);
   });
 
   it('should emit notification events', (done) => {
@@ -86,7 +95,7 @@ describe('CodexJsonRpcClient', () => {
 
     const promise = client.initialize({
       clientInfo: { name: 'test', title: null, version: '0.0.1' },
-      capabilities: { experimentalApi: false },
+      capabilities: { experimentalApi: false, requestAttestation: false },
     });
 
     proc.stdout!.push(

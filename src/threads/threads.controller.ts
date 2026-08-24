@@ -32,6 +32,12 @@ import {
   OkResponseDto,
 } from '../common/dto/api-responses.dto';
 import type { v2 } from '../codex/codex-schema';
+import {
+  BranchStateDto,
+  BranchTreeDto,
+  CreateMessageBranchDto,
+  CreateMessageBranchResponseDto,
+} from '../conversation-branches/dto/conversation-branches.dto';
 import { REASONING_EFFORT_VALUES } from '../codex/dto/v2/openapi.schema';
 import { FilesService } from '../files/files.service';
 import { ThreadsService } from './threads.service';
@@ -45,8 +51,6 @@ import {
   ThreadReadResponseDto,
   ThreadResumeResponseDto,
   SteerTurnDto,
-  ThreadRollbackRequestDto,
-  ThreadRollbackResponseDto,
   ThreadSetNameRequestDto,
   ThreadStartResponseDto,
   ThreadUnarchiveResponseDto,
@@ -66,7 +70,14 @@ const USER_INPUT_TYPES = [
 
 @ApiTags('threads')
 @ApiBearerAuth()
-@ApiExtraModels(...CODEX_V2_EXTRA_MODELS, ApiErrorResponseDto, OkResponseDto)
+@ApiExtraModels(
+  ...CODEX_V2_EXTRA_MODELS,
+  ApiErrorResponseDto,
+  OkResponseDto,
+  BranchStateDto,
+  BranchTreeDto,
+  CreateMessageBranchResponseDto,
+)
 @ApiUnauthorizedResponse({ type: ApiErrorResponseDto })
 @Controller('threads')
 export class ThreadsController {
@@ -168,6 +179,13 @@ export class ThreadsController {
     });
   }
 
+  @Get('branch-trees')
+  @ApiOperation({ summary: 'List locally tracked conversation branch trees' })
+  @ApiOkResponse({ type: [BranchTreeDto] })
+  listBranchTrees() {
+    return this.threadsService.listBranchTrees();
+  }
+
   @Get(':threadId')
   @ApiOperation({ summary: 'Read a thread by ID' })
   @ApiQuery({ name: 'includeTurns', required: false, type: Boolean })
@@ -177,6 +195,22 @@ export class ThreadsController {
     @Query('includeTurns') includeTurns?: string,
   ) {
     return this.threadsService.readThread(threadId, includeTurns === 'true');
+  }
+
+  @Get(':threadId/branch-state')
+  @ApiOperation({ summary: 'Read branch operation state for a thread' })
+  @ApiOkResponse({ type: BranchStateDto })
+  readBranchState(@Param('threadId') threadId: string) {
+    return this.threadsService.readBranchState(threadId);
+  }
+
+  @Get(':threadId/branch-tree')
+  @ApiOperation({
+    summary: 'Read the locally tracked branch tree for a thread',
+  })
+  @ApiOkResponse({ type: BranchTreeDto })
+  readBranchTree(@Param('threadId') threadId: string) {
+    return this.threadsService.readBranchTree(threadId);
   }
 
   @Post(':threadId/resume')
@@ -278,33 +312,23 @@ export class ThreadsController {
     await this.threadsService.compactThread(threadId);
   }
 
+  @Post(':threadId/branches')
+  @ApiOperation({ summary: 'Create a message-level conversation branch' })
+  @ApiBody({ type: CreateMessageBranchDto })
+  @ApiCreatedResponse({ type: CreateMessageBranchResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async createMessageBranch(
+    @Param('threadId') threadId: string,
+    @Body() body: CreateMessageBranchDto,
+  ) {
+    return this.threadsService.createMessageBranch(threadId, body);
+  }
+
   @Post(':threadId/fork')
   @ApiOperation({ summary: 'Fork a thread' })
   @ApiCreatedResponse({ type: ThreadForkResponseDto })
   async forkThread(@Param('threadId') threadId: string) {
     return this.threadsService.forkThread(threadId);
-  }
-
-  @Post(':threadId/rollback')
-  @ApiOperation({ summary: 'Rollback turns from a thread' })
-  @ApiBody({ type: ThreadRollbackRequestDto })
-  @ApiCreatedResponse({ type: ThreadRollbackResponseDto })
-  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
-  async rollbackThread(
-    @Param('threadId') threadId: string,
-    @Body() body: ThreadRollbackRequestDto,
-  ) {
-    if (
-      typeof body?.numTurns !== 'number' ||
-      !Number.isInteger(body.numTurns) ||
-      body.numTurns < 1
-    ) {
-      throw BusinessException.badRequest(
-        ErrorCode.threads.invalidRollbackTurns,
-        'numTurns must be a positive integer',
-      );
-    }
-    return this.threadsService.rollbackThread(threadId, body.numTurns);
   }
 
   @Patch(':threadId/name')

@@ -10,9 +10,11 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification } from '../codex/codex-schema';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { selectProvenanceRows } from '../conversation-branches/provenance';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import { turnDiffs } from '../database/schema';
 import type {
@@ -34,6 +36,7 @@ export class TurnDiffService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly codexManager: CodexProcessManager,
+    private readonly branches: ConversationBranchesService,
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
   ) {}
 
@@ -57,20 +60,28 @@ export class TurnDiffService implements OnModuleInit, OnModuleDestroy {
     this.flushAll();
   }
 
-  /** Reads all persisted turn diffs for a thread. */
+  /**
+   * Reads all persisted turn diffs visible to a thread.
+   *
+   * Branched threads inherit their prefix turns' diffs from ancestors rather
+   * than owning copies of those rows.
+   */
   readThreadDiffs(threadId: string): ThreadTurnDiffsResponseDto {
+    const provenance = this.branches.resolveProvenance(threadId);
     const rows = this.db
       .select()
       .from(turnDiffs)
-      .where(eq(turnDiffs.threadId, threadId))
+      .where(inArray(turnDiffs.threadId, provenance.threadIds))
       .orderBy(turnDiffs.updatedAt)
       .all();
 
-    const turns: TurnDiffEntryDto[] = rows.map((row) => ({
-      turnId: row.turnId,
-      diff: row.diff,
-      updatedAt: row.updatedAt,
-    }));
+    const turns: TurnDiffEntryDto[] = selectProvenanceRows(provenance, rows)
+      .map((row) => ({
+        turnId: row.turnId,
+        diff: row.diff,
+        updatedAt: row.updatedAt,
+      }))
+      .sort((a, b) => a.updatedAt - b.updatedAt);
 
     return { threadId, turns };
   }

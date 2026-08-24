@@ -43,6 +43,13 @@
       "when": 1779416398517,
       "tag": "0005_melted_mister_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787572967354,
+      "tag": "0006_groovy_carmella_unuscione",
+      "breakpoints": true
     }
   ]
 }

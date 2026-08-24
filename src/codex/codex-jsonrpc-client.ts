@@ -20,6 +20,7 @@ import type {
   ServerNotification,
   ServerRequest,
 } from './codex-schema';
+import { CodexRpcError } from './codex-errors';
 
 /** Wire-level JSON-RPC message (jsonrpc field omitted per Codex protocol). */
 interface JsonRpcRequest {
@@ -42,6 +43,7 @@ interface JsonRpcResponse {
 type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
 interface PendingRequest {
+  method: string;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -122,6 +124,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
       }, timeoutMs ?? this.requestTimeoutMs);
 
       this.pending.set(id, {
+        method,
         resolve: resolve,
         reject,
         timer,
@@ -260,9 +263,10 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
 
       if (response.error) {
         pending.reject(
-          new Error(
-            `RPC error ${response.error.code}: ${response.error.message}`,
-          ),
+          new CodexRpcError(response.error, {
+            method: pending.method,
+            requestId: response.id,
+          }),
         );
       } else {
         pending.resolve(response.result);

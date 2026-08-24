@@ -52,12 +52,6 @@ export class TurnSteerResponseDto {
   turnId!: string;
 }
 
-/** Request body for rolling back turns from a thread. */
-export class ThreadRollbackRequestDto {
-  @ApiProperty({ minimum: 1, type: Number })
-  numTurns!: number;
-}
-
 /** Request body for setting a user-facing thread name. */
 export class ThreadSetNameRequestDto {
   @ApiProperty({ minLength: 1 })
@@ -71,7 +65,6 @@ export {
   ThreadLoadedListResponseDto,
   ThreadReadResponseDto,
   ThreadResumeResponseDto,
-  ThreadRollbackResponseDto,
   ThreadStartResponseDto,
   ThreadUnarchiveResponseDto,
   TurnStartResponseDto,

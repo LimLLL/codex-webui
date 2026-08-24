@@ -6,7 +6,6 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bot, Loader2, Pencil } from 'lucide-react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   AlertDialog,
@@ -24,22 +23,15 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import {
-  threadsListThreadsQueryKey,
-  threadsRollbackThreadMutation,
-} from '@/generated/api/@tanstack/react-query.gen';
-import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs } from '@/generated/api/sdk.gen';
+  useCreateMessageBranch,
+  useMessageVersions,
+  type MessageVersions,
+} from '@/hooks/use-message-branches';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { TimelineEntry } from '@/types/timeline';
+import { MessageVersionSwitcher } from './message-version-switcher';
 import { TurnBlock } from './turn-block';
 import { UserMessageBubble } from './user-message-bubble';
-
-/** Counts how many turns need to be rolled back when editing this user message. */
-function computeRollbackTurns(timeline: TimelineEntry[], userIndex: number): number {
-  const turnEntries = timeline
-    .slice(userIndex)
-    .filter((e): e is Extract<TimelineEntry, { kind: 'turn' }> => e.kind === 'turn');
-  return turnEntries.length;
-}
 
 /** Returns true if the scroll container is near the bottom. */
 function isNearBottom(el: HTMLElement, threshold = 120): boolean {
@@ -58,20 +50,20 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const threadMode = useTimelineStore((s) => s.threadMode);
   const loading = useTimelineStore((s) => s.loading);
-  const hydrateTimeline = useTimelineStore((s) => s.hydrateTimeline);
-  const hydrateTokenUsage = useTimelineStore((s) => s.hydrateTokenUsage);
-  const hydrateTurnDiffs = useTimelineStore((s) => s.hydrateTurnDiffs);
-  const [rollbackTarget, setRollbackTarget] = useState<{
-    numTurns: number;
+  const [editTarget, setEditTarget] = useState<{
+    turnId: string;
     content: string;
   } | null>(null);
-  const queryClient = useQueryClient();
 
-  const rollbackThread = useMutation({
-    ...threadsRollbackThreadMutation(),
+  const { versionsByTurnId } = useMessageVersions(threadId);
+  const createBranch = useCreateMessageBranch((text) => {
+    setEditTarget(null);
+    if (text) onEditMessage?.(text);
   });
 
-  const canRollback = threadMode === 'live' && !loading && !rollbackThread.isPending;
+  // A turn cannot be branched while the conversation is busy, and the newest
+  // user message has no turn id until `turn/started` arrives.
+  const canBranch = threadMode === 'live' && !loading && !createBranch.isPending;
 
   // ── Virtualizer ─────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -135,9 +127,12 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const virtualItems = virtualizer.getVirtualItems();
 
   // ── Empty states ────────────────────────────────────────────────────
+  // Uses the same scroll container as the populated list: switching versions
+  // passes through this state, and a gutter that appears and disappears with it
+  // would shift the whole message column sideways.
   if (timeline.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto [scrollbar-gutter:stable]">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
             <Loader2 className="mb-3 h-8 w-8 animate-spin opacity-40" />
@@ -160,10 +155,13 @@ export function ChatTimeline({ onEditMessage }: Props) {
   // ── Virtualized list ────────────────────────────────────────────────
   return (
     <>
+      {/* `scrollbar-gutter` keeps the gutter reserved: switching versions swaps
+          the timeline through an empty state, and letting the scrollbar come and
+          go with it visibly shifts every message sideways. */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
       >
         <div
           className="relative px-3 sm:px-4 lg:px-6"
@@ -184,11 +182,10 @@ export function ChatTimeline({ onEditMessage }: Props) {
                 >
                   <TimelineEntryRow
                     entry={entry}
-                    index={virtualItem.index}
-                    timeline={timeline}
                     threadCwd={threadCwd}
-                    canRollback={canRollback}
-                    onRollback={setRollbackTarget}
+                    canBranch={canBranch}
+                    versionsByTurnId={versionsByTurnId}
+                    onEdit={setEditTarget}
                     t={t}
                   />
                 </div>
@@ -198,42 +195,27 @@ export function ChatTimeline({ onEditMessage }: Props) {
         </div>
       </div>
 
-      <AlertDialog open={rollbackTarget !== null} onOpenChange={(open) => !open && setRollbackTarget(null)}>
+      <AlertDialog open={editTarget !== null} onOpenChange={(open) => !open && setEditTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('Edit this message?')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t('This will remove this turn and all subsequent turns. File changes will NOT be reverted.')}
+              {t('This creates a new version of the message. The current conversation is kept as a sibling version you can switch back to. File changes will NOT be reverted.')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
             <AlertDialogAction
-              disabled={rollbackThread.isPending}
+              disabled={createBranch.isPending}
               onClick={() => {
-                if (!threadId || !rollbackTarget || rollbackTarget.numTurns < 1) return;
-                const editContent = rollbackTarget.content;
-                rollbackThread.mutate(
-                  {
-                    path: { threadId },
-                    body: { numTurns: rollbackTarget.numTurns },
+                if (!threadId || !editTarget) return;
+                createBranch.mutate({
+                  path: { threadId },
+                  body: {
+                    editedTurnId: editTarget.turnId,
+                    previewText: editTarget.content,
                   },
-                  {
-                    onSuccess: (res) => {
-                      const tid = res.thread.id;
-                      hydrateTimeline(res.thread.turns, res.thread.cwd);
-                      void tokenUsageReadThreadTokenUsage({ path: { threadId: tid } })
-                        .then(({ data }) => data && hydrateTokenUsage(data.turns))
-                        .catch(() => undefined);
-                      void turnDiffReadThreadTurnDiffs({ path: { threadId: tid } })
-                        .then(({ data }) => data && hydrateTurnDiffs(data.turns))
-                        .catch(() => undefined);
-                      setRollbackTarget(null);
-                      void queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
-                      if (editContent) onEditMessage?.(editContent);
-                    },
-                  },
-                );
+                });
               }}
             >
               {t('Confirm')}
@@ -248,23 +230,22 @@ export function ChatTimeline({ onEditMessage }: Props) {
 /** Renders a single timeline entry (user message, system message, or turn block). */
 function TimelineEntryRow({
   entry,
-  index,
-  timeline,
   threadCwd,
-  canRollback,
-  onRollback,
+  canBranch,
+  versionsByTurnId,
+  onEdit,
   t,
 }: {
   entry: TimelineEntry;
-  index: number;
-  timeline: TimelineEntry[];
   threadCwd: string | null;
-  canRollback: boolean;
-  onRollback: (target: { numTurns: number; content: string }) => void;
+  canBranch: boolean;
+  versionsByTurnId: Map<string, MessageVersions>;
+  onEdit: (target: { turnId: string; content: string }) => void;
   t: (key: string) => string;
 }) {
   if (entry.kind === 'user') {
-    const numTurns = computeRollbackTurns(timeline, index);
+    const turnId = entry.turnId;
+    const versions = turnId ? versionsByTurnId.get(turnId) : undefined;
     return (
       <div className="group/user flex flex-col items-end">
         <div
@@ -276,23 +257,30 @@ function TimelineEntryRow({
         >
           <UserMessageBubble content={entry.content} threadCwd={threadCwd} images={entry.images} />
         </div>
-        {canRollback && numTurns > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('Edit this message')}
-                className="mt-1 flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/user:opacity-100"
-                onClick={() => onRollback({ numTurns, content: entry.content })}
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {t('Edit this message')}
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* Reserved even when empty so revealing the controls cannot shift layout. */}
+        <div className="mt-1 flex h-6 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">
+          {versions && <MessageVersionSwitcher versions={versions} />}
+          {/* Rendered whenever the message has a turn, disabled rather than
+              removed — dropping it mid-switch would move the version switcher. */}
+          {turnId && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={t('Edit this message')}
+                  disabled={!canBranch}
+                  className="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                  onClick={() => onEdit({ turnId, content: entry.content })}
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {t('Edit this message')}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
     );
   }

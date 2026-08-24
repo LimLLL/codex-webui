@@ -52,7 +52,6 @@ import {
   ThreadLoadedListResponseDto,
   ThreadReadResponseDto,
   ThreadResumeResponseDto,
-  ThreadRollbackResponseDto,
   ThreadStartResponseDto,
   ThreadUnarchiveResponseDto,
   TurnStartResponseDto,
@@ -94,7 +93,6 @@ export const CODEX_V2_EXTRA_MODELS = [
   ThreadListResponseDto,
   ThreadLoadedListResponseDto,
   ThreadUnarchiveResponseDto,
-  ThreadRollbackResponseDto,
   TurnStartResponseDto,
   ModelListResponseDto,
 ] as const;

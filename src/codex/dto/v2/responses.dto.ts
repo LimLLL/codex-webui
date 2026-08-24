@@ -77,12 +77,6 @@ export class ThreadUnarchiveResponseDto {
   thread!: ThreadDto;
 }
 
-/** v2 ThreadRollbackResponse mirror. */
-export class ThreadRollbackResponseDto {
-  @ApiProperty({ type: () => ThreadDto })
-  thread!: ThreadDto;
-}
-
 /** v2 TurnStartResponse mirror. */
 export class TurnStartResponseDto {
   @ApiProperty({ type: () => TurnDto })

@@ -25,8 +25,15 @@ describe('TurnErrorsService', () => {
     `);
     emitter = new EventEmitter();
     const db = drizzle(sqlite, { schema }) as AppDatabase;
+    const branches = {
+      resolveProvenance: (threadId: string) => ({
+        threadIds: [threadId],
+        inheritedTurnIds: null,
+      }),
+    };
     service = new TurnErrorsService(
       emitter as unknown as CodexProcessManager,
+      branches as never,
       db,
     );
     service.onModuleInit();

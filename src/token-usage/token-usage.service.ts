@@ -1,8 +1,10 @@
 /** Persists token usage snapshots from Codex app-server notifications. */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, v2 } from '../codex/codex-schema';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { selectProvenanceRows } from '../conversation-branches/provenance';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
   tokenUsageSnapshots,
@@ -20,6 +22,7 @@ export class TokenUsageService implements OnModuleInit {
 
   constructor(
     private readonly codexManager: CodexProcessManager,
+    private readonly branches: ConversationBranchesService,
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
   ) {}
 
@@ -33,16 +36,24 @@ export class TokenUsageService implements OnModuleInit {
     );
   }
 
-  /** Reads all snapshots for a thread, ordered by their latest update time. */
+  /**
+   * Reads all snapshots visible to a thread, ordered by their update time.
+   *
+   * Branched threads inherit their prefix turns' usage from ancestors rather
+   * than owning copies of those rows.
+   */
   readThreadUsage(threadId: string): ThreadTokenUsageResponseDto {
+    const provenance = this.branches.resolveProvenance(threadId);
     const rows = this.db
       .select()
       .from(tokenUsageSnapshots)
-      .where(eq(tokenUsageSnapshots.threadId, threadId))
+      .where(inArray(tokenUsageSnapshots.threadId, provenance.threadIds))
       .orderBy(tokenUsageSnapshots.updatedAt)
       .all();
 
-    const turns = rows.map((row) => this.toTurnUsage(row));
+    const turns = selectProvenanceRows(provenance, rows)
+      .map((row) => this.toTurnUsage(row))
+      .sort((a, b) => a.updatedAt - b.updatedAt);
     return {
       threadId,
       turns,
@@ -52,15 +63,7 @@ export class TokenUsageService implements OnModuleInit {
 
   /** Reads the latest snapshot only; used by recovery paths that do not need history. */
   readLatestThreadUsage(threadId: string): TurnTokenUsageDto | null {
-    const row = this.db
-      .select()
-      .from(tokenUsageSnapshots)
-      .where(eq(tokenUsageSnapshots.threadId, threadId))
-      .orderBy(desc(tokenUsageSnapshots.updatedAt))
-      .limit(1)
-      .get();
-
-    return row ? this.toTurnUsage(row) : null;
+    return this.readThreadUsage(threadId).latest;
   }
 
   private upsertFromNotification(

@@ -2,6 +2,20 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ThreadsService } from './threads.service';
 import { CodexService } from '../codex/codex.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { ErrorCode } from '../common/error-codes';
+import { ThreadsBranchingService } from './threads-branching.service';
+
+/** Branch state as the local-only service reports it for an untracked thread. */
+function localBranchState(threadId: string) {
+  return {
+    threadId,
+    treeRootThreadId: threadId,
+    tracked: false,
+    hasKnownDescendants: false,
+    knownTreeThreadIds: [threadId],
+  };
+}
 
 describe('ThreadsService', () => {
   let service: ThreadsService;
@@ -10,6 +24,20 @@ describe('ThreadsService', () => {
     ensureResumed: jest.fn(),
     markResumed: jest.fn(),
     cacheResponse: jest.fn(),
+    forget: jest.fn(),
+  };
+  const mockBranches = {
+    attachPendingVersionTurn: jest.fn(),
+    hasKnownDescendants: jest.fn(),
+    listKnownTreeThreadIds: jest.fn(),
+    listBranchTrees: jest.fn(),
+    readBranchState: jest.fn(),
+    readBranchTree: jest.fn(),
+    recordMessageBranch: jest.fn(),
+    resolveTreeRootThreadId: jest.fn(),
+  };
+  const mockBranching = {
+    createMessageBranch: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -18,24 +46,54 @@ describe('ThreadsService', () => {
         ThreadsService,
         { provide: CodexService, useValue: mockCodex },
         { provide: ThreadResumeRegistryService, useValue: mockResumeRegistry },
+        { provide: ConversationBranchesService, useValue: mockBranches },
+        { provide: ThreadsBranchingService, useValue: mockBranching },
       ],
     }).compile();
 
     service = module.get(ThreadsService);
     mockCodex.request.mockReset();
-    mockResumeRegistry.ensureResumed.mockReset();
-    mockResumeRegistry.markResumed.mockReset();
+    Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
+    Object.values(mockBranches).forEach((mock) => mock.mockReset());
+    mockBranching.createMessageBranch.mockReset();
+    mockBranches.hasKnownDescendants.mockReturnValue(false);
+    mockBranches.listKnownTreeThreadIds.mockImplementation(
+      (threadId: string): string[] => [threadId],
+    );
+    mockBranches.resolveTreeRootThreadId.mockImplementation(
+      (threadId: string): string => threadId,
+    );
   });
 
-  it('should call thread/start', async () => {
-    const response = { thread: { id: 't1' }, model: 'gpt-4' };
+  it('starts new threads in paginated history mode', async () => {
+    const response = {
+      thread: { id: 't1', historyMode: 'paginated' },
+      model: 'gpt-4',
+    };
     mockCodex.request.mockResolvedValue(response);
 
     const result = await service.startThread({});
 
     expect(result).toEqual(response);
-    expect(mockCodex.request).toHaveBeenCalledWith('thread/start', {});
+    expect(mockCodex.request).toHaveBeenCalledWith('thread/start', {
+      historyMode: 'paginated',
+    });
     expect(mockResumeRegistry.markResumed).toHaveBeenCalledWith('t1');
+  });
+
+  it('deletes a new thread when paginated history is not confirmed', async () => {
+    mockCodex.request
+      .mockResolvedValueOnce({ thread: { id: 't1', historyMode: 'legacy' } })
+      .mockResolvedValueOnce({});
+
+    await expect(service.startThread({})).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.paginatedHistoryRequired,
+    });
+
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/delete', {
+      threadId: 't1',
+    });
+    expect(mockResumeRegistry.markResumed).not.toHaveBeenCalled();
   });
 
   it('should call thread/list with params', async () => {
@@ -90,6 +148,11 @@ describe('ThreadsService', () => {
       threadId: 't1',
       input: [{ type: 'text', text: 'hello' }],
     });
+    expect(mockBranches.attachPendingVersionTurn).toHaveBeenCalledWith(
+      't1',
+      'turn1',
+      'hello',
+    );
   });
 
   it('should call turn/steer', async () => {
@@ -116,6 +179,135 @@ describe('ThreadsService', () => {
     expect(mockCodex.request).toHaveBeenCalledWith('turn/interrupt', {
       threadId: 't1',
       turnId: 'turn1',
+    });
+  });
+
+  it('archives every locally tracked member of a branch tree', async () => {
+    mockBranches.listKnownTreeThreadIds.mockReturnValue(['root', 'child']);
+    mockCodex.request.mockResolvedValue({});
+
+    await service.archiveThread('child');
+
+    expect(mockCodex.request).toHaveBeenNthCalledWith(1, 'thread/archive', {
+      threadId: 'root',
+    });
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/archive', {
+      threadId: 'child',
+    });
+    expect(mockResumeRegistry.forget).toHaveBeenCalledWith('root');
+    expect(mockResumeRegistry.forget).toHaveBeenCalledWith('child');
+  });
+
+  it('attempts every tree member before reporting an archive failure', async () => {
+    mockBranches.listKnownTreeThreadIds.mockReturnValue(['root', 'child']);
+    mockCodex.request
+      .mockRejectedValueOnce(new Error('root archive failed'))
+      .mockResolvedValueOnce({});
+
+    await expect(service.archiveThread('child')).rejects.toThrow(
+      'root archive failed',
+    );
+
+    // Stopping at the first failure would leave the tree half-archived.
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/archive', {
+      threadId: 'child',
+    });
+  });
+
+  it('blocks compaction when a thread has known descendants', async () => {
+    mockBranches.readBranchState.mockReturnValue({
+      ...localBranchState('root'),
+      hasKnownDescendants: true,
+    });
+    mockCodex.request.mockResolvedValue({ data: [], nextCursor: null });
+
+    await expect(service.compactThread('root')).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.compactBlockedByDescendants,
+    });
+
+    expect(mockCodex.request).not.toHaveBeenCalledWith(
+      'thread/compact/start',
+      expect.anything(),
+    );
+  });
+
+  it('blocks compaction when app-server exposes an external fork descendant', async () => {
+    mockBranches.readBranchState.mockReturnValue(localBranchState('root'));
+    mockCodex.request
+      .mockResolvedValueOnce({
+        data: [{ id: 'child', forkedFromId: 'root' }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({ data: [], nextCursor: null });
+
+    await expect(service.compactThread('root')).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.compactBlockedByDescendants,
+    });
+
+    // Archived forks still read the parent's history, so both pages matter.
+    expect(mockCodex.request).toHaveBeenNthCalledWith(1, 'thread/list', {
+      cursor: undefined,
+      limit: 200,
+      archived: false,
+      modelProviders: [],
+    });
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/list', {
+      cursor: undefined,
+      limit: 200,
+      archived: true,
+      modelProviders: [],
+    });
+  });
+
+  it('answers branch state from local topology without listing threads', () => {
+    const state = localBranchState('root');
+    mockBranches.readBranchState.mockReturnValue(state);
+
+    expect(service.readBranchState('root')).toBe(state);
+    expect(mockCodex.request).not.toHaveBeenCalled();
+  });
+
+  it('delegates tracked message branch creation', async () => {
+    const response = {
+      fork: { thread: { id: 'child' } },
+      tree: {
+        treeRootThreadId: 'root',
+        tracked: true,
+        members: [],
+        groups: [],
+      },
+      group: {
+        groupId: 'group',
+        treeRootThreadId: 'root',
+        commonPrefixTurnId: null,
+        createdAt: 1,
+        updatedAt: 1,
+        versions: [],
+      },
+      version: {
+        versionId: 'version',
+        groupId: 'group',
+        threadId: 'child',
+        versionIndex: 2,
+        kind: 'branch',
+        messageTurnId: null,
+        previewText: 'edited',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    };
+    mockBranching.createMessageBranch.mockResolvedValue(response);
+
+    await expect(
+      service.createMessageBranch('source', {
+        editedTurnId: 'turn-a',
+        previewText: 'edited',
+      }),
+    ).resolves.toBe(response);
+
+    expect(mockBranching.createMessageBranch).toHaveBeenCalledWith('source', {
+      editedTurnId: 'turn-a',
+      previewText: 'edited',
     });
   });
 });

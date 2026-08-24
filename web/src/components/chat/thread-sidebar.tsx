@@ -15,6 +15,7 @@ import {
   threadsArchiveThreadMutation,
   threadsCompactThreadMutation,
   threadsForkThreadMutation,
+  threadsListBranchTreesOptions,
   threadsListThreadsOptions,
   threadsListThreadsQueryKey,
   threadsResumeThreadMutation,
@@ -29,7 +30,13 @@ import { useLayoutStore } from '@/stores/layout-store';
 import { cn } from '@/lib/utils';
 import { getApiErrorMessage } from '@/lib/api-error';
 import type { ConfirmAction } from './sidebar/sidebar-types';
-import { threadLabel, groupByWorkspace } from './sidebar/sidebar-types';
+import {
+  threadLabel,
+  groupByWorkspace,
+  buildBranchMemberIndex,
+  buildBranchRootIndex,
+  collapseBranchThreads,
+} from './sidebar/sidebar-types';
 import { ThreadRow } from './sidebar/thread-row';
 import { WorkspaceOverview } from './sidebar/workspace-overview';
 import { WorkspaceDetail } from './sidebar/workspace-detail';
@@ -110,10 +117,39 @@ export function ThreadSidebar() {
     enabled: sidebarView.type !== 'overview',
   });
 
-  const activeThreads = useMemo(() => overviewThreadsQuery.data?.data ?? [], [overviewThreadsQuery.data]);
-  const archivedThreads = useMemo(() => overviewArchivedQuery.data?.data ?? [], [overviewArchivedQuery.data]);
+  const branchTreesQuery = useQuery({
+    ...threadsListBranchTreesOptions(),
+    staleTime: 30_000,
+  });
+
+  // Branch members are versions of a message, not conversations of their own,
+  // so they are folded into the row of their tree root everywhere threads list.
+  const branchRootIndex = useMemo(
+    () => buildBranchRootIndex(branchTreesQuery.data),
+    [branchTreesQuery.data],
+  );
+  const branchMemberIndex = useMemo(
+    () => buildBranchMemberIndex(branchTreesQuery.data),
+    [branchTreesQuery.data],
+  );
+  const activeThreads = useMemo(
+    () => collapseBranchThreads(overviewThreadsQuery.data?.data ?? [], branchRootIndex),
+    [overviewThreadsQuery.data, branchRootIndex],
+  );
+  const archivedThreads = useMemo(
+    () => collapseBranchThreads(overviewArchivedQuery.data?.data ?? [], branchRootIndex),
+    [overviewArchivedQuery.data, branchRootIndex],
+  );
   const workspaceGroups = useMemo(() => groupByWorkspace(activeThreads), [activeThreads]);
-  const detailThreads = detailQuery.data?.data ?? [];
+  const detailThreads = useMemo(
+    () => collapseBranchThreads(detailQuery.data?.data ?? [], branchRootIndex),
+    [detailQuery.data, branchRootIndex],
+  );
+
+  // A deep link to a branch must light up the root row the branch lives under.
+  const highlightedThreadId = threadId
+    ? (branchRootIndex.get(threadId) ?? threadId)
+    : null;
 
   const invalidateThreads = () => {
     void queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
@@ -157,13 +193,30 @@ export function ThreadSidebar() {
     void navigate({ to: '/t/$threadId', params: { threadId: thread.id } });
   };
 
+  /**
+   * Leaves an archived conversation, accounting for whole-tree archival.
+   *
+   * Archiving a root archives its hidden branches too, so the check cannot be
+   * "am I on the row that was archived" — the user may be sitting on a branch
+   * that has no row of its own.
+   */
   const switchAfterArchive = (archivedId: string) => {
     const current = useTimelineStore.getState();
-    if (current.threadId !== archivedId || current.threadMode !== 'live') return;
+    const archivedTree = new Set([
+      archivedId,
+      ...(branchMemberIndex.get(archivedId) ?? []),
+    ]);
+    if (
+      !current.threadId ||
+      !archivedTree.has(current.threadId) ||
+      current.threadMode !== 'live'
+    ) {
+      return;
+    }
     const idx = activeThreads.findIndex((th) => th.id === archivedId);
     const next =
-      activeThreads.slice(idx + 1).find((th) => th.id !== archivedId) ??
-      activeThreads.slice(0, idx).find((th) => th.id !== archivedId);
+      activeThreads.slice(idx + 1).find((th) => !archivedTree.has(th.id)) ??
+      activeThreads.slice(0, idx).find((th) => !archivedTree.has(th.id));
     if (next) openLiveThread(next);
     else { clearThread(); void navigate({ to: '/' }); }
   };
@@ -182,18 +235,26 @@ export function ThreadSidebar() {
   const archiveThread = useMutation({
     ...threadsArchiveThreadMutation(),
     onSuccess: (_res, vars) => {
-      useTimelineStore.getState().unsubscribeThread(vars.path.threadId);
-      invalidateThreads();
+      const treeIds = [
+        vars.path.threadId,
+        ...(branchMemberIndex.get(vars.path.threadId) ?? []),
+      ];
+      for (const id of treeIds) useTimelineStore.getState().unsubscribeThread(id);
       switchAfterArchive(vars.path.threadId);
     },
+    // Whole-tree archival can fail partway through, leaving some members
+    // archived; the list is stale either way, so refresh on settled.
+    onSettled: () => invalidateThreads(),
+    onError: (err) => addSystemError(getApiErrorMessage(err)),
   });
 
   const unarchiveThread = useMutation({
     ...threadsUnarchiveThreadMutation(),
     onSuccess: (res) => {
-      invalidateThreads();
       if (threadId === res.thread.id && threadMode === 'readOnly') openLiveThread(res.thread);
     },
+    onSettled: () => invalidateThreads(),
+    onError: (err) => addSystemError(getApiErrorMessage(err)),
   });
 
   const compactThread = useMutation({
@@ -264,23 +325,33 @@ export function ThreadSidebar() {
 
   // ── Shared thread-row renderer (passed to overview/detail) ──────────
   const renderThreadRow = (thread: ThreadDto, archived: boolean) => {
-    const runtime = thread.id === threadId
-      ? { loading, approvals, threadStatus }
-      : threadsById[thread.id];
-    const isRunning = Boolean(runtime?.loading);
-    const activeFlags = runtime?.threadStatus?.type === 'active'
-      ? runtime.threadStatus.activeFlags
-      : [];
+    const readRuntime = (id: string) =>
+      id === threadId ? { loading, approvals, threadStatus } : threadsById[id];
+
+    // A hidden branch has no row of its own, so anything that needs the user's
+    // attention inside it has to surface on the tree's visible root row.
+    const treeRuntimes = [
+      readRuntime(thread.id),
+      ...(branchMemberIndex.get(thread.id) ?? []).map(readRuntime),
+    ].filter((runtime) => runtime !== undefined);
+
+    const isRunning = treeRuntimes.some((runtime) => runtime.loading);
+    const activeFlags = treeRuntimes.flatMap((runtime) =>
+      runtime.threadStatus?.type === 'active' ? runtime.threadStatus.activeFlags : [],
+    );
     // Count hydrated pending approvals (source of truth for badge).
-    const pendingApprovalCount = Object.values(runtime?.approvals ?? {}).filter(
-      (a) => a.status === 'pending',
-    ).length;
+    const pendingApprovalCount = treeRuntimes.reduce(
+      (total, runtime) =>
+        total +
+        Object.values(runtime.approvals ?? {}).filter((a) => a.status === 'pending').length,
+      0,
+    );
     const waitingOnApproval =
       activeFlags.includes('waitingOnApproval') || pendingApprovalCount > 0;
     const waitingOnUserInput = activeFlags.includes('waitingOnUserInput');
     // "Generating" = thread active but not blocked on any user-facing request.
     const generating =
-      runtime?.threadStatus?.type === 'active' &&
+      treeRuntimes.some((runtime) => runtime.threadStatus?.type === 'active') &&
       !waitingOnApproval &&
       !waitingOnUserInput;
 
@@ -289,13 +360,14 @@ export function ThreadSidebar() {
         key={thread.id}
         thread={thread}
         archived={archived}
-        isActive={thread.id === threadId && activeView === 'chat'}
+        isActive={thread.id === highlightedThreadId && activeView === 'chat'}
         destructiveDisabled={isRunning}
         actionPending={forkThread.isPending || unarchiveThread.isPending}
         running={generating || isRunning}
         pendingApproval={waitingOnApproval}
         pendingApprovalCount={pendingApprovalCount}
         waitingOnUserInput={waitingOnUserInput}
+        hasBranchDescendants={branchMemberIndex.has(thread.id)}
         onOpen={() => { if (archived) void openArchivedThread(thread); else openLiveThread(thread); }}
         onRename={() => startRename(thread)}
         onArchive={() => setConfirmAction({ type: 'archive', thread })}

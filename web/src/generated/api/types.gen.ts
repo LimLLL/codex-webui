@@ -1056,10 +1056,6 @@ export type ThreadUnarchiveResponseDto = {
     thread: ThreadDto;
 };
 
-export type ThreadRollbackResponseDto = {
-    thread: ThreadDto;
-};
-
 export type TurnStartResponseDto = {
     turn: TurnDto;
 };
@@ -1067,6 +1063,67 @@ export type TurnStartResponseDto = {
 export type ModelListResponseDto = {
     data: Array<ModelDto>;
     nextCursor: string | null;
+};
+
+export type BranchStateDto = {
+    threadId: string;
+    treeRootThreadId: string;
+    /**
+     * Whether this client knows any branch metadata.
+     */
+    tracked: boolean;
+    /**
+     * Blocks compaction and deletion: descendants read this history.
+     */
+    hasKnownDescendants: boolean;
+    knownTreeThreadIds: Array<string>;
+};
+
+export type BranchTreeMemberDto = {
+    threadId: string;
+    parentThreadId?: string | null;
+    hasChildren: boolean;
+};
+
+export type BranchVersionDto = {
+    versionId: string;
+    groupId: string;
+    threadId: string;
+    versionIndex: number;
+    kind: 'original' | 'branch';
+    /**
+     * Turn carrying this version's message; null until it starts.
+     */
+    messageTurnId?: string | null;
+    previewText: string;
+    createdAt: number;
+    updatedAt: number;
+};
+
+export type BranchGroupDto = {
+    groupId: string;
+    treeRootThreadId: string;
+    /**
+     * Last turn of the common prefix; null when the first turn was edited.
+     */
+    commonPrefixTurnId?: string | null;
+    createdAt: number;
+    updatedAt: number;
+    versions: Array<BranchVersionDto>;
+};
+
+export type BranchTreeDto = {
+    treeRootThreadId: string;
+    tracked: boolean;
+    members: Array<BranchTreeMemberDto>;
+    groups: Array<BranchGroupDto>;
+};
+
+export type CreateMessageBranchResponseDto = {
+    fork: ThreadForkResponseDto;
+    tree: BranchTreeDto;
+    group: BranchGroupDto;
+    version: BranchVersionDto;
 };
 
 export type CreateThreadDto = {
@@ -1095,8 +1152,15 @@ export type TurnSteerResponseDto = {
     turnId: string;
 };
 
-export type ThreadRollbackRequestDto = {
-    numTurns: number;
+export type CreateMessageBranchDto = {
+    /**
+     * Turn id of the user message being edited.
+     */
+    editedTurnId: string;
+    /**
+     * Preview text for the edited version before the new turn exists.
+     */
+    previewText?: string;
 };
 
 export type ThreadSetNameRequestDto = {
@@ -2292,6 +2356,25 @@ export type ThreadsListLoadedThreadsResponses = {
 
 export type ThreadsListLoadedThreadsResponse = ThreadsListLoadedThreadsResponses[keyof ThreadsListLoadedThreadsResponses];
 
+export type ThreadsListBranchTreesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/threads/branch-trees';
+};
+
+export type ThreadsListBranchTreesErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsListBranchTreesError = ThreadsListBranchTreesErrors[keyof ThreadsListBranchTreesErrors];
+
+export type ThreadsListBranchTreesResponses = {
+    200: Array<BranchTreeDto>;
+};
+
+export type ThreadsListBranchTreesResponse = ThreadsListBranchTreesResponses[keyof ThreadsListBranchTreesResponses];
+
 export type ThreadsReadThreadData = {
     body?: never;
     path: {
@@ -2314,6 +2397,48 @@ export type ThreadsReadThreadResponses = {
 };
 
 export type ThreadsReadThreadResponse = ThreadsReadThreadResponses[keyof ThreadsReadThreadResponses];
+
+export type ThreadsReadBranchStateData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/branch-state';
+};
+
+export type ThreadsReadBranchStateErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsReadBranchStateError = ThreadsReadBranchStateErrors[keyof ThreadsReadBranchStateErrors];
+
+export type ThreadsReadBranchStateResponses = {
+    200: BranchStateDto;
+};
+
+export type ThreadsReadBranchStateResponse = ThreadsReadBranchStateResponses[keyof ThreadsReadBranchStateResponses];
+
+export type ThreadsReadBranchTreeData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/branch-tree';
+};
+
+export type ThreadsReadBranchTreeErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsReadBranchTreeError = ThreadsReadBranchTreeErrors[keyof ThreadsReadBranchTreeErrors];
+
+export type ThreadsReadBranchTreeResponses = {
+    200: BranchTreeDto;
+};
+
+export type ThreadsReadBranchTreeResponse = ThreadsReadBranchTreeResponses[keyof ThreadsReadBranchTreeResponses];
 
 export type ThreadsResumeThreadData = {
     body?: never;
@@ -2466,6 +2591,28 @@ export type ThreadsCompactThreadResponses = {
 
 export type ThreadsCompactThreadResponse = ThreadsCompactThreadResponses[keyof ThreadsCompactThreadResponses];
 
+export type ThreadsCreateMessageBranchData = {
+    body: CreateMessageBranchDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/branches';
+};
+
+export type ThreadsCreateMessageBranchErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsCreateMessageBranchError = ThreadsCreateMessageBranchErrors[keyof ThreadsCreateMessageBranchErrors];
+
+export type ThreadsCreateMessageBranchResponses = {
+    201: CreateMessageBranchResponseDto;
+};
+
+export type ThreadsCreateMessageBranchResponse = ThreadsCreateMessageBranchResponses[keyof ThreadsCreateMessageBranchResponses];
+
 export type ThreadsForkThreadData = {
     body?: never;
     path: {
@@ -2486,28 +2633,6 @@ export type ThreadsForkThreadResponses = {
 };
 
 export type ThreadsForkThreadResponse = ThreadsForkThreadResponses[keyof ThreadsForkThreadResponses];
-
-export type ThreadsRollbackThreadData = {
-    body: ThreadRollbackRequestDto;
-    path: {
-        threadId: string;
-    };
-    query?: never;
-    url: '/api/threads/{threadId}/rollback';
-};
-
-export type ThreadsRollbackThreadErrors = {
-    400: ApiErrorResponseDto;
-    401: ApiErrorResponseDto;
-};
-
-export type ThreadsRollbackThreadError = ThreadsRollbackThreadErrors[keyof ThreadsRollbackThreadErrors];
-
-export type ThreadsRollbackThreadResponses = {
-    201: ThreadRollbackResponseDto;
-};
-
-export type ThreadsRollbackThreadResponse = ThreadsRollbackThreadResponses[keyof ThreadsRollbackThreadResponses];
 
 export type ThreadsSetThreadNameData = {
     body: ThreadSetNameRequestDto;

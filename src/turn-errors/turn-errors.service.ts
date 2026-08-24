@@ -1,8 +1,10 @@
 /** Persists final turn errors from Codex app-server notifications for hydration after refresh. */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification } from '../codex/codex-schema';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { selectProvenanceRows } from '../conversation-branches/provenance';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import { turnErrors, type TurnErrorRow } from '../database/schema';
 import type {
@@ -16,6 +18,7 @@ export class TurnErrorsService implements OnModuleInit {
 
   constructor(
     private readonly codexManager: CodexProcessManager,
+    private readonly branches: ConversationBranchesService,
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
   ) {}
 
@@ -32,18 +35,26 @@ export class TurnErrorsService implements OnModuleInit {
     );
   }
 
-  /** Reads all persisted turn errors for a thread. */
+  /**
+   * Reads all persisted turn errors visible to a thread.
+   *
+   * Branched threads inherit their prefix turns' errors from ancestors rather
+   * than owning copies of those rows.
+   */
   readThreadErrors(threadId: string): ThreadTurnErrorsResponseDto {
+    const provenance = this.branches.resolveProvenance(threadId);
     const rows = this.db
       .select()
       .from(turnErrors)
-      .where(eq(turnErrors.threadId, threadId))
+      .where(inArray(turnErrors.threadId, provenance.threadIds))
       .orderBy(turnErrors.createdAt)
       .all();
 
     return {
       threadId,
-      errors: rows.map((row) => this.toDto(row)),
+      errors: selectProvenanceRows(provenance, rows)
+        .map((row) => this.toDto(row))
+        .sort((a, b) => a.createdAt - b.createdAt),
     };
   }
 
