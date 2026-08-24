@@ -26,8 +26,8 @@ RUN npm install -g @openai/codex@${CODEX_CLI_VERSION}
 COPY --from=frontend-builder /app/public ./public/
 RUN pnpm build
 
-# ── Stage 3: Runtime ─────────────────────────────────────────────────
-FROM debian:trixie-slim AS runtime
+# ── Stage 3: Shared runtime system ───────────────────────────────────
+FROM debian:trixie-slim AS runtime-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
@@ -71,6 +71,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN command -v 7za >/dev/null
 
+# ── Stage 4: Root toolchain seed ─────────────────────────────────────
+# Build the user toolchain outside the final image. The final image receives
+# only the compressed seed, avoiding a second copy of the same /root tree in
+# its immutable layers.
+FROM runtime-base AS toolchain-builder
+
 # Install mise + runtimes
 RUN curl -fsSL https://mise.run | sh
 
@@ -96,23 +102,13 @@ RUN npm install -g \
 # Enable corepack for pnpm (needed for native addon rebuild)
 RUN npm install -g pnpm@10.18.3
 
-# Create app directories
-RUN mkdir -p /root/.codex /workspaces /app/logs
+# Caches are installation by-products, not part of the user toolchain.
+RUN mkdir -p /root/.codex /opt \
+ && rm -rf /root/.cache /root/.npm \
+ && tar -C /root -czf /opt/root-seed.tar.gz .
 
-# Workaround: codex on Linux app-server mode doesn't inject arg0 tools into
-# child process PATH. Create stable symlinks so apply_patch etc. are always
-# available. All arg0 tools are the codex multi-call binary (argv[0] dispatch).
-RUN CODEX_BIN="$(find /root/.local/share/mise -name codex -path '*/vendor/*/codex/codex' -type f 2>/dev/null | head -1)" \
- && if [ -n "$CODEX_BIN" ]; then \
-      for tool in apply_patch applypatch codex-execve-wrapper codex-linux-sandbox; do \
-        ln -sf "$CODEX_BIN" "/usr/local/bin/$tool"; \
-      done; \
-      echo "Linked codex arg0 tools -> $CODEX_BIN"; \
-    else \
-      echo "WARNING: codex vendor binary not found, arg0 tools not linked"; \
-    fi
-
-# ── App installation ─────────────────────────────────────────────────
+# ── Stage 5: Production Node dependencies ────────────────────────────
+FROM toolchain-builder AS app-deps-builder
 WORKDIR /app
 
 # Install production dependencies and rebuild native addons
@@ -121,14 +117,24 @@ RUN pnpm install --frozen-lockfile --prod
 RUN npx --yes node-gyp rebuild --directory=node_modules/node-pty || true \
   && npx --yes node-gyp rebuild --directory=node_modules/better-sqlite3 || true
 
+# ── Stage 6: Runtime ─────────────────────────────────────────────────
+FROM runtime-base AS runtime
+
+ARG CODEX_CLI_VERSION=0.149.1
+ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
+
+WORKDIR /app
+
+# The toolchain exists only once in the final image and is restored into a
+# mounted /root on first start.
+COPY --from=toolchain-builder /opt/root-seed.tar.gz /opt/root-seed.tar.gz
+COPY --from=app-deps-builder /app/node_modules ./node_modules/
+COPY package.json pnpm-lock.yaml* ./
+
 # Copy built assets and migrations
 COPY --from=backend-builder /app/dist ./dist/
 COPY --from=backend-builder /app/public ./public/
 COPY drizzle/ ./drizzle/
-
-# ── Seed root tarball ────────────────────────────────────────────────
-# Captures mise, node, codex, mcp-tools, bashrc, configs
-RUN tar -C /root -czf /opt/root-seed.tar.gz .
 
 # ── Entrypoint ───────────────────────────────────────────────────────
 RUN cat > /usr/local/bin/entrypoint.sh <<'ENTRYPOINT_EOF'
@@ -138,6 +144,22 @@ set -euo pipefail
 ROOT_SEED="/opt/root-seed.tar.gz"
 ROOT_MARKER="/root/.codex-webui-initialized"
 VERSION_MARKER="/root/.codex-webui-version"
+
+rebuild_codex_arg0_symlinks() {
+  # Codex on Linux app-server mode does not inject its argv[0] tools into
+  # child-process PATH. All of these names dispatch through the same binary.
+  local codex_bin
+  codex_bin="$(find /root/.local/share/mise -type f -name codex \
+    \( -path '*/vendor/*/bin/codex' -o -path '*/vendor/*/codex/codex' \) \
+    2>/dev/null | head -1)"
+  if [ -n "${codex_bin}" ]; then
+    for tool in apply_patch applypatch codex-execve-wrapper codex-linux-sandbox; do
+      ln -sf "${codex_bin}" "/usr/local/bin/${tool}"
+    done
+  else
+    echo "[entrypoint] WARNING: Codex vendor binary not found; arg0 tools were not linked"
+  fi
+}
 
 is_root_empty() {
   find /root -mindepth 1 -maxdepth 1 -print -quit | grep -q . && return 1
@@ -173,18 +195,13 @@ if [ -n "${EXPECTED_VER}" ] && [ "${EXPECTED_VER}" != "${INSTALLED_VER}" ]; then
     echo "${EXPECTED_VER}" > "${VERSION_MARKER}"
     echo "[entrypoint] Codex upgraded to ${EXPECTED_VER}"
 
-    # Rebuild arg0 symlinks (codex multi-call binary may have moved)
-    CODEX_BIN="$(find /root/.local/share/mise -name codex -path '*/vendor/*/codex/codex' -type f 2>/dev/null | head -1)"
-    if [ -n "${CODEX_BIN}" ]; then
-      for tool in apply_patch applypatch codex-execve-wrapper codex-linux-sandbox; do
-        ln -sf "${CODEX_BIN}" "/usr/local/bin/${tool}"
-      done
-      echo "[entrypoint] Rebuilt arg0 symlinks -> ${CODEX_BIN}"
-    fi
   else
     echo "[entrypoint] WARNING: Codex upgrade failed, continuing with installed version"
   fi
 fi
+
+# Build or refresh stable Codex argv[0] links after seed restore and upgrades.
+rebuild_codex_arg0_symlinks
 
 # Ensure directories exist (in case volume is pre-populated but partial)
 mkdir -p /root/.codex /workspaces /app/logs
