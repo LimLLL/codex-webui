@@ -19,7 +19,7 @@ RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY tsconfig*.json nest-cli.json ./
 # Generate codex schema types (needs codex CLI)
-ARG CODEX_CLI_VERSION=0.123.0
+ARG CODEX_CLI_VERSION=0.149.0
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION}
 COPY --from=frontend-builder /app/public ./public/
 RUN pnpm build
@@ -84,7 +84,7 @@ RUN node --version \
  && mise --version
 
 # Install global npm tools (codex + MCP utilities)
-ARG CODEX_CLI_VERSION=0.123.0
+ARG CODEX_CLI_VERSION=0.149.0
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
 RUN npm install -g \
     @openai/codex@${CODEX_CLI_VERSION} \

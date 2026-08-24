@@ -1244,7 +1244,6 @@ export type PluginReadResponseDto = {
 export type PluginInstallRequestDto = {
     marketplacePath: string;
     pluginName: string;
-    forceRemoteSync?: boolean;
 };
 
 export type PluginInstallResponseDto = {
@@ -1254,7 +1253,6 @@ export type PluginInstallResponseDto = {
 
 export type PluginUninstallRequestDto = {
     pluginId: string;
-    forceRemoteSync?: boolean;
 };
 
 export type PluginUninstallResponseDto = {
@@ -2588,7 +2586,6 @@ export type PluginsListPluginsData = {
     body?: never;
     path?: never;
     query?: {
-        forceRemoteSync?: boolean;
         cwds?: Array<unknown>;
     };
     url: '/api/plugins';
