@@ -16,7 +16,7 @@ describe('public base path', () => {
     expect(normalizeForwardedPrefix(input)).toBe(expected);
   });
 
-  it.each(['codex', '/codex?<script>', '/codex#fragment', '/codex\\path']) (
+  it.each(['codex', '/codex?<script>', '/codex#fragment', '/codex\\path'])(
     'rejects unsafe value %p',
     (input) => {
       expect(normalizeForwardedPrefix(input)).toBe('/');
