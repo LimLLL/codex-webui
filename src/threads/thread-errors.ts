@@ -34,14 +34,27 @@ function isInvalidRequest(err: unknown): boolean {
 }
 
 /**
- * Returns true when the RPC error indicates a thread hasn't been materialized yet.
+ * Returns true when a thread has no turns to read yet.
  *
- * Deliberately not gated on the error code: this predicate guards resume/read
- * fallbacks that predate structured errors, and narrowing it would turn a
- * recoverable state into a hard failure if app-server changed the code.
+ * The two history modes report this same state differently, and neither the
+ * wording nor the code overlaps — measured against 0.149.1 on a thread created
+ * but never sent to:
+ *
+ * - legacy:    `-32600 ... is not materialized yet; includeTurns is
+ *              unavailable before first user message`
+ * - paginated: `-32601 list_turns is not supported yet` — it names the
+ *              unimplemented backing call rather than the state
+ *
+ * Deliberately not gated on the error code: the codes differ per mode (-32600
+ * vs -32601), and this predicate guards resume/read fallbacks where treating a
+ * recoverable state as fatal breaks thread creation outright.
  */
 export function isNotMaterializedError(err: unknown): boolean {
-  return /\bnot materialized\b/i.test(errorText(err));
+  const text = errorText(err);
+  return (
+    /\bnot materialized\b/i.test(text) ||
+    /\blist_turns is not supported\b/i.test(text)
+  );
 }
 
 /** Returns true when the app-server process is not connected. */
