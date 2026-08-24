@@ -16,7 +16,10 @@ import {
 } from '@/generated/api/@tanstack/react-query.gen';
 import { cn } from '@/lib/utils';
 
-const APPROVAL_OPTIONS = ['on-failure', 'on-request', 'never', 'untrusted'] as const;
+// Codex CLI >= 0.149.0 retired `untrusted` and `on-failure`; selecting either
+// would write a value the app-server rejects. Legacy values are still rendered
+// by describeApproval() so existing configs stay readable.
+const APPROVAL_OPTIONS = ['on-request', 'never'] as const;
 const SANDBOX_OPTIONS = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 
 interface ConfigSummary {

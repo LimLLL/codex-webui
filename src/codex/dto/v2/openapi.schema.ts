@@ -18,12 +18,15 @@ export const REASONING_EFFORT_VALUES = [
 export const SERVICE_TIER_VALUES = ['fast', 'flex'] as const;
 export const INPUT_MODALITY_VALUES = ['text', 'image'] as const;
 export const MESSAGE_PHASE_VALUES = ['commentary', 'final_answer'] as const;
-export const APPROVAL_POLICY_VALUES = [
-  'untrusted',
-  'on-failure',
-  'on-request',
-  'never',
-] as const;
+/**
+ * Approval policies accepted by Codex CLI >= 0.149.0.
+ *
+ * `on-failure` was dropped from the app-server `AskForApproval` enum, and
+ * `untrusted` was retired from the config schema (openai/codex#39630) — writing
+ * it back into config.toml makes the app-server refuse to start. `granular`
+ * is represented separately as an object payload.
+ */
+export const APPROVAL_POLICY_VALUES = ['on-request', 'never'] as const;
 export const APPROVALS_REVIEWER_VALUES = ['user', 'guardian_subagent'] as const;
 export const NETWORK_ACCESS_VALUES = ['restricted', 'enabled'] as const;
 export const THREAD_ACTIVE_FLAG_VALUES = [

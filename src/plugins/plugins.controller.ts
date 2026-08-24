@@ -36,12 +36,15 @@ export class PluginsController {
   @Get()
   @ApiOperation({ summary: 'List Codex plugin marketplaces' })
   @ApiQuery({ name: 'cwds', required: false, isArray: true })
+  @ApiQuery({ name: 'forceRefetch', required: false, type: Boolean })
   @ApiOkResponse({ type: PluginListResponseDto })
   listPlugins(
     @Query('cwds') cwds?: string | string[],
+    @Query('forceRefetch') forceRefetch?: string,
   ): Promise<v2.PluginListResponse> {
     return this.pluginsService.listPlugins({
       cwds: this.parseStringList(cwds),
+      forceRefetch: this.parseOptionalBoolean(forceRefetch, 'forceRefetch'),
     });
   }
 
@@ -115,6 +118,28 @@ export class PluginsController {
       );
     }
     return value.trim();
+  }
+
+  /**
+   * Parses an optional boolean query parameter.
+   *
+   * @param value - Raw query value; absent params arrive as undefined
+   * @param field - Field name used in the error payload
+   * @returns The parsed boolean, or undefined when the parameter is absent
+   * @throws BusinessException when the value is neither 'true' nor 'false'
+   */
+  private parseOptionalBoolean(
+    value: string | undefined,
+    field: string,
+  ): boolean | undefined {
+    if (value === undefined) return undefined;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw BusinessException.badRequest(
+      ErrorCode.validation.typeMismatch,
+      `${field} must be a boolean`,
+      { field, type: 'boolean' },
+    );
   }
 
   private parseStringList(value?: string | string[]): string[] | undefined {

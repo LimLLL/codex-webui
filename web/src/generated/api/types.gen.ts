@@ -317,7 +317,7 @@ export type CodexStatusResponseDto = {
 };
 
 export type UpdateApprovalPolicyDto = {
-    approvalPolicy: 'untrusted' | 'on-failure' | 'on-request' | 'never';
+    approvalPolicy: 'on-request' | 'never';
 };
 
 export type UpdateSandboxModeDto = {
@@ -1008,7 +1008,7 @@ export type ThreadStartResponseDto = {
     modelProvider: string;
     serviceTier: 'fast' | 'flex' | null;
     cwd: string;
-    approvalPolicy: 'untrusted' | 'on-failure' | 'on-request' | 'never' | GranularApprovalPolicyDto;
+    approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
@@ -1020,7 +1020,7 @@ export type ThreadResumeResponseDto = {
     modelProvider: string;
     serviceTier: 'fast' | 'flex' | null;
     cwd: string;
-    approvalPolicy: 'untrusted' | 'on-failure' | 'on-request' | 'never' | GranularApprovalPolicyDto;
+    approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
@@ -1032,7 +1032,7 @@ export type ThreadForkResponseDto = {
     modelProvider: string;
     serviceTier: 'fast' | 'flex' | null;
     cwd: string;
-    approvalPolicy: 'untrusted' | 'on-failure' | 'on-request' | 'never' | GranularApprovalPolicyDto;
+    approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
@@ -1072,7 +1072,7 @@ export type ModelListResponseDto = {
 export type CreateThreadDto = {
     model?: string;
     cwd?: string;
-    approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never' | GranularApprovalPolicyDto | null;
+    approvalPolicy?: 'on-request' | 'never' | GranularApprovalPolicyDto | null;
 };
 
 export type StartTurnDto = {
@@ -2586,6 +2586,7 @@ export type PluginsListPluginsData = {
     body?: never;
     path?: never;
     query?: {
+        forceRefetch?: boolean;
         cwds?: Array<unknown>;
     };
     url: '/api/plugins';
