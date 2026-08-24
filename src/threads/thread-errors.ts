@@ -81,14 +81,18 @@ export function isInvalidForkBoundaryError(err: unknown): boolean {
 }
 
 /**
- * Returns true when app-server refuses to mutate a thread others fork from.
+ * Returns true when app-server refuses to delete a thread others fork from.
  *
  * Paginated forks reference their parent's history instead of copying it, so
- * deleting or compacting an ancestor is rejected upstream.
+ * deletion is rejected upstream. Verified against 0.149.0, which answers with
+ * `-32600: cannot delete thread <id>: forked history still references it`.
+ *
+ * Note this covers deletion only — compaction of a thread with descendants is
+ * *not* rejected upstream; blocking it is our own guard. See ThreadsService.
  */
 export function isDescendantRejectedError(err: unknown): boolean {
   if (!isInvalidRequest(err)) return false;
-  return /\b(fork(ed|s)?|descendants?|child(ren)?|referenced)\b/i.test(
+  return /\b(fork(ed|s)?|descendants?|child(ren)?|referenc\w*)\b/i.test(
     errorText(err),
   );
 }

@@ -223,8 +223,12 @@ export class ThreadsService {
    * @param threadId - The thread identifier
    */
   async compactThread(threadId: string): Promise<void> {
-    // Compaction rewrites earlier turns, and paginated forks read this thread's
-    // history by reference, so descendants would observe a mutated base.
+    // This guard is ours, not a mirror of app-server: verified against 0.149.0,
+    // `thread/compact/start` accepts a thread that has forks (unlike
+    // `thread/delete`, which rejects it outright). We block it anyway because
+    // compaction rewrites earlier turns while paginated forks address their
+    // parent's history by ordinal and byte offset, so a descendant's base can
+    // silently stop lining up.
     const state = this.branches.readBranchState(threadId);
     // Local check first: it is authoritative and free, and must not be masked
     // by an app-server outage during the external scan below.
