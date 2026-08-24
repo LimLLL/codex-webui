@@ -6,7 +6,6 @@ services:
     #   context: .
     #   args:
     #     CODEX_CLI_VERSION: "0.149.1"
-    #     WEBUI_BASE_PATH: "/codex/"  # Set when proxying under a subpath
     ports:
       - "${PORT:-8172}:8172"
     environment:

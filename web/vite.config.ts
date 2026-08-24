@@ -3,18 +3,23 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
-function normalizeBasePath(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === '/') return '/';
-  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`;
-}
-
-const publicBasePath = normalizeBasePath(process.env.WEBUI_BASE_PATH);
-const proxyPrefix = publicBasePath === '/' ? '' : publicBasePath.slice(0, -1);
+const runtimeBasePathToken = '__CODEX_WEBUI_BASE_PATH__';
 
 export default defineConfig({
-  base: publicBasePath,
-  plugins: [react(), tailwindcss()],
+  // Relative build assets let one image run at / or behind any proxy prefix.
+  // The backend supplies the matching <base href> for each HTML request.
+  base: './',
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: 'runtime-base-path-dev',
+      apply: 'serve',
+      transformIndexHtml(html) {
+        return html.replaceAll(runtimeBasePathToken, '/');
+      },
+    },
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -32,14 +37,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      [`${proxyPrefix}/api`]: {
-        target: 'http://localhost:8172',
-        rewrite: (requestPath) => requestPath.slice(proxyPrefix.length),
-      },
-      [`${proxyPrefix}/socket.io`]: {
+      '/api': 'http://localhost:8172',
+      '/socket.io': {
         target: 'http://localhost:8172',
         ws: true,
-        rewrite: (requestPath) => requestPath.slice(proxyPrefix.length),
       },
     },
   },

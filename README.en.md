@@ -232,13 +232,12 @@ When using Docker Compose, change `proxy_pass` to `http://codex-webui:8172` and 
 
 ### Deploying under a subpath
 
-When the public URL is not at the domain root (for example, `https://cc.example.com/codex/`), build the frontend with the same base path. This configures static assets, frontend routing, REST APIs, and Socket.IO together:
+The same image can serve both a domain root and a proxy subpath (for example, `https://cc.example.com/codex/`) without rebuilding for each path. A subpath proxy must use `X-Forwarded-Prefix` to tell the WebUI its browser-facing public path:
 
 ```bash
 docker build \
-  --build-arg WEBUI_BASE_PATH=/codex/ \
   --build-arg CODEX_CLI_VERSION=0.149.1 \
-  -t codex-webui:0.149.1-codex .
+  -t codex-webui:0.149.1 .
 ```
 
 Nginx must retain `/codex/` in browser-facing URLs and strip it when proxying to the backend. The trailing slashes on both `location` and `proxy_pass` are required:
@@ -263,7 +262,7 @@ location /codex/ {
 }
 ```
 
-`WEBUI_BASE_PATH` is a Docker **build argument**, not a runtime environment variable. Rebuild the image after changing it. For OnlyOffice, set `general.publicBaseUrl` to the full URL including the subpath, for example `https://cc.example.com/codex`.
+A root proxy does not need `X-Forwarded-Prefix`. The WebUI dynamically generates the correct base for static assets, frontend routes, REST APIs, and Socket.IO on every request, so one image can serve both proxy styles. For OnlyOffice, set `general.publicBaseUrl` to the full URL including the subpath, for example `https://cc.example.com/codex`.
 
 ### Caddy
 

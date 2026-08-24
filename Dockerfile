@@ -5,8 +5,6 @@ WORKDIR /app/web
 COPY web/package.json web/pnpm-lock.yaml* web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
-ARG WEBUI_BASE_PATH=/
-ENV WEBUI_BASE_PATH=${WEBUI_BASE_PATH}
 RUN pnpm build
 
 # ── Stage 2: Backend build ───────────────────────────────────────────

@@ -232,13 +232,12 @@ Docker Compose 中使用时，`proxy_pass` 改为 `http://codex-webui:8172`，�
 
 ### 部署到子目录
 
-若公开地址不是域名根目录（例如 `https://cc.example.com/codex/`），前端必须在构建时使用相同的基础路径。该参数会同时配置静态资源、前端路由、REST API 和 Socket.IO 路径：
+同一个镜像可以同时用于域名根目录和代理子目录（例如 `https://cc.example.com/codex/`），无需为每个路径重新构建。子目录代理需要通过 `X-Forwarded-Prefix` 告诉 WebUI 浏览器侧的公开路径：
 
 ```bash
 docker build \
-  --build-arg WEBUI_BASE_PATH=/codex/ \
   --build-arg CODEX_CLI_VERSION=0.149.1 \
-  -t codex-webui:0.149.1-codex .
+  -t codex-webui:0.149.1 .
 ```
 
 Nginx 必须保留浏览器侧的 `/codex/` 前缀，并在转发到后端时将它移除。`location` 和 `proxy_pass` 末尾的 `/` 均不可省略：
@@ -263,7 +262,7 @@ location /codex/ {
 }
 ```
 
-`WEBUI_BASE_PATH` 是 Docker **构建参数**，不是运行时环境变量。修改路径后需要重新构建镜像。若使用 OnlyOffice，请将 `general.publicBaseUrl` 设置为包含子目录的完整地址，例如 `https://cc.example.com/codex`。
+根目录反代无需设置 `X-Forwarded-Prefix`。WebUI 会按每个请求动态生成正确的静态资源、前端路由、REST API 和 Socket.IO 基础路径，因此同一镜像可同时服务两种代理方式。若使用 OnlyOffice，请将 `general.publicBaseUrl` 设置为包含子目录的完整地址，例如 `https://cc.example.com/codex`。
 
 ### Caddy
 
