@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { jsonValueSchema } from '../../codex/dto/v2/openapi.schema';
 
 export const PLUGIN_INSTALL_POLICY_VALUES = [
@@ -207,9 +207,6 @@ export class PluginInstallRequestDto {
 
   @ApiProperty()
   pluginName!: string;
-
-  @ApiPropertyOptional()
-  forceRemoteSync?: boolean;
 }
 
 /** Response for plugin/install. */
@@ -225,9 +222,6 @@ export class PluginInstallResponseDto {
 export class PluginUninstallRequestDto {
   @ApiProperty()
   pluginId!: string;
-
-  @ApiPropertyOptional()
-  forceRemoteSync?: boolean;
 }
 
 /** Empty response body for plugin/uninstall. */

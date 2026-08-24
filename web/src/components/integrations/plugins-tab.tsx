@@ -104,7 +104,6 @@ export function PluginsTab() {
   const refreshMutation = useMutation({
     mutationFn: async () => {
       const { data } = await pluginsListPlugins({
-        query: { forceRemoteSync: true },
         throwOnError: true,
       });
       return data;

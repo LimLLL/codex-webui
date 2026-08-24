@@ -49,7 +49,6 @@ export class ThreadResumeRegistryService {
     const promise = this.codex
       .request<v2.ThreadResumeResponse>('thread/resume', {
         threadId,
-        persistExtendedHistory: true,
       })
       .then((response) => {
         if (this.epoch.get(key) === callEpoch) {

@@ -31,16 +31,10 @@ describe('ThreadsService', () => {
     const response = { thread: { id: 't1' }, model: 'gpt-4' };
     mockCodex.request.mockResolvedValue(response);
 
-    const result = await service.startThread({
-      experimentalRawEvents: false,
-      persistExtendedHistory: true,
-    });
+    const result = await service.startThread({});
 
     expect(result).toEqual(response);
-    expect(mockCodex.request).toHaveBeenCalledWith('thread/start', {
-      experimentalRawEvents: false,
-      persistExtendedHistory: true,
-    });
+    expect(mockCodex.request).toHaveBeenCalledWith('thread/start', {});
     expect(mockResumeRegistry.markResumed).toHaveBeenCalledWith('t1');
   });
 

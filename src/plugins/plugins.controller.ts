@@ -36,18 +36,12 @@ export class PluginsController {
   @Get()
   @ApiOperation({ summary: 'List Codex plugin marketplaces' })
   @ApiQuery({ name: 'cwds', required: false, isArray: true })
-  @ApiQuery({ name: 'forceRemoteSync', required: false, type: Boolean })
   @ApiOkResponse({ type: PluginListResponseDto })
   listPlugins(
     @Query('cwds') cwds?: string | string[],
-    @Query('forceRemoteSync') forceRemoteSync?: string,
   ): Promise<v2.PluginListResponse> {
     return this.pluginsService.listPlugins({
       cwds: this.parseStringList(cwds),
-      forceRemoteSync: this.parseOptionalBoolean(
-        forceRemoteSync,
-        'forceRemoteSync',
-      ),
     });
   }
 
@@ -90,10 +84,6 @@ export class PluginsController {
         'marketplacePath',
       ),
       pluginName: this.requireTrimmedString(body.pluginName, 'pluginName'),
-      forceRemoteSync: this.parseOptionalBoolean(
-        body.forceRemoteSync,
-        'forceRemoteSync',
-      ),
     });
   }
 
@@ -113,10 +103,6 @@ export class PluginsController {
     }
     return this.pluginsService.uninstallPlugin({
       pluginId: this.requireTrimmedString(body.pluginId, 'pluginId'),
-      forceRemoteSync: this.parseOptionalBoolean(
-        body.forceRemoteSync,
-        'forceRemoteSync',
-      ),
     });
   }
 
@@ -129,21 +115,6 @@ export class PluginsController {
       );
     }
     return value.trim();
-  }
-
-  private parseOptionalBoolean(
-    value: boolean | string | undefined,
-    field: string,
-  ): boolean | undefined {
-    if (value === undefined) return undefined;
-    if (typeof value === 'boolean') return value;
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    throw BusinessException.badRequest(
-      ErrorCode.validation.typeMismatch,
-      `${field} must be a boolean`,
-      { field, type: 'boolean' },
-    );
   }
 
   private parseStringList(value?: string | string[]): string[] | undefined {

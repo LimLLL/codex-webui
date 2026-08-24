@@ -179,7 +179,6 @@ export class ThreadsService {
       'thread/fork',
       {
         threadId,
-        persistExtendedHistory: true,
       },
     );
     this.resumeRegistry.markResumed(response.thread.id);
