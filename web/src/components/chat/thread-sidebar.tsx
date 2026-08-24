@@ -179,14 +179,24 @@ export function ThreadSidebar() {
     onError: (_err, vars) => setLoadingForThread(vars.path.threadId, false),
   });
 
+  /**
+   * True when the thread is already open *and on screen*.
+   *
+   * Selecting a thread leaves it selected in the store while the user moves to
+   * settings, diagnostics or integrations, so store state alone cannot answer
+   * "is a click a no-op" — the chat view has to actually be the one showing.
+   */
+  const isThreadOnScreen = (thread: ThreadDto, mode: 'live' | 'readOnly') =>
+    thread.id === threadId && threadMode === mode && activeView === 'chat';
+
   /** Navigate to archived thread — ThreadView handles loading (resume → fail → read). */
   const openArchivedThread = (thread: ThreadDto) => {
-    if (thread.id === threadId && threadMode === 'readOnly') return;
+    if (isThreadOnScreen(thread, 'readOnly')) return;
     void navigate({ to: '/t/$threadId', params: { threadId: thread.id } });
   };
 
   const openLiveThread = (thread: ThreadDto) => {
-    if (thread.id === threadId && threadMode === 'live') return;
+    if (isThreadOnScreen(thread, 'live')) return;
     setActiveThread(thread.id, thread.cwd, threadLabel(thread));
     setLoadingForThread(thread.id, true);
     resumeThread.mutate({ path: { threadId: thread.id } });
