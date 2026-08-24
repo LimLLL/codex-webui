@@ -3,6 +3,7 @@ import { client } from './generated/api/client.gen';
 import { getApiToken, clearApiToken } from './auth-token';
 import { showSnackbar } from './stores/snackbar-store';
 import { getApiErrorMessage } from './lib/api-error';
+import { BASE_PATH } from './base-path';
 
 /** HMR-safe guard — bound to the client instance, survives module reload. */
 const clientAny = client as Record<string, unknown>;
@@ -11,6 +12,8 @@ const clientAny = client as Record<string, unknown>;
 export function configureApiClient() {
   if (clientAny.__codexWebuiConfigured) return;
   clientAny.__codexWebuiConfigured = true;
+
+  client.setConfig({ baseUrl: BASE_PATH });
 
   client.interceptors.request.use((request) => {
     if (request.url.includes('/api/auth/login')) return request;

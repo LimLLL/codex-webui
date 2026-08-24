@@ -230,6 +230,40 @@ server {
 
 When using Docker Compose, change `proxy_pass` to `http://codex-webui:8172` and replace `ports` with `expose`.
 
+### Deploying under a subpath
+
+The same image can serve both a domain root and a proxy subpath (for example, `https://cc.example.com/codex/`) without rebuilding for each path. A subpath proxy must use `X-Forwarded-Prefix` to tell the WebUI its browser-facing public path:
+
+```bash
+docker build \
+  --build-arg CODEX_CLI_VERSION=0.149.1 \
+  -t codex-webui:0.149.1 .
+```
+
+Nginx must retain `/codex/` in browser-facing URLs and strip it when proxying to the backend. The trailing slashes on both `location` and `proxy_pass` are required:
+
+```nginx
+location = /codex {
+    return 301 /codex/;
+}
+
+location /codex/ {
+    proxy_pass http://127.0.0.1:8172/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Forwarded-Prefix /codex;
+    proxy_read_timeout 300s;
+}
+```
+
+A root proxy does not need `X-Forwarded-Prefix`. The WebUI dynamically generates the correct base for static assets, frontend routes, REST APIs, and Socket.IO on every request, so one image can serve both proxy styles. For OnlyOffice, set `general.publicBaseUrl` to the full URL including the subpath, for example `https://cc.example.com/codex`.
+
 ### Caddy
 
 Caddy auto-provisions Let's Encrypt certificates and handles WebSocket upgrades automatically:

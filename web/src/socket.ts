@@ -3,12 +3,14 @@
  */
 import { io, Socket } from 'socket.io-client';
 import { getApiToken } from './auth-token';
+import { withBasePath } from './base-path';
 
 let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (!socket) {
     socket = io('/ws', {
+      path: withBasePath('/socket.io'),
       transports: ['websocket'],
       autoConnect: true,
       auth: (callback) => {

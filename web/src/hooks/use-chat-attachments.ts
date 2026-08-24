@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { clearApiToken, getAuthorizationHeader } from '@/auth-token';
+import { withBasePath } from '@/base-path';
 import { escapeMentionPath } from '@/lib/mention-utils';
 import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from '@/types/attachments';
 
@@ -150,7 +151,7 @@ export function useChatAttachments({
     const formData = new FormData();
     formData.append('file', file, file.name || 'pasted-file');
     const authorization = getAuthorizationHeader();
-    const resp = await fetch('/api/chat/upload', {
+    const resp = await fetch(withBasePath('/api/chat/upload'), {
       method: 'POST',
       headers: authorization ? { Authorization: authorization } : {},
       body: formData,

@@ -5,6 +5,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { withBasePath } from '@/base-path';
 import {
   filesCreateFileMutation,
   filesCreateDirectoryMutation,
@@ -159,7 +160,7 @@ export function useFileOperations() {
   const uploadFiles = useMutation<UploadFilesResponse, Error, UploadFilesVariables>({
     mutationFn: async ({ destinationPath, formData }) => {
       const resp = await fetch(
-        `/api/files/upload?destinationPath=${encodeURIComponent(destinationPath)}`,
+        `${withBasePath('/api/files/upload')}?destinationPath=${encodeURIComponent(destinationPath)}`,
         {
           method: 'POST',
           headers: authHeaders(),
@@ -191,7 +192,7 @@ export function useFileOperations() {
   const downloadFile = async (filePath: string) => {
     try {
       const resp = await fetch(
-        `/api/files/download?path=${encodeURIComponent(filePath)}`,
+        `${withBasePath('/api/files/download')}?path=${encodeURIComponent(filePath)}`,
         { headers: authHeaders() },
       );
       if (!resp.ok) {

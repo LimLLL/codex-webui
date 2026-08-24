@@ -1,4 +1,5 @@
 /** Manages the WebUI JWT for REST and WebSocket authentication. */
+import { withBasePath } from './base-path';
 
 const STORAGE_KEY = 'codex.webui.jwt';
 
@@ -31,5 +32,5 @@ export function buildFileServeUrl(filePath: string): string {
   const token = getApiToken();
   const params = new URLSearchParams({ path: filePath });
   if (token) params.set('access_token', token);
-  return `/api/files/serve?${params.toString()}`;
+  return `${withBasePath('/api/files/serve')}?${params.toString()}`;
 }
