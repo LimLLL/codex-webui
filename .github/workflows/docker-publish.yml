@@ -83,7 +83,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            CODEX_CLI_VERSION=${{ steps.meta.outputs.codex_version || '0.123.0' }}
+            CODEX_CLI_VERSION=${{ steps.meta.outputs.codex_version || '0.149.0' }}
           tags: |
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ matrix.arch }}-${{ steps.meta.outputs.version_tag }}
           push: true
@@ -104,7 +104,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            CODEX_CLI_VERSION=${{ steps.meta.outputs.codex_version || '0.123.0' }}
+            CODEX_CLI_VERSION=${{ steps.meta.outputs.codex_version || '0.149.0' }}
           tags: |
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ matrix.arch }}-${{ steps.meta.outputs.version_tag }}
           push: true
