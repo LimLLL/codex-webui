@@ -82,7 +82,7 @@ codex app-server (stdout JSONL)
 | `thread/closed` | active thread → 系统条目; debounced 失效 thread list |
 | `thread/archived` | active thread → 系统条目; debounced 失效 thread list |
 | `thread/unarchived` | debounced 失效 thread list |
-| `thread/deleted` | 清除该 thread 的全部本地 runtime 与订阅；debounced 失效 thread list + branch trees。当前打开的会话例外：只加系统条目，不清 runtime（见下）|
+| `thread/deleted` | 清除该 thread 的全部本地 runtime 与订阅；debounced 失效 thread list + branch trees。当前打开的会话例外：只加系统条目，不清 runtime（见下）。**判据必须用 `ctx.getSelectedThreadId()`，不能用 `ctx.threadId`** —— 分发器在调用 handler 前会把 `ctx.threadId` 设成该通知自身的 threadId，用它比较恒为真，会导致 runtime 永不清理，且给从未打开过的会话追加系统条目还会凭空建出幽灵 runtime |
 | `turn/started` | 初始化空 turn block, 设置 loading |
 | `thread/compacted` | active thread → info 系统条目 |
 | `model/rerouted` | active thread → warning 系统条目 + info toast |

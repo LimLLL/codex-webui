@@ -268,9 +268,13 @@
 - [x] TanStack Virtual 虚拟列表：`useVirtualizer` + `measureElement` 动态高度，smart auto-scroll（流式跟随 + 上翻不打断），TurnBlock 去 motion 避免 recycling 重复动画。
 - [x] Rich Chat Input：@ 文件引用（内联文本 + 路径导航 popover）、粘贴图片/文件上传、Skill 选择器、FileTree 右键附加、消息气泡 @mention badge + AuthImage 图片预览。ChatInput 拆分为 3 文件。后端 ChatModule（upload 暂存）+ SkillsModule + StartTurnDto v2 union 校验。
 - [ ] app @mention 的 composer 输入能力。
-- [ ] 分支图节点显示轮数：`thread/list` 的 `turns` 恒为空数组，唯一来源是逐节点 `thread/read includeTurns`（实测单个 39 轮会话 3 MB / 174 ms），十节点的图代价不可接受。可行方向是 hover 时按需拉取，或后端加轻量计数接口。本地 per-turn 表不可用于计数——会漏掉本客户端之外产生的轮次。
+- [x] 分支图节点显示轮数：后端新增 `POST /api/threads/turn-counts`，通过实验性 `thread/turns/list` + `itemsView: notLoaded` 分页计数，不 resume；单节点失败返回 unknown，不阻塞图或删除预览。
 - [ ] 主包体积：入口 chunk 约 4.1 MB（gzip 1.25 MB），Monaco / xterm / shiki / pdf.js / xlsx 均在其中。React Flow 已拆出独立 chunk（179 kB），其余仍待按路由拆分。
-- [ ] 当前打开的会话被他处删除时无法自动离开：通知分发层拿不到 router，只加了系统条目告知用户，runtime 刻意保留以免无解释地清空正在阅读的内容。可行方向是沿用既有的 `codex-webui:*` CustomEvent 模式，由 layout 监听并导航。
+- [ ] 当前打开的会话被他处删除时无法自动离开：通知分发层拿不到 router，只加了系统条目告知用户，runtime 刻意保留以免无解释地清空正在阅读的内容（现已同时标记 `deletedRemotely`，输入与建分支禁用，不再是可写的僵尸会话）。可行方向是沿用既有的 `codex-webui:*` CustomEvent 模式，由 layout 监听并导航。
+- [ ] 认领扫描器对**多跳外部 fork** 可能过度继承：`resolveInheritedTurns` 在父本身也是 fork 时无条件带上父的完整继承前缀，只按 `endByteOffset` 过滤父自身文件内的轮次，未用 `history_base.endOrdinalExclusive` 截断继承自更上游祖先的轮次。若外部 fork 的边界落在父的继承前缀之内，继承轮列表与公共前缀分组会算错，进而产生错误的版本组。保守修法是无法证明该映射时**跳过**该多跳情形的消息版本认领，只记拓扑。属上一轮既有问题。
+- [ ] 前端删除/打开交互链路无测试覆盖：本轮用户手工实测发现 3 处缺陷（缓存幸存集合取错、无 pending 态、提前导航），全部落在这条链路上。建议补：store 层（只含用户消息的轮次不重复前插、重开不替换已覆盖页）、通知层（当前会话被删后保留 transcript 但不可写）、删除 mutation 缓存（completed / partial 有树 / partial 无树 / conflict 四态）、确认框（`preventDefault` 保持挂载、双击只提交一次）。
+- [ ] `GET /api/threads/overview` 的代价是 O(库内会话总数)：实测 154 会话单次全量枚举约 900ms（冷）/400ms（热），带 `cwd`/`searchTerm` 过滤时仍需两次完整枚举。这是「后端统一投影」换取排序正确性的固有成本，不打算退回客户端 join。若真实使用中可感知，下一步是后端加一层短生命周期投影缓存（由 thread/branch/approval 变更失效），而不是继续调前端防抖。
+- [ ] 打开线程只加载最近一页 turns，更早历史需点「加载更早的消息」。这是 metadata-first 的固有取舍（换来打开 47ms / 2.8 KB）。若长会话回看体验不佳，可考虑按滚动位置预取，但需先解决虚拟列表前插的滚动锚定问题。
 - [x] diff 面板增强：`@git-diff-view/react` + `@git-diff-view/shiki` GitHub 风格 diff 视图（split/unified 切换、语法高亮、error boundary fallback）。
 - [x] 审批卡片增强：`acceptForSession`、`cancel`、granular permission（exec/network policy amendment）。按钮由服务端 `availableDecisions` 动态控制，legacy fallback 仅 accept/decline。proposed amendments 由服务端提供，不允许自由构造。`FileChangeItem` 同步支持。runtime parser 校验协议数据。
 

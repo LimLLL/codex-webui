@@ -64,7 +64,7 @@
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
 | GET    | `/api/threads/:threadId/delete-preview`          | ThreadsDeletionController | 预览删除该 thread 及所有 fork 后代：返回确认用 id 集、叶到根删除顺序、运行中会话、待审批、扫描器诊断与 blocker       |
 | POST   | `/api/threads/:threadId/delete`                  | ThreadsDeletionController | 按确认过的 `expectedThreadIds` 执行级联删除；执行前和自动中断后重新规划，id 集漂移时返回结构化 conflict/partial 结果 |
-| POST   | `/api/threads/:threadId/resume`                  | ThreadsController         | 恢复 thread, 返回含 turns 历史                                                                                       |
+| POST   | `/api/threads/:threadId/resume`                  | ThreadsController         | metadata-first 打开：`thread.turns` 恒为空，最近一页在 `initialTurnsPage`，更早历史用 `turnsBackwardsCursor` 翻页。写所有权被占时返回 `mode: readOnly` / `ownership: refused` / `ownershipRefusalMessage`。查询参数 `recordActive=false` 用于后台重开（刷新/重连/auto-resume），使其不改写活跃分支指针 |
 | POST   | `/api/threads/:threadId/archive`                 | ThreadsController         | 归档本地已知整棵分支树                                                                                               |
 | POST   | `/api/threads/:threadId/unarchive`               | ThreadsController         | 取消归档本地已知整棵分支树                                                                                           |
 | POST   | `/api/threads/:threadId/compact`                 | ThreadsController         | 压缩上下文；有本地后代时返回 conflict                                                                                |
@@ -145,8 +145,11 @@
 | ------------------------------------- | ------------------------------------------------------------- |
 | POST /threads                         | `thread/start`                                                |
 | GET /threads                          | `thread/list`                                                 |
+| GET /threads/overview                 | `thread/list` plus local/adopted topology projection          |
 | GET /threads/:id                      | `thread/read`                                                 |
-| POST /threads/:id/resume              | `thread/resume`                                               |
+| POST /threads/:id/resume              | `thread/resume` with experimental metadata-first history      |
+| GET /threads/:id/turns                | experimental `thread/turns/list`                              |
+| POST /threads/turn-counts             | experimental `thread/turns/list` without resuming             |
 | POST /threads/:id/turns               | `turn/start`                                                  |
 | POST /threads/:id/turns/:id/interrupt | `turn/interrupt`                                              |
 | POST /threads/:id/archive             | `thread/archive`                                              |

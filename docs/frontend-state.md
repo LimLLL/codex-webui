@@ -31,7 +31,13 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 | `threadStatus` | `ThreadStatusType \| null` | thread 活跃状态（idle/active/systemError） |
 | `activeTurnId` | `string \| null` | 当前进行中的 turn ID |
 | `pendingResolvedRequestIds` | `Set<string>` | 已被 resolved 但尚未 hydrate 的请求 ID |
+| `historyCursor` | `string \| null` | 下一页**更早**历史的游标；null 表示历史已完整 |
+| `historyLoading` | `boolean` | 是否正在拉取更早的一页历史 |
+| `readOnlyReason` | `string \| null` | 写所有权被其它进程持有时的拒绝原因；null 表示可写 |
+| `deletedRemotely` | `boolean` | 该会话已被他处删除。transcript 刻意保留（见 `thread/deleted`），但必须同时变为不可写 —— 保留可读不等于保留可用 |
 | `lastActivityAt` | `number` | 运行态最后一次选择/通知/hydrate/审批更新的时间戳，用于 LRU 清理 |
+
+**三种不同的不可写**，补救方式各不相同，UI 文案必须分开：`threadMode === 'readOnly'`（归档快照，去取消归档或 fork）、`readOnlyReason !== null`（写锁被其它客户端占用，去那端关闭）、`deletedRemotely`（已被删除，无补救）。后两者都带完整 transcript，外观上看不出只读。
 
 ### TimelineEntry 类型
 
@@ -90,9 +96,23 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 
 每个被驱逐的 thread 会先从 `subscribedThreadIds` 和 `threadsById` 删除，再 emit `thread.unsubscribe` 让后端 socket room 与 `ActiveThreadRegistryService` ref-count 同步。再次打开该 thread 时走现有 `setActiveThread` + `thread/resume` 恢复路径。
 
+### 打开线程的唯一入口 (use-thread-open)
+
+**只有路由负责打开线程**，侧边栏与分支图只负责导航。此前侧边栏点击会 resume 一次、路由挂载再 resume 一次，两个 onSuccess 各自拉 token 用量/diff/错误 —— 一次点击 8 个请求、全量 turn 载荷传两遍。而 resume 不是只读操作，它会争夺 paginated thread 的写所有权，所以重复不只是浪费。
+
+`applyOpenResponse` 是**唯一**解释打开响应的地方，被三条路径共用：路由打开、刷新恢复（`authenticated-layout`）、app-server 重启后重连（`use-codex-socket`）。三处此前都直接读 `thread.turns`，而该字段在 metadata-first 之后恒为空数组。
+
+关键行为：
+
+- **缓存优先**：目标 thread 已 hydrate 时不进入加载态，直接渲染既有内容，请求只用于刷新。
+- **倒序反转**：服务端按 `sortDirection: desc` 返回最近一页，时间线需要正序，在 hydration 处反转一次。
+- **重开不丢分页**：若返回页的 turn 全部已在本地时间线中，则保留现有时间线与 `historyCursor`，不做替换 —— 否则离开再回来会把已加载的更早历史悄悄丢掉。若返回页含未知 turn，说明会话在别处推进过，以服务端为准整体替换。
+- **迟到响应保护**：成功与失败回调都先检查运行时是否仍存在。store 的 setter 是 create-if-absent 的，删除进行中若有 in-flight 响应落地，不加保护会把已删会话的外壳重新建出来。
+- **后台恢复不写指针**：刷新/重连恢复会遍历所有已加载线程，若允许它们写活跃分支指针，每棵树会指向恢复顺序中的最后一个成员，正是该指针要解决的问题。这两条路径显式传 `recordActive: false`。
+
 ### 历史恢复 (turnsToTimeline)
 
-`switchThread` 调用 `api.resumeThread()` 后，用 `turnsToTimeline()` 将持久化的 turns 转换为 TimelineEntry 数组:
+打开线程只返回最近一页 turns，用 `turnsToTimeline()` 转换为 TimelineEntry 数组；更早的历史由 `historyCursor` 按需拉取并 `prependHistoryForThread` 前插（按 turnId 去重，游标页含锚点行，重试会重叠）:
 
 - `userMessage` → `{ kind: 'user', turnId: turn.id }`
 - `reasoning` → TurnItem (content = summary.join)
