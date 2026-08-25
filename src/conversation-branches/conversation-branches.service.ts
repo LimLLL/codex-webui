@@ -137,15 +137,36 @@ export class ConversationBranchesService {
     return this.buildTreeDto(this.resolveTreeRootThreadId(threadId));
   }
 
-  /** Reads all locally tracked branch trees. */
+  /**
+   * Reads all locally tracked branch trees.
+   *
+   * Roots come from the union of version groups and fork edges. Groups alone
+   * are not enough: a fork that is pure topology (an ordinary fork, or an
+   * adopted one whose boundary is unknown) has an edge but no group, and a tree
+   * made only of those would be invisible to every caller that discovers
+   * descendants through this list — including the sidebar's fold decision and
+   * the branch graph entry point, which would then disagree with what a delete
+   * actually removes.
+   */
   listBranchTrees(): BranchTreeDto[] {
-    const rootRows = this.db
+    const groupRoots = this.db
       .selectDistinct({
         treeRootThreadId: conversationBranchGroups.treeRootThreadId,
       })
       .from(conversationBranchGroups)
       .all();
-    return rootRows.map((row) => this.buildTreeDto(row.treeRootThreadId));
+    const edgeRoots = this.db
+      .selectDistinct({
+        treeRootThreadId: conversationBranchEdges.treeRootThreadId,
+      })
+      .from(conversationBranchEdges)
+      .all();
+    const rootThreadIds = new Set(
+      [...groupRoots, ...edgeRoots].map((row) => row.treeRootThreadId),
+    );
+    return [...rootThreadIds].map((rootThreadId) =>
+      this.buildTreeDto(rootThreadId),
+    );
   }
 
   /**
@@ -211,6 +232,7 @@ export class ConversationBranchesService {
             threadId: params.sourceThreadId,
             versionIndex: 1,
             kind: 'original',
+            source: 'local',
             messageTurnId: params.editedTurnId,
             previewText: params.originalPreviewText,
             createdAt: now,
@@ -226,6 +248,7 @@ export class ConversationBranchesService {
           treeRootThreadId: params.treeRootThreadId,
           forkBeforeTurnId: params.editedTurnId,
           commonPrefixTurnId,
+          source: 'local',
           inheritedTurnIds: JSON.stringify(params.inheritedTurnIds),
           createdAt: now,
         })
@@ -245,6 +268,7 @@ export class ConversationBranchesService {
           versionIndex:
             Math.max(0, ...siblings.map((row) => row.versionIndex)) + 1,
           kind: 'branch',
+          source: 'local',
           messageTurnId: null,
           previewText: params.branchPreviewText,
           createdAt: now,
@@ -403,6 +427,8 @@ export class ConversationBranchesService {
         threadId: rootThreadId,
         parentThreadId: null,
         hasChildren: parentIds.has(rootThreadId),
+        source: 'local',
+        commonPrefixTurnId: null,
       },
     ];
 
@@ -412,6 +438,16 @@ export class ConversationBranchesService {
         threadId: edge.childThreadId,
         parentThreadId: edge.parentThreadId,
         hasChildren: parentIds.has(edge.childThreadId),
+        source: edge.source === 'adopted' ? 'adopted' : 'local',
+        // Identifies which version group describes *this* fork. A thread can
+        // appear in several groups — it is a branch of the group it was forked
+        // into, and the original of any group created from its own later turns
+        // — and only the one keyed by this prefix says how it differs from its
+        // parent.
+        commonPrefixTurnId:
+          edge.commonPrefixTurnId === BRANCH_START_SENTINEL
+            ? null
+            : edge.commonPrefixTurnId,
       });
     }
     return members;
@@ -443,6 +479,7 @@ export class ConversationBranchesService {
       threadId: version.threadId,
       versionIndex: version.versionIndex,
       kind: version.kind === 'original' ? 'original' : 'branch',
+      source: version.source === 'adopted' ? 'adopted' : 'local',
       messageTurnId: version.messageTurnId,
       previewText: version.previewText,
       createdAt: version.createdAt,

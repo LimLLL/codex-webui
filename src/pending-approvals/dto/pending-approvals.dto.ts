@@ -4,7 +4,8 @@ export type PendingServerRequestStatus =
   | 'pending'
   | 'resolved'
   | 'expired'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 /** Persisted app-server request that is waiting for a user response. */
 export class PendingServerRequestDto {
@@ -29,7 +30,9 @@ export class PendingServerRequestDto {
   @ApiProperty({ type: Object })
   params!: Record<string, unknown>;
 
-  @ApiProperty({ enum: ['pending', 'resolved', 'expired', 'failed'] })
+  @ApiProperty({
+    enum: ['pending', 'resolved', 'expired', 'failed', 'cancelled'],
+  })
   status!: PendingServerRequestStatus;
 
   @ApiProperty()

@@ -134,6 +134,12 @@ export type InsertTurnErrorRow = typeof turnErrors.$inferInsert;
 export const BRANCH_START_SENTINEL = '__start__';
 
 /**
+ * Topology-only fork boundary used when a child was forked after the parent's
+ * last known turn. UUID turn ids cannot collide with this sentinel.
+ */
+export const BRANCH_END_SENTINEL = '__end__';
+
+/**
  * One logical message-version group inside a locally tracked branch tree.
  *
  * Identified by `(treeRootThreadId, commonPrefixTurnId)`. The grouping key is
@@ -182,6 +188,8 @@ export const conversationBranchVersions = sqliteTable(
     versionIndex: integer('version_index').notNull(),
     /** `original` for the pre-existing continuation, `branch` for forks. */
     kind: text('kind').notNull(),
+    /** `local` rows came from this client; `adopted` rows came from disk scan. */
+    source: text('source').notNull().default('local'),
     /** Turn carrying this version's user message; null until the turn starts. */
     messageTurnId: text('message_turn_id'),
     previewText: text('preview_text').notNull(),
@@ -223,6 +231,8 @@ export const conversationBranchEdges = sqliteTable(
     /** Turn the fork excluded; the child's history stops right before it. */
     forkBeforeTurnId: text('fork_before_turn_id').notNull(),
     commonPrefixTurnId: text('common_prefix_turn_id').notNull(),
+    /** `local` rows came from this client; `adopted` rows came from disk scan. */
+    source: text('source').notNull().default('local'),
     /**
      * JSON array of turn ids this child inherited from its ancestors, captured
      * from the fork response. Bounds provenance read-through so a child never

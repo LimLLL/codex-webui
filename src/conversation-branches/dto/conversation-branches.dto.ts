@@ -2,6 +2,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ThreadForkResponseDto } from '../../codex/dto/v2';
 
+export type BranchMetadataSource = 'local' | 'adopted';
+
 /** Request body for creating a new version by forking before a user turn. */
 export class CreateMessageBranchDto {
   @ApiProperty({
@@ -26,6 +28,19 @@ export class BranchTreeMemberDto {
 
   @ApiProperty()
   hasChildren!: boolean;
+
+  @ApiProperty({ enum: ['local', 'adopted'] })
+  source!: BranchMetadataSource;
+
+  /**
+   * Grouping key of the fork that created this member; null for the tree root.
+   *
+   * A thread can hold version rows in more than one group, so this is what tells
+   * a client which of them describes the member's own divergence rather than an
+   * edit made later inside it.
+   */
+  @ApiPropertyOptional({ type: String, nullable: true })
+  commonPrefixTurnId!: string | null;
 }
 
 /** A concrete sibling version for one edited user-message group. */
@@ -44,6 +59,9 @@ export class BranchVersionDto {
 
   @ApiProperty({ enum: ['original', 'branch'] })
   kind!: 'original' | 'branch';
+
+  @ApiProperty({ enum: ['local', 'adopted'] })
+  source!: BranchMetadataSource;
 
   @ApiPropertyOptional({
     type: String,
@@ -130,6 +148,94 @@ export class BranchStateDto {
 
   @ApiProperty({ type: () => [String] })
   knownTreeThreadIds!: string[];
+}
+
+export type BranchAdoptionStatus = 'pending' | 'running' | 'ready' | 'failed';
+
+export type BranchAdoptionDiagnosticSeverity = 'warning' | 'error';
+
+export type BranchAdoptionDiagnosticCode =
+  | 'scan_not_ready'
+  | 'session_file_unreadable'
+  | 'session_header_missing'
+  | 'session_header_invalid'
+  | 'parent_missing'
+  | 'history_base_missing'
+  | 'history_base_invalid'
+  | 'history_base_parent_mismatch'
+  | 'history_base_offset_mismatch'
+  | 'duplicate_child_conflict'
+  | 'local_edge_conflict'
+  | 'local_version_conflict'
+  | 'topology_cycle';
+
+/** One conservative scanner diagnostic from private rollout metadata parsing. */
+export class BranchAdoptionDiagnosticDto {
+  @ApiProperty({ enum: ['warning', 'error'] })
+  severity!: BranchAdoptionDiagnosticSeverity;
+
+  @ApiProperty()
+  code!: BranchAdoptionDiagnosticCode;
+
+  @ApiProperty()
+  message!: string;
+
+  @ApiPropertyOptional()
+  threadId?: string;
+
+  @ApiPropertyOptional()
+  parentThreadId?: string;
+}
+
+/** Startup scanner status used to gate destructive branch operations. */
+export class BranchAdoptionStatusDto {
+  @ApiProperty({ enum: ['pending', 'running', 'ready', 'failed'] })
+  status!: BranchAdoptionStatus;
+
+  @ApiProperty()
+  generation!: number;
+
+  /** Rollout files found on disk across `sessions/` and `archived_sessions/`. */
+  @ApiProperty()
+  scannedFiles!: number;
+
+  /**
+   * Files whose **header** was read successfully — not files parsed in full.
+   *
+   * The scan is two-pass by design: every file gives up its first line only, and
+   * just the fork chains are then parsed end to end. Reading this as a full-parse
+   * count would hide the difference that keeps startup off a gigabyte of JSON.
+   */
+  @ApiProperty()
+  parsedFiles!: number;
+
+  /** Files parsed end to end, i.e. those on a fork chain. */
+  @ApiProperty()
+  fullyParsedFiles!: number;
+
+  @ApiProperty()
+  adoptedEdges!: number;
+
+  @ApiProperty()
+  adoptedVersions!: number;
+
+  @ApiProperty()
+  topologyOnlyEdges!: number;
+
+  @ApiProperty()
+  skippedLegacyForks!: number;
+
+  @ApiProperty()
+  skippedFiles!: number;
+
+  @ApiProperty()
+  conflicts!: number;
+
+  @ApiPropertyOptional()
+  errorMessage?: string;
+
+  @ApiProperty({ type: () => [BranchAdoptionDiagnosticDto] })
+  diagnostics!: BranchAdoptionDiagnosticDto[];
 }
 
 /** Response returned after a fork has been recorded locally. */

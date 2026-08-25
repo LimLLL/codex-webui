@@ -2,11 +2,16 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { AppDatabase } from '../database/database.constants';
 import * as schema from '../database/schema';
+import {
+  ConversationBranchMutationsService,
+  OrphanedLocalTopologyError,
+} from './conversation-branch-mutations.service';
 import { ConversationBranchesService } from './conversation-branches.service';
 
 describe('ConversationBranchesService', () => {
   let sqlite: Database.Database;
   let service: ConversationBranchesService;
+  let mutations: ConversationBranchMutationsService;
 
   beforeEach(() => {
     sqlite = new Database(':memory:');
@@ -27,6 +32,7 @@ describe('ConversationBranchesService', () => {
         thread_id TEXT NOT NULL,
         version_index INTEGER NOT NULL,
         kind TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'local',
         message_turn_id TEXT,
         preview_text TEXT NOT NULL,
         created_at INTEGER NOT NULL,
@@ -43,6 +49,7 @@ describe('ConversationBranchesService', () => {
         tree_root_thread_id TEXT NOT NULL,
         fork_before_turn_id TEXT NOT NULL,
         common_prefix_turn_id TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'local',
         inherited_turn_ids TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -53,6 +60,7 @@ describe('ConversationBranchesService', () => {
     `);
     const db = drizzle(sqlite, { schema }) as AppDatabase;
     service = new ConversationBranchesService(db);
+    mutations = new ConversationBranchMutationsService(db);
   });
 
   afterEach(() => sqlite.close());
@@ -266,5 +274,203 @@ describe('ConversationBranchesService', () => {
     expect(service.hasKnownDescendants('root')).toBe(true);
     expect(service.hasKnownDescendants('child-1')).toBe(true);
     expect(service.hasKnownDescendants('child-2')).toBe(false);
+  });
+
+  it('resequences surviving versions after a sibling is deleted', () => {
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'child-1',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'original text',
+      branchPreviewText: 'edited text',
+    });
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'child-2',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'unused',
+      branchPreviewText: 'edited again',
+    });
+
+    mutations.reapDeletedThread('child-1', new Set(['child-1']));
+
+    const versions = service
+      .readBranchTree('root')
+      .groups[0].versions.map((version) => ({
+        threadId: version.threadId,
+        versionIndex: version.versionIndex,
+        kind: version.kind,
+      }));
+    expect(versions).toEqual([
+      { threadId: 'root', versionIndex: 1, kind: 'original' },
+      { threadId: 'child-2', versionIndex: 2, kind: 'branch' },
+    ]);
+  });
+
+  it('dissolves a group when fewer than two versions survive', () => {
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'child-1',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'original text',
+      branchPreviewText: 'edited text',
+    });
+
+    mutations.reapDeletedThread('child-1', new Set(['child-1']));
+
+    expect(service.readBranchTree('root')).toMatchObject({
+      tracked: false,
+      members: [{ threadId: 'root', parentThreadId: null }],
+      groups: [],
+    });
+  });
+
+  it("holds the invariant that a group's original owns every other version", () => {
+    // Two edits of the same message, the second made from inside the first
+    // branch, which is the shape that puts versions on different depths.
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'v2',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'hello v1',
+      branchPreviewText: 'hello v2',
+    });
+    service.recordMessageBranch({
+      sourceThreadId: 'v2',
+      childThreadId: 'v3',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'hello v2',
+      branchPreviewText: 'hello v3',
+    });
+
+    const tree = service.readBranchTree('root');
+    const group = tree.groups[0];
+    const original = group.versions.find((v) => v.kind === 'original')!;
+    const others = group.versions
+      .filter((v) => v.versionId !== original.versionId)
+      .map((v) => v.threadId);
+
+    const parentOf = new Map(
+      tree.members.map((m) => [m.threadId, m.parentThreadId]),
+    );
+    const descendsFromOriginal = (threadId: string): boolean => {
+      let cursor = parentOf.get(threadId) ?? null;
+      while (cursor) {
+        if (cursor === original.threadId) return true;
+        cursor = parentOf.get(cursor) ?? null;
+      }
+      return false;
+    };
+
+    // This is why the switcher must refuse to delete an `original`: the cascade
+    // that deletes it necessarily takes the entire group with it.
+    expect(others.length).toBeGreaterThan(0);
+    for (const threadId of others) {
+      expect(descendsFromOriginal(threadId)).toBe(true);
+    }
+  });
+
+  it('tags each member with the group that created it, not the one it hosts', () => {
+    // Edit the first message → branch B is version 2 of the outer group.
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'branch',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'hello v1',
+      branchPreviewText: 'hello v2',
+    });
+    // Edit a later message *inside* B → B is also the original of a nested
+    // group, holding a completely different preview.
+    service.recordMessageBranch({
+      sourceThreadId: 'branch',
+      childThreadId: 'grandchild',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-5',
+      editedTurnId: 'turn-6',
+      inheritedTurnIds: ['turn-0', 'turn-5'],
+      originalPreviewText: 'later v1',
+      branchPreviewText: 'later v2',
+    });
+
+    const tree = service.readBranchTree('root');
+    const byThread = new Map(tree.members.map((m) => [m.threadId, m]));
+
+    // Without this key a client cannot tell which of B's two version rows
+    // describes B itself, and labelling it by the wrong one makes the branch
+    // look like it is named after an edit made inside it.
+    expect(byThread.get('root')?.commonPrefixTurnId).toBeNull();
+    expect(byThread.get('branch')?.commonPrefixTurnId).toBe('turn-0');
+    expect(byThread.get('grandchild')?.commonPrefixTurnId).toBe('turn-5');
+  });
+
+  it('lists trees that only have fork edges and no version group', () => {
+    // An ordinary fork, and any adopted fork whose boundary is unknown, records
+    // an edge without a group. Enumerating roots from groups alone hid these
+    // trees from every caller that discovers descendants through this list.
+    sqlite
+      .prepare(
+        `INSERT INTO conversation_branch_edges
+           (child_thread_id, parent_thread_id, tree_root_thread_id,
+            fork_before_turn_id, common_prefix_turn_id, source,
+            inherited_turn_ids, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('child-1', 'root', 'root', 'turn-1', 'turn-0', 'local', '[]', 1);
+
+    const trees = service.listBranchTrees();
+
+    expect(trees).toHaveLength(1);
+    expect(trees[0]).toMatchObject({
+      treeRootThreadId: 'root',
+      members: [
+        { threadId: 'root', parentThreadId: null },
+        { threadId: 'child-1', parentThreadId: 'root' },
+      ],
+    });
+  });
+
+  it('refuses to reap a thread when local descendants would survive', () => {
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'child-1',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-0',
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: ['turn-0'],
+      originalPreviewText: 'original text',
+      branchPreviewText: 'edited text',
+    });
+    service.recordMessageBranch({
+      sourceThreadId: 'child-1',
+      childThreadId: 'child-2',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: 'turn-1b',
+      editedTurnId: 'turn-2b',
+      inheritedTurnIds: ['turn-0', 'turn-1b'],
+      originalPreviewText: 'downstream text',
+      branchPreviewText: 'downstream edit',
+    });
+
+    expect(() =>
+      mutations.reapDeletedThread('child-1', new Set(['child-1'])),
+    ).toThrow(OrphanedLocalTopologyError);
   });
 });

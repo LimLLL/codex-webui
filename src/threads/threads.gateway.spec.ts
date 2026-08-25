@@ -4,6 +4,7 @@ import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { AuthService } from '../auth/auth.service';
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
+import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 
 describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
@@ -32,6 +33,18 @@ describe('ThreadsGateway', () => {
     recordServerRequest: jest.fn(),
     markResolved: jest.fn(),
     respondToRequest: jest.fn(),
+    listPending: jest.fn().mockReturnValue([]),
+  };
+
+  /** Captures the gateway's release listener so tests can fire it directly. */
+  let releaseListener: ((threadIds: string[]) => void) | null = null;
+
+  const mockDeletionRegistry = {
+    isDeleting: jest.fn().mockReturnValue(false),
+    onRelease: jest.fn((listener: (threadIds: string[]) => void) => {
+      releaseListener = listener;
+      return () => undefined;
+    }),
   };
 
   const mockServer = {
@@ -47,6 +60,10 @@ describe('ThreadsGateway', () => {
         { provide: AuthService, useValue: mockAuthService },
         { provide: ActiveThreadRegistryService, useValue: mockActiveThreads },
         { provide: PendingApprovalsService, useValue: mockPendingApprovals },
+        {
+          provide: ThreadDeletionRegistryService,
+          useValue: mockDeletionRegistry,
+        },
       ],
     }).compile();
 
@@ -56,6 +73,7 @@ describe('ThreadsGateway', () => {
 
     jest.clearAllMocks();
     mockServer.to.mockReturnThis();
+    mockDeletionRegistry.isDeleting.mockReturnValue(false);
   });
 
   it('should join room on subscribe', () => {
@@ -106,6 +124,54 @@ describe('ThreadsGateway', () => {
       'codex.notification',
       notification,
     );
+  });
+
+  it('withholds server requests for a thread being deleted', () => {
+    mockDeletionRegistry.isDeleting.mockReturnValue(true);
+
+    listeners['serverRequest']({
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 't1', turnId: 'turn1', itemId: 'item1' },
+    });
+
+    expect(mockPendingApprovals.recordServerRequest).toHaveBeenCalled();
+    expect(mockServer.emit).not.toHaveBeenCalled();
+  });
+
+  it('replays a withheld request when the delete releases without destroying it', () => {
+    mockDeletionRegistry.isDeleting.mockReturnValue(true);
+    listeners['serverRequest']({
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 't1', turnId: 'turn1', itemId: 'item1' },
+    });
+
+    // Still pending means the delete aborted: cleanup cancels these rows for
+    // threads it actually destroyed.
+    mockPendingApprovals.listPending.mockReturnValue([{ requestId: '7' }]);
+    releaseListener?.(['t1']);
+
+    expect(mockServer.to).toHaveBeenCalledWith('thread:t1');
+    expect(mockServer.emit).toHaveBeenCalledWith('codex.serverRequest', {
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 't1', turnId: 'turn1', itemId: 'item1' },
+    });
+  });
+
+  it('does not replay a withheld request whose thread was destroyed', () => {
+    mockDeletionRegistry.isDeleting.mockReturnValue(true);
+    listeners['serverRequest']({
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 't1', turnId: 'turn1', itemId: 'item1' },
+    });
+
+    mockPendingApprovals.listPending.mockReturnValue([]);
+    releaseListener?.(['t1']);
+
+    expect(mockServer.emit).not.toHaveBeenCalled();
   });
 
   it('should accept connection with valid token', async () => {

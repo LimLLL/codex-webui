@@ -9,6 +9,7 @@ import {
   pendingServerRequests,
   type PendingServerRequestRow,
 } from '../database/schema';
+import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import type {
   PendingServerRequestDto,
@@ -22,6 +23,7 @@ export class PendingApprovalsService implements OnModuleInit {
   constructor(
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
     private readonly codexManager: CodexProcessManager,
+    private readonly deletionRegistry: ThreadDeletionRegistryService,
   ) {
     this.codexManager.addLifecycleListener((event) => {
       if (
@@ -52,6 +54,11 @@ export class PendingApprovalsService implements OnModuleInit {
     const now = Date.now();
     const generation = this.codexManager.getGeneration();
     const requestId = String(raw.id);
+    // Recorded as pending even while the thread is being deleted. Terminalizing
+    // here would strand the request if the delete then aborts: the UI never saw
+    // it, `respond` would refuse an already-resolved row, and app-server would
+    // still be waiting. Deletion cancels these explicitly once it has actually
+    // interrupted or removed the thread; late clicks are refused by `respond`.
     const row = {
       generation,
       requestId,
@@ -146,6 +153,7 @@ export class PendingApprovalsService implements OnModuleInit {
         'Pending request has already been resolved',
       );
     }
+    this.deletionRegistry.assertMutable(row.threadId);
 
     const client = this.codexManager.getClient();
     if (!client) {
@@ -210,9 +218,58 @@ export class PendingApprovalsService implements OnModuleInit {
             pendingServerRequests.requestId,
             String(requestId as string | number),
           ),
+          eq(pendingServerRequests.status, 'pending'),
         ),
       )
       .run();
+  }
+
+  /** Marks pending requests cancelled because their thread is being interrupted/deleted. */
+  cancelPendingForThreads(
+    threadIds: string[],
+    reason: string,
+  ): PendingServerRequestDto[] {
+    const normalized = [...new Set(threadIds.map((id) => id.trim()))].filter(
+      Boolean,
+    );
+    if (normalized.length === 0) return [];
+    const generation = this.codexManager.getGeneration();
+    const rows = this.db
+      .select()
+      .from(pendingServerRequests)
+      .where(
+        and(
+          eq(pendingServerRequests.generation, generation),
+          eq(pendingServerRequests.status, 'pending'),
+          inArray(pendingServerRequests.threadId, normalized),
+        ),
+      )
+      .all();
+    if (rows.length === 0) return [];
+
+    const now = Date.now();
+    this.db
+      .update(pendingServerRequests)
+      .set({ status: 'cancelled', updatedAt: now, resolvedAt: now })
+      .where(
+        and(
+          eq(pendingServerRequests.generation, generation),
+          eq(pendingServerRequests.status, 'pending'),
+          inArray(pendingServerRequests.threadId, normalized),
+        ),
+      )
+      .run();
+    this.logger.debug(
+      `Cancelled pending requests for deleting threads: count=${rows.length} reason=${reason}`,
+    );
+    return rows.map((row) =>
+      this.toDto({
+        ...row,
+        status: 'cancelled',
+        updatedAt: now,
+        resolvedAt: now,
+      }),
+    );
   }
 
   /** Expires all pending rows for an app-server generation. */

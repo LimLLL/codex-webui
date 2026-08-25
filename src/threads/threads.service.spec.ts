@@ -5,6 +5,7 @@ import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { ErrorCode } from '../common/error-codes';
 import { ThreadsBranchingService } from './threads-branching.service';
+import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 
 /** Branch state as the local-only service reports it for an untracked thread. */
 function localBranchState(threadId: string) {
@@ -39,6 +40,9 @@ describe('ThreadsService', () => {
   const mockBranching = {
     createMessageBranch: jest.fn(),
   };
+  const mockDeletionRegistry = {
+    assertMutable: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -48,6 +52,10 @@ describe('ThreadsService', () => {
         { provide: ThreadResumeRegistryService, useValue: mockResumeRegistry },
         { provide: ConversationBranchesService, useValue: mockBranches },
         { provide: ThreadsBranchingService, useValue: mockBranching },
+        {
+          provide: ThreadDeletionRegistryService,
+          useValue: mockDeletionRegistry,
+        },
       ],
     }).compile();
 
@@ -56,6 +64,7 @@ describe('ThreadsService', () => {
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockBranches).forEach((mock) => mock.mockReset());
     mockBranching.createMessageBranch.mockReset();
+    mockDeletionRegistry.assertMutable.mockReset();
     mockBranches.hasKnownDescendants.mockReturnValue(false);
     mockBranches.listKnownTreeThreadIds.mockImplementation(
       (threadId: string): string[] => [threadId],

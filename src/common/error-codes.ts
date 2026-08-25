@@ -124,6 +124,15 @@ export const ErrorCode = {
     branchPrefixMismatch: 'threads.branch_prefix_mismatch',
     branchMetadataFailed: 'threads.branch_metadata_failed',
     compactBlockedByDescendants: 'threads.compact_blocked_by_descendants',
+    deleteScanNotReady: 'threads.delete_scan_not_ready',
+    deleteTopologyConflict: 'threads.delete_topology_conflict',
+    deletePlanChanged: 'threads.delete_plan_changed',
+    deleteInProgress: 'threads.delete_in_progress',
+    deleteInterruptFailed: 'threads.delete_interrupt_failed',
+    deleteFailed: 'threads.delete_failed',
+    deleteLocalCleanupFailed: 'threads.delete_local_cleanup_failed',
+    deleteOrphanedLocalTopology: 'threads.delete_orphaned_local_topology',
+    deleteThreadIdSetRequired: 'threads.delete_thread_id_set_required',
   },
 
   // ── Settings ───────────────────────────────────────────────────────

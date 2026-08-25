@@ -20,7 +20,15 @@ import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
+import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
+
+/** A server request held back while its thread was inside a delete. */
+interface SuppressedServerRequest {
+  id: number | string;
+  method: string;
+  params: Record<string, unknown>;
+}
 
 export type CodexSocketLifecycleEvent =
   | { type: 'appServerRestarting'; generation: number; delayMs: number }
@@ -42,11 +50,18 @@ export class ThreadsGateway
   @WebSocketServer()
   server!: Server;
 
+  /** Requests withheld per thread while a delete held that thread's guard. */
+  private readonly suppressedRequests = new Map<
+    string,
+    SuppressedServerRequest[]
+  >();
+
   constructor(
     private readonly codexManager: CodexProcessManager,
     private readonly authService: AuthService,
     private readonly activeThreads: ActiveThreadRegistryService,
     private readonly pendingApprovals: PendingApprovalsService,
+    private readonly deletionRegistry: ThreadDeletionRegistryService,
   ) {}
 
   afterInit(): void {
@@ -59,6 +74,10 @@ export class ThreadsGateway
 
     this.codexManager.addListener('serverRequest', (request: ServerRequest) => {
       this.handleCodexServerRequest(request);
+    });
+
+    this.deletionRegistry.onRelease((threadIds) => {
+      this.replaySuppressedRequests(threadIds);
     });
 
     this.logger.log('ThreadsGateway initialized');
@@ -136,6 +155,40 @@ export class ThreadsGateway
   }
 
   /**
+   * Re-emits requests withheld during a delete that did not destroy the thread.
+   *
+   * Without this the app-server is still blocked waiting on a request no client
+   * ever saw, and nothing short of a page reload brings the card back. Requests
+   * belonging to threads that really were destroyed are cancelled during local
+   * cleanup, so filtering on rows that are still pending is what keeps this from
+   * resurrecting cards for conversations that are gone.
+   *
+   * @param threadIds - Threads whose delete guard was just released
+   */
+  private replaySuppressedRequests(threadIds: string[]): void {
+    for (const threadId of threadIds) {
+      const held = this.suppressedRequests.get(threadId);
+      if (!held) continue;
+      this.suppressedRequests.delete(threadId);
+
+      const stillPending = new Set(
+        this.pendingApprovals
+          .listPending([threadId])
+          .map((row) => row.requestId),
+      );
+      for (const request of held) {
+        if (!stillPending.has(String(request.id))) continue;
+        this.server
+          .to(`thread:${threadId}`)
+          .emit('codex.serverRequest', request);
+        this.logger.log(
+          `Replayed suppressed server request ${String(request.id)} for thread ${threadId}`,
+        );
+      }
+    }
+  }
+
+  /**
    * Routes Codex server-initiated requests (e.g. approval) to subscribed clients.
    * The first client to respond wins; response is forwarded back to app-server.
    */
@@ -145,6 +198,21 @@ export class ThreadsGateway
     const requestId = (request as unknown as { id: number | string }).id;
 
     this.pendingApprovals.recordServerRequest(request);
+
+    // Suppressed rather than terminalized: the row stays pending so an aborted
+    // delete leaves the request answerable, but there is no point surfacing a
+    // card for a conversation the user just chose to destroy. Held here so the
+    // guard's release can put it back on screen if the delete does abort.
+    if (threadId && this.deletionRegistry.isDeleting(threadId)) {
+      const held = this.suppressedRequests.get(threadId) ?? [];
+      held.push({
+        id: requestId,
+        method: request.method,
+        params: params ?? {},
+      });
+      this.suppressedRequests.set(threadId, held);
+      return;
+    }
 
     const target = threadId
       ? this.server.to(`thread:${threadId}`)

@@ -109,3 +109,24 @@ export function isDescendantRejectedError(err: unknown): boolean {
     errorText(err),
   );
 }
+
+/**
+ * Returns true when app-server has no rollout backing a thread id.
+ *
+ * Deliberately matched against one exact phrase. Measured on 0.149.0 against a
+ * thread id that never existed:
+ *
+ * - `thread/delete`  → `-32600 no rollout found for thread id <id>`
+ * - `thread/archive` → `-32600 no rollout found for thread id <id>`
+ * - `thread/read`    → `-32600 thread not loaded: <id>`
+ *
+ * `thread/read`'s wording is intentionally *not* accepted: "not loaded" also
+ * describes a thread that exists but was never resumed, so treating it as
+ * proof of absence would be a guess. This predicate gates the delete path's
+ * "already gone, reap the local rows" branch, where a false positive discards
+ * branch metadata for a conversation that is still on disk.
+ */
+export function isThreadNotFoundError(err: unknown): boolean {
+  if (!isInvalidRequest(err)) return false;
+  return /\bno rollout found for thread id\b/i.test(errorText(err));
+}
