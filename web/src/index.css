@@ -105,22 +105,30 @@ body {
   --sidebar-ring: oklch(0.60 0.04 255);
 
   /* ── Glass tokens (light) ─────────────────────────── */
-  --glass-1-surface: rgba(255, 255, 255, 0.08);
+  /* A white tint reads as "glass" only over a darker or coloured backdrop. This
+     theme's page is already near-white (0.985), so a lightly tinted white pane
+     is indistinguishable from the page behind it and the surfaces below are
+     opaque enough to separate a panel from what it covers. The border does the
+     rest of the work — see --glass-border. */
+  --glass-1-surface: rgba(255, 255, 255, 0.40);
   --glass-1-blur: 8px;
-  --glass-2-surface: rgba(255, 255, 255, 0.12);
+  --glass-2-surface: rgba(255, 255, 255, 0.50);
   --glass-2-blur: 12px;
-  --glass-3-surface: rgba(255, 255, 255, 0.18);
+  --glass-3-surface: rgba(255, 255, 255, 0.60);
   --glass-3-blur: 16px;
-  --glass-4-surface: rgba(255, 255, 255, 0.25);
+  --glass-4-surface: rgba(255, 255, 255, 0.70);
   --glass-4-blur: 24px;
-  --glass-5-surface: rgba(255, 255, 255, 0.35);
+  --glass-5-surface: rgba(255, 255, 255, 0.80);
   --glass-5-blur: 40px;
-  /* Modal surfaces sit on the black scrim, where a lightly tinted white panel
-     composites to grey (50% black under 35% white lands near #ACACAC). They
-     therefore stay near-opaque in this theme; see .glass-modal. */
+  /* Modal surfaces sit on the black scrim, which darkens whatever shows through
+     the panel, so they stay a step more opaque than `glass-5` even now that the
+     level surfaces above are themselves fairly opaque. See .glass-modal. */
   --glass-modal-surface: rgba(255, 255, 255, 0.92);
-  --glass-border: rgba(255, 255, 255, 0.20);
-  --glass-border-subtle: rgba(255, 255, 255, 0.10);
+  /* Dark, not white: a white hairline on a near-white page is invisible, which
+     left every light-theme glass panel with no perceptible edge at all. The
+     hue matches the palette's blue-tinted neutrals. */
+  --glass-border: rgba(23, 27, 38, 0.14);
+  --glass-border-subtle: rgba(23, 27, 38, 0.08);
   --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
   --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
   --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
@@ -257,6 +265,21 @@ body {
   backdrop-filter: blur(var(--glass-5-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow-lg), var(--glass-inset);
+}
+
+/* Full-bleed bar (header). The levels above describe *panels*: a box border on
+   all four sides and a shadow cast by something floating above the page. A bar
+   that spans the viewport has no sides to outline — its side borders land on
+   the viewport edge or double up with the sidebar divider — and it is attached
+   to the page, not floating over it. So: one bottom hairline, and only enough
+   shadow to separate it from content scrolling underneath. */
+.glass-bar {
+  background: var(--glass-4-surface);
+  -webkit-backdrop-filter: blur(var(--glass-4-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-4-blur)) saturate(var(--glass-saturate));
+  border: none;
+  border-bottom: 1px solid var(--glass-border-subtle);
+  box-shadow: var(--glass-shadow-sm);
 }
 
 /* Glass level 5 for panels layered over a modal scrim. Identical to .glass-5

@@ -11,6 +11,14 @@
  * MCP, skills) are intentionally absent — duplicating them would create two
  * sources of truth for the same setting.
  */
+import {
+  MessageSquareHeart,
+  ScanSearch,
+  Shrink,
+  Target,
+  Telescope,
+  type LucideIcon,
+} from 'lucide-react';
 
 /**
  * How a command takes effect once selected.
@@ -38,6 +46,12 @@ export interface SlashCommandDef {
   name: string;
   /** Natural-language i18n key describing what the command does. */
   description: string;
+  /**
+   * Palette glyph. Reuses the icon the command's own UI already shows (plan
+   * badge, goal row, turn markers) so the palette and the resulting state read
+   * as the same feature.
+   */
+  icon: LucideIcon;
   kind: SlashDispatchKind;
   /**
    * Returns an i18n key explaining why the command cannot run, or null when
@@ -71,6 +85,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     name: 'plan',
     description: 'Toggle plan mode for multi-step planning',
+    icon: Telescope,
     kind: 'nextTurnSetting',
     // Allowed mid-turn: it only affects the next turn, never the running one.
     unavailableReason: requiresWritableThread,
@@ -78,24 +93,28 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     name: 'goal',
     description: 'Set a persistent goal for Codex to work toward',
+    icon: Target,
     kind: 'ui',
     unavailableReason: requiresWritableThread,
   },
   {
     name: 'review',
     description: 'Review uncommitted changes, a branch, or a commit',
+    icon: ScanSearch,
     kind: 'ui',
     unavailableReason: requiresIdleThread,
   },
   {
     name: 'compact',
     description: 'Compact this conversation to free up context',
+    icon: Shrink,
     kind: 'threadMutation',
     unavailableReason: requiresIdleThread,
   },
   {
     name: 'feedback',
     description: 'Send feedback about Codex to the maintainers',
+    icon: MessageSquareHeart,
     kind: 'ui',
     // Feedback is about the session, so it stays usable while a turn runs and
     // on read-only threads — those are exactly when people want to report.

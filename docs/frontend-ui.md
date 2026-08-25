@@ -12,8 +12,12 @@ Path alias: `@/` → `src/`
 
 - OKLCH 调色板，蓝色色相 (~250)
 - 5 级玻璃海拔系统 (`glass-1` ~ `glass-5`)：`backdrop-filter: blur() saturate()` + 半透明边框 + inset 高光/底缘阴影
+- **亮暗两套玻璃 token 方向相反**：暗色下白色微光即是玻璃；亮色下页面本身接近纯白（0.985），白色描边等于隐形、白色淡底等于没有。故亮色的 `--glass-border*` 用低透明度深色，表面白色不透明度也高得多（0.40 ~ 0.80）。改玻璃 token 时两套要分别验证，不能只看暗色
 - Sidebar: `bg-card/80`（无 backdrop-filter，避免堆叠伪影）
-- Header/Footer: `glass-4`，Popover/登录卡片: `glass-5`，Dialog/AlertDialog: `glass-modal`
+- Header: `glass-bar`，Popover/登录卡片: `glass-5`，Dialog/AlertDialog: `glass-modal`
+- `glass-1` ~ `glass-5` 描述的是**面板**：四边 border + 悬浮阴影。通栏横条没有"侧边"可以描边（侧边框要么压在视口边缘，要么和侧边栏分隔线叠成双线），也不是浮在页面上的，所以单独一个 `glass-bar`：只有底部一条 hairline + `shadow-sm`
+- Composer footer 不带玻璃层：玻璃在输入框本体（`glass-3`）上，footer 只负责留白。两层叠加会把输入框框在一块可见的"纸板"里
+- 玻璃类定义在 `@layer` 之外，优先级高于 Tailwind utilities。因此 `.glass-*` 的 `box-shadow` 会盖掉 `ring-*`（v4 的 ring 也是 box-shadow）——玻璃表面上的焦点态要用 `outline-*`
 - `glass-modal` 与 `glass-5` 只差表面色：亮色主题下模态压在 `bg-black/50` 遮罩上，35% 白玻璃会合成为灰（50% 黑底 + 35% 白 ≈ `#ACACAC`），故亮色下表面提到 92% 白。暗色主题遮罩与玻璃同向变深，沿用 `glass-5` 表面色。**只有带遮罩的面板该用它**——Popover 无遮罩，用 `glass-5` 才正确
 - **禁止**在玻璃表面堆叠多个 `backdrop-filter` 或使用 `::before`/`::after` 伪元素（导致渲染闪烁）
 
@@ -162,7 +166,8 @@ ChatInput 拆分为三个文件：`chat-input.tsx`（编排）、`use-chat-attac
 - `UserMessageBubble`：使用 `react-markdown` + `remark-gfm` + 自定义 `remark-mentions` 插件渲染 markdown + 可点击 @mention
 - `remark-mentions`（`lib/remark-mentions.ts`）：remark AST 插件，将 `@path` 文本转为 `mention:` scheme 的 link 节点。跳过 code/inlineCode/link 节点避免误匹配
 - `userUrlTransform`：放行 `mention:` scheme（react-markdown 默认 sanitizer 会过滤非标准协议），其他 URL 仍走 `defaultUrlTransform`
-- `userComponents`：蓝色气泡上的白底样式覆盖（blockquote/del 半透明白色，code block 黑色半透明背景）
+- 气泡是中性色（`bg-muted` + `border-border/60`），不用强调色：用户自己写的消息是最不需要被吸引注意的内容，而一块高饱和色是整套中性色板里唯一的高彩度面，左右对齐已经足够表明发送方
+- `userComponents`：样式覆盖一律用 `foreground` / `border` 表达（`bg-foreground/10` 等），不写死白色或黑色——气泡底色随主题反转，写死白色只在它还是蓝色实色块时成立
 - mention link → 渲染为可点击 inline badge（FileText 图标 + 半透明背景 + hover 高亮）
 - 点击 @mention badge → dispatch `codex-webui:open-file` 自定义事件 → `ThreadView` 打开 session panel + 对应文件 tab
 - 图片附件也渲染为可点击 badge（ImageIcon 图标 + 文件名），点击同样打开 session panel 预览
@@ -172,7 +177,18 @@ ChatInput 拆分为三个文件：`chat-input.tsx`（编排）、`use-chat-attac
 ### ChatInput 布局
 
 从 overlay 模型（按钮 `absolute` 叠加在 textarea 底部）改为 stacked 模型：
-- 外层容器提供 border/rounding/backdrop-blur + `focus-within:ring`
+- 单一玻璃面板（`glass-3` + `rounded-2xl`）内依次是附件 chips、textarea、按钮行——三者共用一个表面，不再靠 `border-t-0`/`border-b-0` 拼接两个盒子
+- 焦点态用 `focus-within:outline-2`，不能用 ring（见玻璃层级说明）
+
+#### 浮层定位
+
+`thread-view` 用 `relative` 包裹时间线 + composer，composer 为 `absolute inset-x-0 bottom-0`。它**必须**浮在时间线上方，否则：玻璃背后是纯背景色，透不出任何内容；且时间线在 composer 上沿被硬切，滚动中的头像/气泡会被一条实色边裁断。
+
+时间线需要为浮层预留末端空间，由 `ChatTimeline` 的 `bottomInset` 传入 virtualizer 的 `paddingEnd` + `scrollPaddingEnd`（前者让最后一条能滚过 composer，后者让自动滚动停在 composer 之上；只给其一都不对）。空态容器用 `paddingBottom` 等效处理。
+
+composer 高度随 textarea、附件 chips、goal 行、只读横幅变化，无法静态推算，由 `ChatInput` 内 `ResizeObserver` 测 `offsetHeight`（含 padding 带，那也是遮挡区）上报给路由。
+
+例外：桌面端 session 面板打开时 composer 回到流式布局（`shrink-0`，`bottomInset=0`）——此时浮层会压在终端/文件面板底部而不是对话上。
 - Textarea 无边框透明，`max-h-40 overflow-y-auto` 长文本滚动
 - 按钮行在 textarea 下方，永远不会被文本遮挡
 - `min-h-20` 默认较高输入区

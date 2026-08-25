@@ -41,6 +41,12 @@ a dispatch kind:
 Each command also carries an `unavailableReason(availability)` predicate, so the
 palette can grey a row out **and** explain why rather than silently failing.
 
+The catalog also holds each row's `icon` (a `lucide-react` component). Icons are
+deliberately shared with the UI the command produces — `/plan` uses the plan-mode
+badge glyph, `/goal` the goal-progress-row glyph, `/review` and `/compact` their
+turn-marker glyphs — so the palette entry and the resulting state read as the
+same feature rather than two unrelated affordances.
+
 ## Trigger rules
 
 The palette opens only when `/` is the first character of the draft and no

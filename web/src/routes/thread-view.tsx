@@ -114,6 +114,13 @@ export function ThreadView() {
   const isDesktop = breakpoint === 'desktop';
   const showPanel = sessionPanelOpen && !!threadCwd;
 
+  // The composer floats over the transcript so its glass surface has something
+  // to show through, and so the transcript fades under it instead of being cut
+  // off by an opaque band. It stays in flow once the session panel is open:
+  // floating there would park it over the terminal, not over the transcript.
+  const composerFloats = !(showPanel && isDesktop);
+  const [composerHeight, setComposerHeight] = useState(0);
+
   const sessionPanelContent = showPanel ? (
     <SessionPanel
       threadId={threadId}
@@ -126,7 +133,7 @@ export function ThreadView() {
   ) : null;
 
   return (
-    <>
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {showPanel && isDesktop ? (
         /* Desktop: resizable vertical split */
         <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
@@ -143,7 +150,10 @@ export function ThreadView() {
           </ResizablePanel>
         </ResizablePanelGroup>
       ) : (
-        <ChatTimeline onEditMessage={(v) => chatInputRef.current?.setInput(v)} />
+        <ChatTimeline
+          onEditMessage={(v) => chatInputRef.current?.setInput(v)}
+          bottomInset={composerFloats ? composerHeight : 0}
+        />
       )}
 
       {/* Mobile/Tablet: session panel as bottom Sheet */}
@@ -162,7 +172,9 @@ export function ThreadView() {
         ref={chatInputRef}
         panelOpen={sessionPanelOpen}
         onTogglePanel={() => setSessionPanelOpen((o) => !o)}
+        className={composerFloats ? 'absolute inset-x-0 bottom-0' : 'shrink-0'}
+        onHeightChange={setComposerHeight}
       />
-    </>
+    </div>
   );
 }

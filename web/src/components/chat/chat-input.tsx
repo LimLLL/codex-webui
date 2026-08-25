@@ -45,12 +45,17 @@ export interface ChatInputHandle {
 interface Props {
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** Positioning classes, so the route decides whether the composer floats. */
+  className?: string;
+  /** Reports the composer's rendered height whenever it changes. */
+  onHeightChange?: (height: number) => void;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
-  { panelOpen, onTogglePanel },
+  { panelOpen, onTogglePanel, className, onHeightChange },
   ref,
 ) {
+  const footerRef = useRef<HTMLElement>(null);
   const [value, setValue] = useState('');
   const valueRef = useRef(value);
   useEffect(() => { valueRef.current = value; }, [value]);
@@ -267,9 +272,30 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
   const hasContent = value.trim().length > 0 || attachments.length > 0;
 
+  // The composer grows with the textarea, attachment chips, the goal row and
+  // the read-only banner, so the space the timeline must reserve for it can
+  // only be measured, not derived. offsetHeight rather than contentRect: the
+  // padding band is part of what covers the transcript.
+  useEffect(() => {
+    const el = footerRef.current;
+    if (!el || !onHeightChange) return;
+    const observer = new ResizeObserver(() => onHeightChange(el.offsetHeight));
+    observer.observe(el);
+    onHeightChange(el.offsetHeight);
+    return () => observer.disconnect();
+  }, [onHeightChange]);
+
   // ── Render ───────────────────────────────────────────────
+  // The footer is only a spacing band: the composer below carries the glass
+  // surface, so a second surface here would frame it in a visible slab.
   return (
-    <footer className="glass-4 sticky bottom-0 z-10 px-3 py-2.5 sm:px-4 sm:py-3 lg:px-6">
+    <footer
+      ref={footerRef}
+      className={cn(
+        'z-10 px-3 py-2.5 sm:px-4 sm:py-3 lg:px-6',
+        className ?? 'sticky bottom-0',
+      )}
+    >
       {/* Different reasons to be read-only, with different remedies. A single
           archived-flavoured message told users to unarchive a conversation that
           is not archived, contradicting the banner above the timeline. */}
@@ -287,12 +313,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       <GoalProgressRow threadId={threadId} readOnly={readOnly} />
 
       <div className="relative">
-        <AttachmentChips
-          attachments={chipAttachments}
-          onRemove={handleRemoveAttachment}
-          className="rounded-t-xl border border-b-0 border-border/40 bg-background/40"
-        />
-
         <SlashPopover
           open={slashOpen}
           filtered={slashFiltered}
@@ -312,11 +332,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           onNavigateUp={handleMentionNavigateUp}
         />
 
-        {/* Container provides border/rounding; textarea + buttons are stacked inside */}
-        <div className={cn(
-          'border border-input bg-background/60 backdrop-blur-sm transition-all duration-200 focus-within:ring-2 focus-within:ring-primary/30',
-          chipAttachments.length > 0 ? 'rounded-b-xl border-t-0' : 'rounded-xl',
-        )}>
+        {/* One glass pane holds chips, textarea and toolbar so the composer
+            reads as a single floating surface rather than stacked boxes.
+            Focus uses outline, not ring: ring is a box-shadow utility and the
+            unlayered .glass-* box-shadow would win the cascade against it. */}
+        <div className="glass-3 rounded-2xl transition-all duration-200 focus-within:outline-2 focus-within:outline-primary/40">
+          <AttachmentChips
+            attachments={chipAttachments}
+            onRemove={handleRemoveAttachment}
+            className="border-b border-[var(--glass-border-subtle)]"
+          />
+
           <Textarea
             ref={textareaRef}
             value={value}

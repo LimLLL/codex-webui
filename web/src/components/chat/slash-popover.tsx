@@ -49,6 +49,7 @@ export function SlashPopover({
         {filtered.map((command, index) => {
           const blockedReason = command.unavailableReason(availability);
           const disabled = blockedReason !== null;
+          const Icon = command.icon;
           return (
             <button
               key={command.name}
@@ -61,13 +62,14 @@ export function SlashPopover({
                 onSelect(command);
               }}
               className={cn(
-                'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm',
+                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm',
                 index === selectedIndex && !disabled && 'bg-accent',
                 disabled
                   ? 'cursor-not-allowed opacity-50'
                   : 'hover:bg-accent/60',
               )}
             >
+              <Icon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="font-mono text-xs font-medium">
                 /{command.name}
               </span>

@@ -29,7 +29,12 @@ function userUrlTransform(url: string): string {
 }
 
 /**
- * Markdown component overrides for user message bubbles (white-on-blue).
+ * Markdown component overrides for user message bubbles.
+ *
+ * Tints are expressed against `foreground`/`border` rather than fixed white or
+ * black: the bubble sits on a neutral surface that inverts between themes, and
+ * hard-coded white worked only while the bubble was a saturated blue block.
+ *
  * Links with `mention:` scheme render as clickable file badges;
  * regular links open in a new tab.
  */
@@ -39,7 +44,7 @@ const userComponents: ComponentProps<typeof Markdown>['components'] = {
   ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>,
   li: ({ children }) => <li className="text-sm">{children}</li>,
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-white/30 pl-3 italic text-white/70">
+    <blockquote className="my-2 border-l-2 border-border pl-3 italic text-muted-foreground">
       {children}
     </blockquote>
   ),
@@ -58,7 +63,7 @@ const userComponents: ComponentProps<typeof Markdown>['components'] = {
               openFileInPanel(absolutePath);
             }
           }}
-          className="inline-flex cursor-pointer items-center gap-1 rounded bg-white/15 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-white/25"
+          className="inline-flex cursor-pointer items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-foreground/20"
         >
           <FileText className="inline h-3 w-3 opacity-70" />
           {children}
@@ -76,20 +81,20 @@ const userComponents: ComponentProps<typeof Markdown>['components'] = {
     const isBlock = className?.startsWith('language-') || String(children).includes('\n');
     if (isBlock) {
       return (
-        <pre className="my-2 overflow-auto rounded bg-black/30 p-3 text-sm leading-relaxed">
+        <pre className="my-2 overflow-auto rounded bg-foreground/[0.07] p-3 text-sm leading-relaxed">
           <code>{children}</code>
         </pre>
       );
     }
     return (
-      <code className="rounded bg-white/15 px-1.5 py-0.5 font-mono text-[0.85em]" {...rest}>
+      <code className="rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[0.85em]" {...rest}>
         {children}
       </code>
     );
   },
   pre: ({ children }) => <>{children}</>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-  hr: () => <hr className="my-3 border-white/20" />,
+  hr: () => <hr className="my-3 border-border" />,
 };
 
 export function UserMessageBubble({ content, threadCwd, images }: Props) {
@@ -128,7 +133,7 @@ export function UserMessageBubble({ content, threadCwd, images }: Props) {
                   openFileInPanel(src);
                 }
               }}
-              className="inline-flex cursor-pointer items-center gap-1 rounded bg-white/15 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-white/25"
+              className="inline-flex cursor-pointer items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-foreground/20"
             >
               <ImageIcon className="inline h-3 w-3 opacity-70" />
               {src.split('/').pop() ?? src}

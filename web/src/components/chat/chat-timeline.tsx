@@ -80,9 +80,14 @@ function ReadOnlyBanner({ reason }: { reason: string }) {
 
 interface Props {
   onEditMessage?: (message: string) => void;
+  /**
+   * Space in px reserved at the end of the transcript for a composer floating
+   * over it. Zero when the composer sits in flow below the timeline.
+   */
+  bottomInset?: number;
 }
 
-export function ChatTimeline({ onEditMessage }: Props) {
+export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
   'use no memo'; // TanStack Virtual is incompatible with React Compiler memoization
   const { t } = useTranslation();
   const timeline = useTimelineStore((s) => s.timeline);
@@ -156,12 +161,18 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const shouldAutoScroll = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
 
+  // `paddingEnd` grows the scrollable range so the last entry can clear the
+  // floating composer; `scrollPaddingEnd` keeps auto-scroll from parking that
+  // entry underneath it. Both are needed — the first alone lets the list scroll
+  // far enough, the second decides where "scrolled to the end" stops.
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual known limitation
   const virtualizer = useVirtualizer({
     count: timeline.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 80,
     overscan: 5,
+    paddingEnd: bottomInset,
+    scrollPaddingEnd: bottomInset,
   });
 
   // Track whether user is near bottom for auto-scroll decisions
@@ -217,7 +228,10 @@ export function ChatTimeline({ onEditMessage }: Props) {
   // would shift the whole message column sideways.
   if (timeline.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto [scrollbar-gutter:stable]"
+        style={{ paddingBottom: bottomInset }}
+      >
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
             <Loader2 className="mb-3 h-8 w-8 animate-spin opacity-40" />
@@ -384,13 +398,11 @@ function TimelineEntryRow({
     const versions = turnId ? versionsByTurnId.get(turnId) : undefined;
     return (
       <div className="group/user flex flex-col items-end">
-        <div
-          className="max-w-2xl overflow-hidden rounded-2xl bg-blue-600 px-4 py-3 text-white [&_a]:text-blue-200 [&_a]:underline [&_blockquote]:text-white/70 [&_code]:bg-white/15 [&_del]:text-white/70"
-          style={{
-            boxShadow:
-              '0 8px 24px rgba(59, 130, 246, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(0, 0, 0, 0.12)',
-          }}
-        >
+        {/* A neutral tint, not an accent colour: the user's own message is the
+            one thing on screen they never need drawing to, and a saturated block
+            was the only high-chroma surface in an otherwise neutral palette.
+            Side and alignment already say who wrote it. */}
+        <div className="max-w-2xl overflow-hidden rounded-2xl border border-border/60 bg-muted px-4 py-3 text-foreground [&_a]:underline">
           <UserMessageBubble content={entry.content} threadCwd={threadCwd} images={entry.images} />
         </div>
         {/* Reserved even when empty so revealing the controls cannot shift layout. */}
