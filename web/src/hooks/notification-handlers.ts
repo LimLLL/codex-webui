@@ -13,6 +13,10 @@ import {
   threadsListThreadsQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { FileUpdateChangeDto, RateLimitSnapshotDto } from '@/generated/api';
+import {
+  invalidateBranchTreesSoon,
+  invalidateThreadListSoon,
+} from '@/lib/query-invalidation';
 import { useAccountStore } from '@/stores/account-store';
 import { useMcpStore } from '@/stores/mcp-store';
 import { showSnackbar } from '@/stores/snackbar-store';
@@ -30,6 +34,8 @@ import i18n from '@/i18n';
 export interface NotificationContext {
   threadId: string | null;
   queryClient: QueryClient;
+  /** Removes all local runtime state for threads that no longer exist. */
+  forgetThreads: (threadIds: string[]) => void;
   updateCurrentTurn: (
     turnId: string,
     updater: (
@@ -108,19 +114,6 @@ function shouldRecordFinalError(threadId: string | undefined, turnId: string | u
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Thread-list invalidation with debounce to avoid storms
-// ---------------------------------------------------------------------------
-
-let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
-
-function debouncedInvalidateThreadList(queryClient: QueryClient): void {
-  if (invalidateTimer) clearTimeout(invalidateTimer);
-  invalidateTimer = setTimeout(() => {
-    void queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
-    invalidateTimer = null;
-  }, 300);
-}
 
 let invalidateMcpTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -459,7 +452,7 @@ const handleMcpStartupStatusUpdated: Handler = (params, ctx) => {
 // ---------------------------------------------------------------------------
 
 const handleThreadStarted: Handler = (_params, ctx) => {
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadStatusChanged: Handler = (params, ctx) => {
@@ -473,7 +466,7 @@ const handleThreadStatusChanged: Handler = (params, ctx) => {
       ctx.addSystemMessage(i18n.t('Thread encountered a system error'), 'error');
     }
   }
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadNameUpdated: Handler = (params, ctx) => {
@@ -482,7 +475,7 @@ const handleThreadNameUpdated: Handler = (params, ctx) => {
   if (threadId && ctx.threadId === threadId) {
     ctx.setThreadTitle(name?.trim() || null);
   }
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadClosed: Handler = (params, ctx) => {
@@ -490,7 +483,7 @@ const handleThreadClosed: Handler = (params, ctx) => {
   if (ctx.threadId === threadId) {
     ctx.addSystemMessage(i18n.t('Thread closed'), 'info');
   }
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadArchived: Handler = (params, ctx) => {
@@ -498,11 +491,38 @@ const handleThreadArchived: Handler = (params, ctx) => {
   if (ctx.threadId === threadId) {
     ctx.addSystemMessage(i18n.t('Thread archived'), 'warning');
   }
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadUnarchived: Handler = (_params, ctx) => {
-  debouncedInvalidateThreadList(ctx.queryClient);
+  invalidateThreadListSoon(ctx.queryClient);
+};
+
+/**
+ * Drops a thread the app-server destroyed, whoever asked for it.
+ *
+ * A delete started here has already navigated away by the time this arrives,
+ * so the interesting case is the other one: another browser or the CLI removed
+ * the conversation and this client would otherwise keep listing it until the
+ * page is reloaded. Branch topology has to be refreshed alongside the list —
+ * the sidebar decides whether a row is a fold-away branch from that data, and
+ * refreshing only one of the two makes rows appear and disappear.
+ */
+const handleThreadDeleted: Handler = (params, ctx) => {
+  const threadId = params.threadId as string | undefined;
+  if (!threadId) return;
+
+  if (ctx.threadId === threadId) {
+    // The runtime is deliberately left in place: dropping it would blank the
+    // conversation the user is reading with no explanation, and the router is
+    // not reachable from here. Telling them is the honest minimum.
+    ctx.addSystemMessage(i18n.t('This conversation was deleted'), 'error');
+  } else {
+    ctx.forgetThreads([threadId]);
+  }
+
+  invalidateThreadListSoon(ctx.queryClient);
+  invalidateBranchTreesSoon(ctx.queryClient);
 };
 
 const handleTurnStarted: Handler = (params, ctx) => {
@@ -657,6 +677,7 @@ const HANDLERS: Record<string, Handler> = {
   'thread/closed': handleThreadClosed,
   'thread/archived': handleThreadArchived,
   'thread/unarchived': handleThreadUnarchived,
+  'thread/deleted': handleThreadDeleted,
   'turn/started': handleTurnStarted,
   'thread/compacted': handleThreadCompacted,
   'model/rerouted': handleModelRerouted,

@@ -456,6 +456,7 @@ interface TimelineState {
   selectThread: (threadId: string | null) => void;
   resubscribeAll: () => void;
   unsubscribeThread: (threadId: string) => void;
+  forgetThreads: (threadIds: string[]) => void;
   setMaxIdleSubscriptions: (limit: number) => void;
   cleanupIdleThreadSubscriptions: (limit?: number) => void;
   getThreadTitle: (threadId: string) => string;
@@ -623,6 +624,52 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         const subscribedThreadIds = new Set(state.subscribedThreadIds);
         subscribedThreadIds.delete(threadId);
         return { subscribedThreadIds };
+      });
+    },
+
+    /**
+     * Drops every trace of threads that no longer exist.
+     *
+     * `unsubscribeThread` only leaves the socket room; the runtime survives in
+     * `threadsById` and would be handed straight back to a deep link or a back
+     * navigation to a deleted thread, showing content for a conversation that
+     * is gone. The selected runtime needs special care: it lives in the
+     * top-level fields, and the usual `selectThread(null)` path persists it into
+     * `threadsById` on the way out — which would resurrect what we are deleting.
+     *
+     * @param threadIds - Threads that were destroyed
+     */
+    forgetThreads: (threadIds) => {
+      const doomed = new Set(threadIds);
+      if (doomed.size === 0) return;
+
+      const socket = getSocket();
+      const subscribed = get().subscribedThreadIds;
+      for (const threadId of doomed) {
+        if (subscribed.has(threadId)) {
+          socket.emit('thread.unsubscribe', { threadId });
+        }
+      }
+
+      set((state) => {
+        const subscribedThreadIds = new Set(state.subscribedThreadIds);
+        for (const threadId of doomed) subscribedThreadIds.delete(threadId);
+
+        const selectedDoomed =
+          state.selectedThreadId !== null && doomed.has(state.selectedThreadId);
+        const threadsById = selectedDoomed
+          ? { ...state.threadsById }
+          : persistSelectedRuntime(state);
+        for (const threadId of doomed) delete threadsById[threadId];
+
+        return selectedDoomed
+          ? {
+              ...selectedFields(null),
+              selectedThreadId: null,
+              threadsById,
+              subscribedThreadIds,
+            }
+          : { threadsById, subscribedThreadIds };
       });
     },
 

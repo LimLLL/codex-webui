@@ -1083,6 +1083,8 @@ export type BranchTreeMemberDto = {
     threadId: string;
     parentThreadId?: string | null;
     hasChildren: boolean;
+    source: 'local' | 'adopted';
+    commonPrefixTurnId?: string | null;
 };
 
 export type BranchVersionDto = {
@@ -1091,6 +1093,7 @@ export type BranchVersionDto = {
     threadId: string;
     versionIndex: number;
     kind: 'original' | 'branch';
+    source: 'local' | 'adopted';
     /**
      * Turn carrying this version's message; null until it starts.
      */
@@ -1167,6 +1170,62 @@ export type ThreadSetNameRequestDto = {
     name: string;
 };
 
+export type BranchAdoptionDiagnosticDto = {
+    severity: 'warning' | 'error';
+    code: string;
+    message: string;
+    threadId?: string;
+    parentThreadId?: string;
+};
+
+export type BranchAdoptionStatusDto = {
+    status: 'pending' | 'running' | 'ready' | 'failed';
+    generation: number;
+    scannedFiles: number;
+    parsedFiles: number;
+    fullyParsedFiles: number;
+    adoptedEdges: number;
+    adoptedVersions: number;
+    topologyOnlyEdges: number;
+    skippedLegacyForks: number;
+    skippedFiles: number;
+    conflicts: number;
+    errorMessage?: string;
+    diagnostics: Array<BranchAdoptionDiagnosticDto>;
+};
+
+export type ThreadDeleteBlockerDto = {
+    code: string;
+    message: string;
+    threadId?: string;
+    parentThreadId?: string;
+};
+
+export type ThreadDeleteFailureDto = {
+    stage: 'planning' | 'interrupt' | 'drift' | 'delete' | 'local_cleanup';
+    code: string;
+    message: string;
+    threadId?: string;
+};
+
+export type ThreadDeletePlanThreadDto = {
+    threadId: string;
+    parentThreadId?: string | null;
+    childThreadIds: Array<string>;
+    depth: number;
+    deleteOrderIndex: number;
+    source: 'target' | 'local' | 'adopted' | 'server';
+    status: 'missing' | 'notLoaded' | 'idle' | 'active' | 'systemError';
+    active: boolean;
+    pendingApprovalCount: number;
+    name?: string | null;
+    preview?: string | null;
+    cwd?: string | null;
+    archived: boolean;
+    createdAt?: number | null;
+    updatedAt?: number | null;
+};
+
 export type PendingServerRequestDto = {
     generation: number;
     requestId: string;
@@ -1177,9 +1236,44 @@ export type PendingServerRequestDto = {
     params: {
         [key: string]: unknown;
     };
-    status: 'pending' | 'resolved' | 'expired' | 'failed';
+    status: 'pending' | 'resolved' | 'expired' | 'failed' | 'cancelled';
     createdAt: number;
     updatedAt: number;
+};
+
+export type ThreadDeletePreviewDto = {
+    targetThreadId: string;
+    treeRootThreadId: string;
+    threadIds: Array<string>;
+    deleteOrder: Array<string>;
+    threads: Array<ThreadDeletePlanThreadDto>;
+    runningThreadIds: Array<string>;
+    pendingApprovalThreadIds: Array<string>;
+    pendingApprovals: Array<PendingServerRequestDto>;
+    canDelete: boolean;
+    blockers: Array<ThreadDeleteBlockerDto>;
+    adoption: BranchAdoptionStatusDto;
+};
+
+export type ThreadDeleteRequestDto = {
+    expectedThreadIds: Array<string>;
+};
+
+export type ThreadDeleteResultDto = {
+    targetThreadId: string;
+    status: 'completed' | 'partial' | 'conflict' | 'failed';
+    destructiveStarted: boolean;
+    expectedThreadIds: Array<string>;
+    plannedThreadIds: Array<string>;
+    deleteOrder: Array<string>;
+    interruptedThreadIds: Array<string>;
+    cancelledApprovalRequestIds: Array<string>;
+    deletedThreadIds: Array<string>;
+    reapedThreadIds: Array<string>;
+    remainingThreadIds: Array<string>;
+    failure?: ThreadDeleteFailureDto;
+    latestPreview?: ThreadDeletePreviewDto;
+    diagnostics: Array<BranchAdoptionDiagnosticDto>;
 };
 
 export type PendingServerRequestsResponseDto = {
@@ -2655,6 +2749,68 @@ export type ThreadsSetThreadNameResponses = {
 };
 
 export type ThreadsSetThreadNameResponse = ThreadsSetThreadNameResponses[keyof ThreadsSetThreadNameResponses];
+
+export type ThreadsDeletionReadBranchAdoptionStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/threads/branch-adoption/status';
+};
+
+export type ThreadsDeletionReadBranchAdoptionStatusErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsDeletionReadBranchAdoptionStatusError = ThreadsDeletionReadBranchAdoptionStatusErrors[keyof ThreadsDeletionReadBranchAdoptionStatusErrors];
+
+export type ThreadsDeletionReadBranchAdoptionStatusResponses = {
+    200: BranchAdoptionStatusDto;
+};
+
+export type ThreadsDeletionReadBranchAdoptionStatusResponse = ThreadsDeletionReadBranchAdoptionStatusResponses[keyof ThreadsDeletionReadBranchAdoptionStatusResponses];
+
+export type ThreadsDeletionPreviewDeleteData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/delete-preview';
+};
+
+export type ThreadsDeletionPreviewDeleteErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsDeletionPreviewDeleteError = ThreadsDeletionPreviewDeleteErrors[keyof ThreadsDeletionPreviewDeleteErrors];
+
+export type ThreadsDeletionPreviewDeleteResponses = {
+    200: ThreadDeletePreviewDto;
+};
+
+export type ThreadsDeletionPreviewDeleteResponse = ThreadsDeletionPreviewDeleteResponses[keyof ThreadsDeletionPreviewDeleteResponses];
+
+export type ThreadsDeletionDeleteThreadData = {
+    body: ThreadDeleteRequestDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/delete';
+};
+
+export type ThreadsDeletionDeleteThreadErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsDeletionDeleteThreadError = ThreadsDeletionDeleteThreadErrors[keyof ThreadsDeletionDeleteThreadErrors];
+
+export type ThreadsDeletionDeleteThreadResponses = {
+    200: ThreadDeleteResultDto;
+};
+
+export type ThreadsDeletionDeleteThreadResponse = ThreadsDeletionDeleteThreadResponses[keyof ThreadsDeletionDeleteThreadResponses];
 
 export type PendingApprovalsListPendingData = {
     body?: never;

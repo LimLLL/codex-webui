@@ -70,6 +70,7 @@ function indexVersionsByTurnId(
 export function useMessageVersions(threadId: string | null): {
   versionsByTurnId: Map<string, MessageVersions>;
   isTracked: boolean;
+  treeRootThreadId: string | null;
 } {
   const { data } = useQuery({
     ...threadsReadBranchTreeOptions({ path: { threadId: threadId ?? '' } }),
@@ -82,7 +83,11 @@ export function useMessageVersions(threadId: string | null): {
     [data, threadId],
   );
 
-  return { versionsByTurnId, isTracked: data?.tracked ?? false };
+  return {
+    versionsByTurnId,
+    isTracked: data?.tracked ?? false,
+    treeRootThreadId: data?.treeRootThreadId ?? null,
+  };
 }
 
 /**

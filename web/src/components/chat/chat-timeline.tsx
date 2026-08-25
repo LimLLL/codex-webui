@@ -27,6 +27,15 @@ import {
   useMessageVersions,
   type MessageVersions,
 } from '@/hooks/use-message-branches';
+import {
+  adoptionBlockReason,
+  pickSurvivingVersion,
+  useBranchAdoptionStatus,
+  useDeletePreview,
+  useDeleteThread,
+} from '@/hooks/use-thread-deletion';
+import { DeleteConversationDialog } from '@/components/branches/delete-conversation-dialog';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { TimelineEntry } from '@/types/timeline';
 import { MessageVersionSwitcher } from './message-version-switcher';
@@ -56,6 +65,27 @@ export function ChatTimeline({ onEditMessage }: Props) {
   } | null>(null);
 
   const { versionsByTurnId } = useMessageVersions(threadId);
+  const adoptionStatus = useBranchAdoptionStatus();
+  const deleteBlockedReason = adoptionBlockReason(adoptionStatus.data, t);
+  // The sibling ordering is captured when the dialog opens rather than looked
+  // up on confirm: the group is about to change underneath us, and the whole
+  // point is to land on the neighbour the switcher was showing at that moment.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    threadId: string;
+    siblingThreadIds: string[];
+  } | null>(null);
+  const deletePreview = useDeletePreview(deleteTarget?.threadId ?? null);
+  const deleteVersion = useDeleteThread({
+    onFinished: () => setDeleteTarget(null),
+    resolveSurvivor: (doomed) =>
+      deleteTarget
+        ? pickSurvivingVersion(
+            deleteTarget.threadId,
+            deleteTarget.siblingThreadIds,
+            doomed,
+          )
+        : null,
+  });
   const createBranch = useCreateMessageBranch((text) => {
     setEditTarget(null);
     if (text) onEditMessage?.(text);
@@ -185,6 +215,10 @@ export function ChatTimeline({ onEditMessage }: Props) {
                     threadCwd={threadCwd}
                     canBranch={canBranch}
                     versionsByTurnId={versionsByTurnId}
+                    deleteBlockedReason={deleteBlockedReason}
+                    onDeleteVersion={(threadId, siblingThreadIds) =>
+                      setDeleteTarget({ threadId, siblingThreadIds })
+                    }
                     onEdit={setEditTarget}
                     t={t}
                   />
@@ -223,6 +257,24 @@ export function ChatTimeline({ onEditMessage }: Props) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DeleteConversationDialog
+        open={deleteTarget !== null}
+        preview={deletePreview.data ?? null}
+        loading={deletePreview.isLoading}
+        errorMessage={
+          deletePreview.error ? getApiErrorMessage(deletePreview.error) : null
+        }
+        pending={deleteVersion.isPending}
+        currentThreadId={threadId}
+        onConfirm={(preview) =>
+          deleteVersion.mutate({
+            path: { threadId: preview.targetThreadId },
+            body: { expectedThreadIds: preview.threadIds },
+          })
+        }
+        onClose={() => setDeleteTarget(null)}
+      />
     </>
   );
 }
@@ -233,6 +285,8 @@ function TimelineEntryRow({
   threadCwd,
   canBranch,
   versionsByTurnId,
+  deleteBlockedReason,
+  onDeleteVersion,
   onEdit,
   t,
 }: {
@@ -240,6 +294,8 @@ function TimelineEntryRow({
   threadCwd: string | null;
   canBranch: boolean;
   versionsByTurnId: Map<string, MessageVersions>;
+  deleteBlockedReason: string | null;
+  onDeleteVersion: (threadId: string, siblingThreadIds: string[]) => void;
   onEdit: (target: { turnId: string; content: string }) => void;
   t: (key: string) => string;
 }) {
@@ -259,7 +315,13 @@ function TimelineEntryRow({
         </div>
         {/* Reserved even when empty so revealing the controls cannot shift layout. */}
         <div className="mt-1 flex h-6 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">
-          {versions && <MessageVersionSwitcher versions={versions} />}
+          {versions && (
+            <MessageVersionSwitcher
+              versions={versions}
+              deleteBlockedReason={deleteBlockedReason}
+              onDeleteVersion={onDeleteVersion}
+            />
+          )}
           {/* Rendered whenever the message has a turn, disabled rather than
               removed — dropping it mid-switch would move the version switcher. */}
           {turnId && (

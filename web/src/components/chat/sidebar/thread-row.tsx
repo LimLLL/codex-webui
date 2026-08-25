@@ -8,8 +8,10 @@ import {
   MessageSquare,
   Minimize2,
   MoreHorizontal,
+  Network,
   Pencil,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -38,12 +40,21 @@ interface Props {
    * earlier turns, and those branches read this history by reference.
    */
   hasBranchDescendants?: boolean;
+  /**
+   * Reason deletion is unavailable, or null when it is allowed.
+   *
+   * Deletion is gated on the startup adoption scan: until the local topology
+   * is known, the confirmation could not truthfully enumerate the cascade.
+   */
+  deleteBlockedReason?: string | null;
   onOpen: () => void;
   onRename: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
   onCompact: () => void;
   onFork: () => void;
+  onDelete: () => void;
+  onShowBranchGraph?: () => void;
 }
 
 export function ThreadRow({
@@ -57,12 +68,15 @@ export function ThreadRow({
   pendingApprovalCount = 0,
   waitingOnUserInput = false,
   hasBranchDescendants = false,
+  deleteBlockedReason = null,
   onOpen,
   onRename,
   onArchive,
   onUnarchive,
   onCompact,
   onFork,
+  onDelete,
+  onShowBranchGraph,
 }: Props) {
   const { t } = useTranslation();
 
@@ -158,6 +172,26 @@ export function ThreadRow({
           >
             {actionPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitFork className="h-3.5 w-3.5" />}
             {t('Fork')}
+          </Button>
+          {hasBranchDescendants && onShowBranchGraph && (
+            <Button
+              variant="ghost"
+              className="h-7 w-full justify-start gap-2 px-2 text-xs"
+              onClick={onShowBranchGraph}
+            >
+              <Network className="h-3.5 w-3.5" />
+              {t('Branch graph')}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            className="h-7 w-full justify-start gap-2 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={actionPending || Boolean(deleteBlockedReason)}
+            title={deleteBlockedReason ?? undefined}
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t('Delete')}
           </Button>
         </PopoverContent>
       </Popover>

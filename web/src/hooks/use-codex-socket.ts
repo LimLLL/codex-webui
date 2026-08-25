@@ -45,6 +45,7 @@ export function useCodexSocket(enabled = true) {
     const ctx: NotificationContext = {
       threadId: null,
       queryClient,
+      forgetThreads: (threadIds) => useTimelineStore.getState().forgetThreads(threadIds),
       updateCurrentTurn: (turnId, updater) => {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().updateCurrentTurnForThread(threadId, turnId, updater);

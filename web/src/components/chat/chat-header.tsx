@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Activity, Check, Edit3, EllipsisVertical, Globe, Menu, Moon, PanelLeftOpen, Settings, Sun, X } from 'lucide-react';
+import { Activity, Check, Edit3, EllipsisVertical, Globe, Menu, Moon, Network, PanelLeftOpen, Settings, Sun, X } from 'lucide-react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -25,6 +25,8 @@ import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useLayoutStore } from '@/stores/layout-store';
 import { useTimelineStore } from '@/stores/timeline-store';
+import { useMessageVersions } from '@/hooks/use-message-branches';
+import { BranchGraphDialog } from '@/components/branches/branch-graph-dialog';
 import { AccountRateLimitBadge } from './account-rate-limit-badge';
 import { McpStatusBadge } from './mcp-status-badge';
 
@@ -85,7 +87,12 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
   const setThreadTitle = useTimelineStore((s) => s.setThreadTitle);
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState('');
+  const [graphOpen, setGraphOpen] = useState(false);
   const queryClient = useQueryClient();
+
+  // The graph is only meaningful once this conversation has more than one
+  // version, so the entry point appears with the branches rather than always.
+  const { isTracked } = useMessageVersions(threadId);
 
   // ── Responsive ──────────────────────────────────────────────────────
   const breakpoint = useBreakpoint();
@@ -202,6 +209,22 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
                   <Button size="icon" variant="ghost" className="h-7 w-7" onClick={startEditing} title={t('Rename')}>
                     <Edit3 className="h-3.5 w-3.5" />
                   </Button>
+                  {isTracked && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => setGraphOpen(true)}
+                          aria-label={t('Branch graph')}
+                        >
+                          <Network className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('Branch graph')}</TooltipContent>
+                    </Tooltip>
+                  )}
                   {threadMode === 'readOnly' && (
                     <Badge variant="secondary" className="text-xs">
                       {t('Archived read-only')}
@@ -282,6 +305,10 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
         )}
       </header>
       <Separator />
+      <BranchGraphDialog
+        threadId={graphOpen ? threadId : null}
+        onClose={() => setGraphOpen(false)}
+      />
     </>
   );
 }
