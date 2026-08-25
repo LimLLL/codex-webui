@@ -4,7 +4,19 @@
     // Production source must not see Vitest globals. The root tsconfig exposes
     // them so specs (which rely on `globals: true` rather than imports) and the
     // editor/linter resolve `vi`/`describe`; the build has no such need.
-    "types": ["node"]
+    "types": ["node"],
+    // Pinned rather than inferred. TypeScript derives `rootDir` from the common
+    // ancestor of its inputs, so a single repo-root `.ts` file left in the build
+    // silently relocates everything to `dist/src/` — which is how `start:prod`
+    // (`node dist/main`) and the image CMD came to point at nothing. Declaring it
+    // turns that into a build error naming the offending file instead.
+    "rootDir": "src",
+    // Must live inside `outDir`. `nest-cli.json` sets `deleteOutDir`, so a build
+    // info file anywhere else survives the wipe and tells tsc everything is up to
+    // date while no emitted output exists — the build then "succeeds" silently
+    // and produces nothing. Pinned rather than inferred, since the default
+    // location shifts with `rootDir`.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
   },
   "exclude": [
     "node_modules",
@@ -13,6 +25,9 @@
     "web",
     "**/*spec.ts",
     "**/*.testing.ts",
+    // Tooling configs, not application code: drizzle-kit and Vitest load these
+    // from source themselves and never read `dist`.
+    "drizzle.config.ts",
     "vitest.config.mts"
   ]
 }
