@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   NULLABLE_NUMBER_SCHEMA,
   NULLABLE_STRING_SCHEMA,
+  TURN_ITEMS_VIEW_VALUES,
   TURN_STATUS_VALUES,
 } from './openapi.schema';
 import { codexErrorInfoSchema } from './support.dto';
@@ -29,6 +30,9 @@ export class TurnDto {
     items: threadItemSchema(false) as Record<string, unknown>,
   })
   items!: unknown[];
+
+  @ApiProperty({ enum: TURN_ITEMS_VIEW_VALUES })
+  itemsView!: (typeof TURN_ITEMS_VIEW_VALUES)[number];
 
   @ApiProperty({ enum: TURN_STATUS_VALUES })
   status!: (typeof TURN_STATUS_VALUES)[number];

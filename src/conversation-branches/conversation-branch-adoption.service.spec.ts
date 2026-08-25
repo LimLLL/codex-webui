@@ -60,6 +60,14 @@ describe('ConversationBranchAdoptionService', () => {
         ON conversation_branch_edges (parent_thread_id);
       CREATE INDEX idx_branch_edge_root
         ON conversation_branch_edges (tree_root_thread_id);
+
+      CREATE TABLE conversation_branch_active_members (
+        tree_root_thread_id TEXT PRIMARY KEY NOT NULL,
+        active_thread_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_branch_active_members_active
+        ON conversation_branch_active_members (active_thread_id);
     `);
     const db = drizzle(sqlite, { schema }) as AppDatabase;
     const mutations = new ConversationBranchMutationsService(db);

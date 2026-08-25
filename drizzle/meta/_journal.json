@@ -57,6 +57,13 @@
       "when": 1787624571748,
       "tag": "0007_petite_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787639042589,
+      "tag": "0008_dashing_jetstream",
+      "breakpoints": true
     }
   ]
 }

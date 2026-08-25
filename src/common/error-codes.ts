@@ -133,6 +133,7 @@ export const ErrorCode = {
     deleteLocalCleanupFailed: 'threads.delete_local_cleanup_failed',
     deleteOrphanedLocalTopology: 'threads.delete_orphaned_local_topology',
     deleteThreadIdSetRequired: 'threads.delete_thread_id_set_required',
+    threadIdsRequired: 'threads.thread_ids_required',
   },
 
   // ── Settings ───────────────────────────────────────────────────────

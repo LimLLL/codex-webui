@@ -130,3 +130,22 @@ export function isThreadNotFoundError(err: unknown): boolean {
   if (!isInvalidRequest(err)) return false;
   return /\bno rollout found for thread id\b/i.test(errorText(err));
 }
+
+/**
+ * Returns true when app-server refuses writer ownership for a paginated thread.
+ *
+ * The experimental metadata-first open path must surface this as read-only
+ * state, not as a generic resume failure. Kept distinct from not-found:
+ * read-only history requests remain valid when another process owns the writer.
+ *
+ * The pattern is anchored on the exact wording observed from the pinned
+ * app-server (`thread <id> already has an active writer`) rather than on the
+ * presence of words like "thread" and "writer". A loose pattern is worse here
+ * than elsewhere: misclassifying a genuine failure downgrades the conversation
+ * to read-only and tells the user it is held by another client, which is a
+ * plausible-looking lie. Failing to match merely reports the real error.
+ */
+export function isThreadOwnershipConflictError(err: unknown): boolean {
+  if (!isInvalidRequest(err)) return false;
+  return /\balready has an active writer\b/i.test(errorText(err));
+}

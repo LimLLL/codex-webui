@@ -12,6 +12,12 @@ import type {
   BranchTreeDto,
   CreateMessageBranchDto,
 } from '../conversation-branches/dto/conversation-branches.dto';
+import type {
+  ThreadOpenResponseDto,
+  ThreadOverviewResponseDto,
+  ThreadTurnCountsResponseDto,
+  ThreadTurnsPageDto,
+} from './dto/threads.dto';
 import {
   ThreadsBranchingService,
   type CreateMessageBranchResult,
@@ -20,8 +26,20 @@ import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { isNotMaterializedError } from './thread-errors';
 import { previewFromUserInput } from './thread-input-preview';
+import {
+  ThreadHistoryService,
+  type SortDirection,
+  type TurnItemsView,
+} from './thread-history.service';
+import {
+  ThreadsOverviewService,
+  type ThreadOverviewParams,
+} from './threads-overview.service';
 
 const REQUIRED_HISTORY_MODE = 'paginated';
+
+/** Maximum ancestors walked when a fork chain is not locally tracked. */
+const MAX_FORK_CHAIN_WALK = 32;
 
 type ExperimentalThreadStartParams = v2.ThreadStartParams & {
   historyMode: typeof REQUIRED_HISTORY_MODE;
@@ -39,6 +57,8 @@ export class ThreadsService {
     private readonly branches: ConversationBranchesService,
     private readonly branching: ThreadsBranchingService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
+    private readonly history: ThreadHistoryService,
+    private readonly overview: ThreadsOverviewService,
   ) {}
 
   /**
@@ -85,6 +105,13 @@ export class ThreadsService {
     params: v2.ThreadListParams,
   ): Promise<v2.ThreadListResponse> {
     return this.codex.request<v2.ThreadListResponse>('thread/list', params);
+  }
+
+  /** Lists branch-collapsed conversation overview rows for the sidebar. */
+  async listOverview(
+    params: ThreadOverviewParams,
+  ): Promise<ThreadOverviewResponseDto> {
+    return this.overview.listOverview(params);
   }
 
   /**
@@ -139,11 +166,57 @@ export class ThreadsService {
    * Ensures a persisted thread is resumed once for the current app-server generation.
    *
    * @param threadId - The thread identifier
+   * @param options - `recordActive: false` for background reopens that must not
+   *   move the tree's active-branch pointer
    * @returns The resumed or already-active thread with resolved settings
    */
-  async resumeThread(threadId: string): Promise<v2.ThreadResumeResponse> {
+  async resumeThread(
+    threadId: string,
+    options: { recordActive?: boolean } = {},
+  ): Promise<ThreadOpenResponseDto> {
     this.deletionRegistry.assertMutable(threadId);
-    return this.resumeRegistry.ensureResumed(threadId);
+    const response = await this.resumeRegistry.ensureOpened(threadId);
+    // The pointer means "the branch a person last looked at", so only a
+    // deliberate open may move it. Background reopens — app-server auto-resume,
+    // and the client restoring its loaded threads after a refresh or a socket
+    // reconnect — walk every loaded thread in whatever order they come back;
+    // letting those write would leave each tree pointing at whichever member
+    // happened to be restored last, which is exactly the behaviour this pointer
+    // was added to fix.
+    if (options.recordActive !== false) {
+      // Deliberately not awaited. The pointer only decides where a later
+      // sidebar click lands, and resolving it can cost a round trip per
+      // ancestor for a thread whose topology is not locally known — on the one
+      // path this round exists to make faster.
+      void this.recordActiveBranchMember(response.thread).catch(
+        (err: unknown) => {
+          this.logger.debug(
+            `Could not record active branch member for thread=${threadId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        },
+      );
+    }
+    return response;
+  }
+
+  /** Pages turn history without acquiring writer ownership. */
+  async listTurns(params: {
+    threadId: string;
+    cursor?: string;
+    limit?: number;
+    sortDirection?: SortDirection;
+    itemsView?: TurnItemsView;
+  }): Promise<ThreadTurnsPageDto> {
+    return this.history.listTurns(params);
+  }
+
+  /** Counts graph-node turns without resuming; failures become unknown counts. */
+  async countTurns(threadIds: string[]): Promise<ThreadTurnCountsResponseDto> {
+    return {
+      counts: await this.history.countTurnsForThreads(threadIds),
+    };
   }
 
   /**
@@ -334,6 +407,58 @@ export class ThreadsService {
       threadId,
       name,
     });
+  }
+
+  private async recordActiveBranchMember(thread: {
+    id: string;
+    forkedFromId?: string | null;
+  }): Promise<void> {
+    const treeRootThreadId = await this.resolveActivePointerRoot(thread);
+    // Re-checked after the resolve, not only before it. Resolving the root can
+    // await app-server reads, and a delete may have claimed the thread in the
+    // meantime — deletion clears pointers during cleanup, so a write landing
+    // afterwards would reinstate one naming a destroyed thread. Reads validate
+    // membership and would ignore it, but the invariant is worth holding at the
+    // write rather than relying on every reader to compensate.
+    this.deletionRegistry.assertMutable(thread.id);
+    this.deletionRegistry.assertMutable(treeRootThreadId);
+    this.branches.setActiveMember(treeRootThreadId, thread.id);
+  }
+
+  private async resolveActivePointerRoot(thread: {
+    id: string;
+    forkedFromId?: string | null;
+  }): Promise<string> {
+    const localRoot = this.branches.resolveTreeRootThreadId(thread.id);
+    if (localRoot !== thread.id) return localRoot;
+
+    // Bounded because each step is a round trip and the chain comes from data
+    // this client did not create. A pathological chain must degrade to a
+    // slightly wrong pointer, never to an unbounded walk on every open.
+    let current: { id: string; forkedFromId?: string | null } = thread;
+    const seen = new Set<string>();
+    let steps = 0;
+    while (
+      current.forkedFromId &&
+      !seen.has(current.id) &&
+      steps < MAX_FORK_CHAIN_WALK
+    ) {
+      seen.add(current.id);
+      steps += 1;
+      const parentThreadId = current.forkedFromId;
+      try {
+        const parent = await this.history.readThreadMetadata(parentThreadId);
+        current = parent.thread;
+      } catch (err) {
+        this.logger.debug(
+          `Could not resolve branch root through parent=${parentThreadId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return parentThreadId;
+      }
+    }
+    return current.id;
   }
 
   private isPaginatedThread(thread: v2.Thread): boolean {

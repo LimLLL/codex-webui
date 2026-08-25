@@ -3,6 +3,7 @@ import type { v2 } from '../codex/codex-schema';
 import { CodexService } from '../codex/codex.service';
 import { ConversationBranchAdoptionService } from '../conversation-branches/conversation-branch-adoption.service';
 import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import type { BranchAdoptionStatusDto } from '../conversation-branches/dto/conversation-branches.dto';
 import type { AppDatabase } from '../database/database.constants';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
@@ -39,6 +40,10 @@ describe('ThreadsDeletionService', () => {
     listEdges: jest.fn(),
     reapDeletedThread: jest.fn(),
   };
+  const mockBranches = {
+    clearActiveMemberForDeletedThread: jest.fn(),
+    readBranchTree: jest.fn(),
+  };
   const mockPendingApprovals = {
     listPending: jest.fn(),
     cancelPendingForThreads: jest.fn(),
@@ -62,6 +67,7 @@ describe('ThreadsDeletionService', () => {
       mockCodex as unknown as CodexService,
       planner,
       mockBranchMutations as unknown as ConversationBranchMutationsService,
+      mockBranches as unknown as ConversationBranchesService,
       mockPendingApprovals as unknown as PendingApprovalsService,
       mockResumeRegistry as unknown as ThreadResumeRegistryService,
       mockDeletionRegistry as unknown as ThreadDeletionRegistryService,
@@ -71,6 +77,7 @@ describe('ThreadsDeletionService', () => {
     mockCodex.request.mockReset();
     Object.values(mockAdoption).forEach((mock) => mock.mockReset());
     Object.values(mockBranchMutations).forEach((mock) => mock.mockReset());
+    Object.values(mockBranches).forEach((mock) => mock.mockReset());
     Object.values(mockPendingApprovals).forEach((mock) => mock.mockReset());
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockDeletionRegistry).forEach((mock) => mock.mockReset());
@@ -80,6 +87,13 @@ describe('ThreadsDeletionService', () => {
     mockBranchMutations.listEdges.mockReturnValue([]);
     mockPendingApprovals.listPending.mockReturnValue([]);
     mockPendingApprovals.cancelPendingForThreads.mockReturnValue([]);
+    mockBranches.readBranchTree.mockImplementation((threadId: string) => ({
+      treeRootThreadId: threadId,
+      activeThreadId: null,
+      tracked: false,
+      members: [],
+      groups: [],
+    }));
   });
 
   it('deletes descendants before parents', async () => {
@@ -222,6 +236,40 @@ describe('ThreadsDeletionService', () => {
       cancelledApprovalRequestIds: ['req-1'],
       failure: { stage: 'local_cleanup' },
     });
+    // No `updatedTree` on this path: local rows are precisely what failed to be
+    // written, so any tree read back would describe a state that was not
+    // reached. Clients must fall back to invalidating everything the plan
+    // touched rather than assuming survivors are still accurate.
+    expect(result.updatedTree).toBeUndefined();
+  });
+
+  it('clears the active-branch pointer for every thread it removes', async () => {
+    // The pointer decides where a sidebar click lands, so one naming a
+    // destroyed thread would send the user into a conversation that is gone.
+    mockCodex.request.mockImplementation((method: string, params) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(
+          listResponse(params, [
+            makeThread('root'),
+            makeThread('child', 'root'),
+          ]),
+        );
+      }
+      if (method === 'thread/delete') return Promise.resolve({});
+      throw new Error(`unexpected ${method}`);
+    });
+
+    await service.deleteThread('root', {
+      expectedThreadIds: ['root', 'child'],
+    });
+
+    expect(mockBranches.clearActiveMemberForDeletedThread).toHaveBeenCalledWith(
+      'child',
+    );
+    expect(mockBranches.clearActiveMemberForDeletedThread).toHaveBeenCalledWith(
+      'root',
+    );
   });
 
   it('reports a plain failure when the first delete fails and nothing was destroyed', async () => {
@@ -254,6 +302,141 @@ describe('ThreadsDeletionService', () => {
       reapedThreadIds: [],
       remainingThreadIds: ['root', 'child'],
     });
+  });
+
+  it('returns a conflict when a thread becomes active after confirmation', async () => {
+    let planRead = 0;
+    mockCodex.request.mockImplementation((method: string, params) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        if ((params as { archived: boolean }).archived) {
+          return Promise.resolve(listResponse(params, []));
+        }
+        planRead += 1;
+        return Promise.resolve(
+          listResponse(params, [
+            makeThread('root', null, {
+              status:
+                planRead === 1
+                  ? { type: 'idle' }
+                  : { type: 'active', activeFlags: [] },
+            }),
+          ]),
+        );
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+      expectedRunningThreadIds: [],
+      expectedPendingApprovalRequestIds: [],
+    });
+
+    expect(result).toMatchObject({
+      status: 'conflict',
+      destructiveStarted: false,
+      failure: { stage: 'drift' },
+    });
+    expect(requestLog).not.toContain('turn/interrupt');
+    expect(requestLog).not.toContain('thread/delete');
+  });
+
+  it('skips the drift check entirely when the caller declares no state', async () => {
+    // The declared-state fields are optional. Omitting them must mean "do not
+    // check this dimension", not "I was shown none" — otherwise every running
+    // conversation and every conversation holding an approval becomes
+    // permanently undeletable by any client that does not send them.
+    mockCodex.request.mockImplementation((method: string, params) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(
+          listResponse(
+            params,
+            (params as { archived: boolean }).archived
+              ? []
+              : [
+                  makeThread('root', null, {
+                    status: { type: 'active', activeFlags: [] },
+                  }),
+                ],
+          ),
+        );
+      }
+      if (method === 'thread/read') {
+        return Promise.resolve({
+          thread: makeThread('root', null, {
+            status: { type: 'active', activeFlags: [] },
+            turns: [
+              {
+                id: 'turn-1',
+                status: 'inProgress',
+                items: [],
+                itemsView: 'full',
+                error: null,
+                startedAt: 1,
+                completedAt: null,
+                durationMs: null,
+              },
+            ],
+          }),
+        });
+      }
+      if (method === 'turn/interrupt' || method === 'thread/delete') {
+        return Promise.resolve({});
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+    });
+
+    expect(result.status).toBe('completed');
+    expect(requestLog).toContain('thread/delete');
+  });
+
+  it('returns a conflict when a new pending approval arrives after confirmation', async () => {
+    let pendingRead = 0;
+    mockPendingApprovals.listPending.mockImplementation(() => {
+      pendingRead += 1;
+      return pendingRead === 1
+        ? []
+        : [
+            {
+              generation: 1,
+              requestId: 'approval-new',
+              threadId: 'root',
+              turnId: 'turn-1',
+              itemId: null,
+              method: 'approval',
+              params: {},
+              status: 'pending',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ];
+    });
+    mockCodex.request.mockImplementation((method: string, params) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(listResponse(params, [makeThread('root')]));
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+      expectedRunningThreadIds: [],
+      expectedPendingApprovalRequestIds: [],
+    });
+
+    expect(result).toMatchObject({
+      status: 'conflict',
+      destructiveStarted: false,
+      failure: { stage: 'drift' },
+    });
+    expect(requestLog).not.toContain('thread/delete');
   });
 
   it('interrupts active turns and cancels pending approvals before deleting', async () => {
@@ -324,6 +507,8 @@ describe('ThreadsDeletionService', () => {
 
     const result = await service.deleteThread('root', {
       expectedThreadIds: ['root'],
+      expectedRunningThreadIds: ['root'],
+      expectedPendingApprovalRequestIds: ['approval-1'],
     });
 
     expect(result).toMatchObject({

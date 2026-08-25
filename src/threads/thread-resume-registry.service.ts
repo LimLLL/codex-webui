@@ -1,18 +1,23 @@
 /** Generation-scoped resume registry for non-idempotent thread/resume calls. */
 import { Injectable, Logger } from '@nestjs/common';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
-import { CodexService } from '../codex/codex.service';
 import type { v2 } from '../codex/codex-schema';
-import { isNotMaterializedError } from './thread-errors';
+import type { ThreadOpenResponseDto } from './dto/threads.dto';
+import {
+  isNotMaterializedError,
+  isThreadOwnershipConflictError,
+} from './thread-errors';
+import {
+  ThreadHistoryService,
+  type MetadataFirstResumeResponse,
+  type TurnsPage,
+} from './thread-history.service';
 
 /** Prevents duplicate app-server resume calls for the same thread generation. */
 @Injectable()
 export class ThreadResumeRegistryService {
   private readonly logger = new Logger(ThreadResumeRegistryService.name);
-  private readonly inFlight = new Map<
-    string,
-    Promise<v2.ThreadResumeResponse>
-  >();
+  private readonly inFlight = new Map<string, Promise<ThreadOpenResponseDto>>();
   private readonly resumed = new Set<string>();
   private readonly failed = new Map<string, string>();
   /** Monotonic epoch per key — stale in-flight promises check before marking resumed. */
@@ -22,10 +27,13 @@ export class ThreadResumeRegistryService {
    * Used by `readAsResume` to return a complete `ThreadResumeResponse`
    * even though `thread/read` doesn't include resolved settings.
    */
-  private readonly responseCache = new Map<string, v2.ThreadResumeResponse>();
+  private readonly responseCache = new Map<
+    string,
+    v2.ThreadResumeResponse | MetadataFirstResumeResponse
+  >();
 
   constructor(
-    private readonly codex: CodexService,
+    private readonly history: ThreadHistoryService,
     private readonly codexManager: CodexProcessManager,
   ) {
     this.codexManager.addLifecycleListener((event) => {
@@ -35,29 +43,43 @@ export class ThreadResumeRegistryService {
     });
   }
 
-  /** Ensures a thread is resumed exactly once for the current app-server generation. */
-  ensureResumed(threadId: string): Promise<v2.ThreadResumeResponse> {
+  /**
+   * Opens a thread once for the current app-server generation.
+   *
+   * A successful writer acquisition returns `mode=writable`. An app-server
+   * ownership refusal is downgraded to `mode=readOnly` with the refusal message
+   * preserved for the frontend banner.
+   */
+  ensureOpened(
+    threadId: string,
+    initialTurnsLimit = 20,
+  ): Promise<ThreadOpenResponseDto> {
     const key = this.key(threadId);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
 
     if (this.resumed.has(key)) {
-      return this.readAsResume(threadId);
+      return this.readAsOpen(threadId, initialTurnsLimit);
     }
 
     const callEpoch = this.bumpEpoch(key);
-    const promise = this.codex
-      .request<v2.ThreadResumeResponse>('thread/resume', {
+    const promise = this.history
+      .resumeMetadataFirst({
         threadId,
+        initialTurnsLimit,
+        itemsView: 'summary',
       })
       .then((response) => {
         if (this.epoch.get(key) === callEpoch) {
           this.markResumed(threadId);
           this.responseCache.set(threadId, response);
         }
-        return response;
+        return this.toWritableOpen(response);
       })
-      .catch((err: Error) => {
+      .catch(async (err: Error) => {
+        if (isThreadOwnershipConflictError(err)) {
+          return this.readOnlyOpen(threadId, initialTurnsLimit, err.message);
+        }
         if (this.epoch.get(key) === callEpoch) {
           this.failed.set(key, err.message);
         }
@@ -85,7 +107,10 @@ export class ThreadResumeRegistryService {
    * `readAsResume` merges cached settings with a fresh `thread/read`
    * to return a complete `ThreadResumeResponse`.
    */
-  cacheResponse(threadId: string, response: v2.ThreadResumeResponse): void {
+  cacheResponse(
+    threadId: string,
+    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+  ): void {
     this.responseCache.set(threadId, response);
   }
 
@@ -105,44 +130,131 @@ export class ThreadResumeRegistryService {
   }
 
   /**
-   * Falls back to thread/read when the thread was already resumed this generation.
-   * Merges the fresh thread data with cached resolved settings from the
-   * most recent resume/start to return a complete `ThreadResumeResponse`.
-   *
-   * If the thread is not yet materialized (no user messages), `includeTurns`
-   * is unavailable — falls back to reading without turns.
+   * Reads metadata and a recent turn page after this process already owns the
+   * thread. This keeps repeat opens cheap while preserving resolved settings
+   * from the original resume/start response.
    */
-  private async readAsResume(
+  private async readAsOpen(
     threadId: string,
-  ): Promise<v2.ThreadResumeResponse> {
-    let thread: v2.ThreadReadResponse['thread'];
-    try {
-      const res = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: true },
+    initialTurnsLimit: number,
+  ): Promise<ThreadOpenResponseDto> {
+    const cached = this.responseCache.get(threadId);
+    if (!cached) {
+      throw new Error(
+        `Missing cached resume response for already-resumed thread ${threadId}`,
       );
-      thread = res.thread;
+    }
+    const [metadata, initialTurnsPage] = await Promise.all([
+      this.history.readThreadMetadata(threadId),
+      this.readInitialTurnsPage(threadId, initialTurnsLimit),
+    ]);
+    return this.toWritableOpen({
+      ...cached,
+      thread: { ...metadata.thread, turns: [] },
+      cwd: metadata.thread.cwd,
+      initialTurnsPage,
+      turnsBackwardsCursor: initialTurnsPage.backwardsCursor,
+    });
+  }
+
+  private async readOnlyOpen(
+    threadId: string,
+    initialTurnsLimit: number,
+    message: string,
+  ): Promise<ThreadOpenResponseDto> {
+    const [metadata, initialTurnsPage] = await Promise.all([
+      this.history.readThreadMetadata(threadId),
+      this.readInitialTurnsPage(threadId, initialTurnsLimit),
+    ]);
+    return {
+      mode: 'readOnly',
+      ownership: 'refused',
+      ownershipRefusalMessage: message,
+      thread: { ...metadata.thread, turns: [] },
+      cwd: metadata.thread.cwd,
+      model: null,
+      modelProvider: metadata.thread.modelProvider,
+      serviceTier: null,
+      instructionSources: [],
+      approvalPolicy: null,
+      approvalsReviewer: null,
+      sandbox: null,
+      reasoningEffort: null,
+      initialTurnsPage,
+      turnsBackwardsCursor: initialTurnsPage.backwardsCursor,
+      itemsBackwardsCursor: null,
+    };
+  }
+
+  private toWritableOpen(
+    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+  ): ThreadOpenResponseDto {
+    const initialTurnsPage = this.readEmbeddedTurnsPage(response);
+    return {
+      mode: 'writable',
+      ownership: 'acquired',
+      ownershipRefusalMessage: null,
+      thread: { ...response.thread, turns: [] },
+      cwd: String(response.cwd),
+      model: response.model ?? null,
+      modelProvider: response.modelProvider ?? null,
+      serviceTier: (response.serviceTier ?? null) as 'fast' | 'flex' | null,
+      instructionSources: (response.instructionSources ?? []).map(String),
+      approvalPolicy: response.approvalPolicy ?? null,
+      approvalsReviewer: response.approvalsReviewer ?? null,
+      sandbox: response.sandbox ?? null,
+      reasoningEffort: response.reasoningEffort ?? null,
+      initialTurnsPage,
+      turnsBackwardsCursor:
+        this.readNullableString(response, 'turnsBackwardsCursor') ??
+        initialTurnsPage.backwardsCursor,
+      itemsBackwardsCursor: this.readNullableString(
+        response,
+        'itemsBackwardsCursor',
+      ),
+    };
+  }
+
+  private readEmbeddedTurnsPage(
+    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+  ): TurnsPage {
+    const candidate = (response as MetadataFirstResumeResponse)
+      .initialTurnsPage;
+    return (
+      candidate ?? {
+        data: [],
+        nextCursor: null,
+        backwardsCursor: null,
+      }
+    );
+  }
+
+  private async readInitialTurnsPage(
+    threadId: string,
+    initialTurnsLimit: number,
+  ): Promise<TurnsPage> {
+    try {
+      return await this.history.listTurns({
+        threadId,
+        limit: initialTurnsLimit,
+        sortDirection: 'desc',
+        itemsView: 'summary',
+      });
     } catch (err) {
       if (!isNotMaterializedError(err)) throw err;
       this.logger.debug(
-        `Thread ${threadId} not materialized; reading without turns`,
+        `Thread ${threadId} not materialized; returning an empty turn page`,
       );
-      const res = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: false },
-      );
-      thread = { ...res.thread, turns: [] };
+      return { data: [], nextCursor: null, backwardsCursor: null };
     }
+  }
 
-    // Merge with cached resolved settings (model, approvalPolicy, etc.)
-    const cached = this.responseCache.get(threadId);
-    if (cached) {
-      return { ...cached, thread, cwd: thread.cwd };
-    }
-    // readAsResume is only called when resumed=true, so a cache entry must exist.
-    throw new Error(
-      `Missing cached resume response for already-resumed thread ${threadId}`,
-    );
+  private readNullableString(
+    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+    key: 'turnsBackwardsCursor' | 'itemsBackwardsCursor',
+  ): string | null {
+    const value = (response as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : null;
   }
 
   private key(threadId: string): string {

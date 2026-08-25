@@ -57,6 +57,7 @@ export const TURN_STATUS_VALUES = [
   'failed',
   'inProgress',
 ] as const;
+export const TURN_ITEMS_VIEW_VALUES = ['notLoaded', 'summary', 'full'] as const;
 export const COMMAND_EXECUTION_SOURCE_VALUES = [
   'agent',
   'userShell',

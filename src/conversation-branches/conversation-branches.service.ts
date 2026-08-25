@@ -1,13 +1,15 @@
 /** Persists and resolves local conversation branch topology. */
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
   BRANCH_START_SENTINEL,
+  conversationBranchActiveMembers,
   conversationBranchEdges,
   conversationBranchGroups,
   conversationBranchVersions,
+  type ConversationBranchActiveMember,
   type ConversationBranchEdge,
   type ConversationBranchGroup,
   type ConversationBranchVersion,
@@ -167,6 +169,46 @@ export class ConversationBranchesService {
     return [...rootThreadIds].map((rootThreadId) =>
       this.buildTreeDto(rootThreadId),
     );
+  }
+
+  /** Reads the last globally opened member for each requested tree root. */
+  listActiveMembers(
+    treeRootThreadIds: string[],
+  ): Map<string, ConversationBranchActiveMember> {
+    const rootIds = [...new Set(treeRootThreadIds)].filter(Boolean);
+    if (rootIds.length === 0) return new Map();
+    const rows = this.db
+      .select()
+      .from(conversationBranchActiveMembers)
+      .where(inArray(conversationBranchActiveMembers.treeRootThreadId, rootIds))
+      .all();
+    return new Map(rows.map((row) => [row.treeRootThreadId, row]));
+  }
+
+  /** Last-writer-wins update of a tree's active member pointer. */
+  setActiveMember(treeRootThreadId: string, activeThreadId: string): void {
+    const now = Date.now();
+    this.db
+      .insert(conversationBranchActiveMembers)
+      .values({ treeRootThreadId, activeThreadId, updatedAt: now })
+      .onConflictDoUpdate({
+        target: conversationBranchActiveMembers.treeRootThreadId,
+        set: { activeThreadId, updatedAt: now },
+      })
+      .run();
+  }
+
+  /** Clears any active-member pointer that names a server-confirmed deleted id. */
+  clearActiveMemberForDeletedThread(threadId: string): void {
+    this.db
+      .delete(conversationBranchActiveMembers)
+      .where(
+        or(
+          eq(conversationBranchActiveMembers.activeThreadId, threadId),
+          eq(conversationBranchActiveMembers.treeRootThreadId, threadId),
+        ),
+      )
+      .run();
   }
 
   /**
@@ -411,10 +453,24 @@ export class ConversationBranchesService {
 
     return {
       treeRootThreadId: rootThreadId,
+      activeThreadId: this.validActiveThreadId(rootThreadId, edges),
       tracked: groups.length > 0 || edges.length > 0,
       members: this.toMemberDtos(rootThreadId, edges),
       groups: groups.map((group) => this.toGroupDto(group, versions)),
     };
+  }
+
+  private validActiveThreadId(
+    rootThreadId: string,
+    edges: ConversationBranchEdge[],
+  ): string | null {
+    const row = this.listActiveMembers([rootThreadId]).get(rootThreadId);
+    if (!row) return null;
+    const members = new Set([
+      rootThreadId,
+      ...edges.map((edge) => edge.childThreadId),
+    ]);
+    return members.has(row.activeThreadId) ? row.activeThreadId : null;
   }
 
   private toMemberDtos(

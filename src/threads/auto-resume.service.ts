@@ -99,7 +99,10 @@ export class AutoResumeService implements OnModuleInit {
     if (existing) return existing;
 
     const resume = this.threadsService
-      .resumeThread(threadId)
+      // Nobody opened this: the app-server restarted and we are restoring what
+      // was loaded. Moving the active-branch pointer here would rewrite where a
+      // sidebar click lands based on restart order.
+      .resumeThread(threadId, { recordActive: false })
       .then(() => undefined)
       .finally(() => this.inFlight.delete(threadId));
     this.inFlight.set(threadId, resume);

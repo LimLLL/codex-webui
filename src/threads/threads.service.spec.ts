@@ -6,6 +6,8 @@ import { ConversationBranchesService } from '../conversation-branches/conversati
 import { ErrorCode } from '../common/error-codes';
 import { ThreadsBranchingService } from './threads-branching.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
+import { ThreadHistoryService } from './thread-history.service';
+import { ThreadsOverviewService } from './threads-overview.service';
 
 /** Branch state as the local-only service reports it for an untracked thread. */
 function localBranchState(threadId: string) {
@@ -22,7 +24,7 @@ describe('ThreadsService', () => {
   let service: ThreadsService;
   const mockCodex = { request: jest.fn() };
   const mockResumeRegistry = {
-    ensureResumed: jest.fn(),
+    ensureOpened: jest.fn(),
     markResumed: jest.fn(),
     cacheResponse: jest.fn(),
     forget: jest.fn(),
@@ -36,12 +38,21 @@ describe('ThreadsService', () => {
     readBranchTree: jest.fn(),
     recordMessageBranch: jest.fn(),
     resolveTreeRootThreadId: jest.fn(),
+    setActiveMember: jest.fn(),
   };
   const mockBranching = {
     createMessageBranch: jest.fn(),
   };
   const mockDeletionRegistry = {
     assertMutable: jest.fn(),
+  };
+  const mockHistory = {
+    readThreadMetadata: jest.fn(),
+    listTurns: jest.fn(),
+    countTurnsForThreads: jest.fn(),
+  };
+  const mockOverview = {
+    listOverview: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -56,6 +67,8 @@ describe('ThreadsService', () => {
           provide: ThreadDeletionRegistryService,
           useValue: mockDeletionRegistry,
         },
+        { provide: ThreadHistoryService, useValue: mockHistory },
+        { provide: ThreadsOverviewService, useValue: mockOverview },
       ],
     }).compile();
 
@@ -65,6 +78,8 @@ describe('ThreadsService', () => {
     Object.values(mockBranches).forEach((mock) => mock.mockReset());
     mockBranching.createMessageBranch.mockReset();
     mockDeletionRegistry.assertMutable.mockReset();
+    Object.values(mockHistory).forEach((mock) => mock.mockReset());
+    mockOverview.listOverview.mockReset();
     mockBranches.hasKnownDescendants.mockReturnValue(false);
     mockBranches.listKnownTreeThreadIds.mockImplementation(
       (threadId: string): string[] => [threadId],
@@ -138,11 +153,68 @@ describe('ThreadsService', () => {
   });
 
   it('should ensure resume via registry', async () => {
-    const response = { thread: { id: 't1' }, cwd: '/tmp' };
-    mockResumeRegistry.ensureResumed.mockResolvedValue(response);
+    const response = {
+      mode: 'writable',
+      ownership: 'acquired',
+      thread: { id: 't1', forkedFromId: null },
+      cwd: '/tmp',
+    };
+    mockResumeRegistry.ensureOpened.mockResolvedValue(response);
 
     await expect(service.resumeThread('t1')).resolves.toBe(response);
-    expect(mockResumeRegistry.ensureResumed).toHaveBeenCalledWith('t1');
+    expect(mockResumeRegistry.ensureOpened).toHaveBeenCalledWith('t1');
+    expect(mockBranches.setActiveMember).toHaveBeenCalledWith('t1', 't1');
+  });
+
+  it('does not move the active-branch pointer on a background reopen', async () => {
+    // Refresh recovery, reconnect recovery and app-server auto-resume all walk
+    // every loaded thread. If those writes counted, each tree would end up
+    // pointing at whichever member happened to be restored last — which is the
+    // behaviour the pointer exists to prevent, reintroduced by the mechanism
+    // meant to preserve it.
+    mockResumeRegistry.ensureOpened.mockResolvedValue({
+      mode: 'writable',
+      ownership: 'acquired',
+      thread: { id: 't1', forkedFromId: null },
+      cwd: '/tmp',
+    });
+
+    await service.resumeThread('t1', { recordActive: false });
+
+    expect(mockBranches.setActiveMember).not.toHaveBeenCalled();
+  });
+
+  it('does not write an active-branch pointer for a thread being deleted', async () => {
+    // Resolving the tree root can await app-server reads, so a delete may claim
+    // the thread in between. Deletion clears pointers during cleanup, and a
+    // write landing afterwards would reinstate one naming a destroyed thread.
+    mockResumeRegistry.ensureOpened.mockResolvedValue({
+      mode: 'writable',
+      ownership: 'acquired',
+      thread: { id: 't1', forkedFromId: null },
+      cwd: '/tmp',
+    });
+    // Mutable when the open begins; claimed by the time the pointer resolves.
+    let checks = 0;
+    mockDeletionRegistry.assertMutable.mockImplementation(() => {
+      checks += 1;
+      if (checks > 1) throw new Error('thread is being deleted');
+    });
+
+    await service.resumeThread('t1');
+    // The pointer write is fire-and-forget, so let its microtasks settle.
+    await Promise.resolve();
+
+    expect(mockBranches.setActiveMember).not.toHaveBeenCalled();
+  });
+
+  it('delegates branch-collapsed overview projection', async () => {
+    const response = { data: [], nextCursor: null };
+    mockOverview.listOverview.mockResolvedValue(response);
+
+    await expect(service.listOverview({ limit: 10 })).resolves.toBe(response);
+
+    expect(mockOverview.listOverview).toHaveBeenCalledWith({ limit: 10 });
   });
 
   it('should call turn/start', async () => {

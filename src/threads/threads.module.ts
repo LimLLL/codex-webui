@@ -10,12 +10,14 @@ import { ThreadDeletionModule } from '../thread-deletion/thread-deletion.module'
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { AutoResumeService } from './auto-resume.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadHistoryService } from './thread-history.service';
 import { ThreadsBranchingService } from './threads-branching.service';
 import { ThreadsController } from './threads.controller';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import { ThreadsDeletionController } from './threads-deletion.controller';
 import { ThreadsDeletionService } from './threads-deletion.service';
 import { ThreadsGateway } from './threads.gateway';
+import { ThreadsOverviewService } from './threads-overview.service';
 import { ThreadsService } from './threads.service';
 
 @Module({
@@ -37,7 +39,9 @@ import { ThreadsService } from './threads.service';
     ThreadsDeletionService,
     ThreadsGateway,
     ActiveThreadRegistryService,
+    ThreadHistoryService,
     ThreadResumeRegistryService,
+    ThreadsOverviewService,
     AutoResumeService,
   ],
   exports: [
@@ -46,7 +50,9 @@ import { ThreadsService } from './threads.service';
     ThreadsDeletePlannerService,
     ThreadsDeletionService,
     ActiveThreadRegistryService,
+    ThreadHistoryService,
     ThreadResumeRegistryService,
+    ThreadsOverviewService,
   ],
 })
 export class ThreadsModule {}

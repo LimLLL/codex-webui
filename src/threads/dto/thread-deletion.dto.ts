@@ -3,6 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   BranchAdoptionDiagnosticDto,
   BranchAdoptionStatusDto,
+  BranchTreeDto,
 } from '../../conversation-branches/dto/conversation-branches.dto';
 import { PendingServerRequestDto } from '../../pending-approvals/dto/pending-approvals.dto';
 
@@ -131,6 +132,27 @@ export class ThreadDeletePreviewDto {
 export class ThreadDeleteRequestDto {
   @ApiProperty({ type: () => [String] })
   expectedThreadIds!: string[];
+
+  @ApiPropertyOptional({
+    type: () => [String],
+    description:
+      'Running thread ids shown in the confirmation. Newly running ids force re-confirmation.',
+  })
+  expectedRunningThreadIds?: string[];
+
+  @ApiPropertyOptional({
+    type: () => [String],
+    description:
+      'Threads with pending approvals shown in the confirmation. New arrivals force re-confirmation.',
+  })
+  expectedPendingApprovalThreadIds?: string[];
+
+  @ApiPropertyOptional({
+    type: () => [String],
+    description:
+      'Pending approval request ids shown in the confirmation. New request ids force re-confirmation.',
+  })
+  expectedPendingApprovalRequestIds?: string[];
 }
 
 /** Details for a delete operation that could not complete fully. */
@@ -190,6 +212,14 @@ export class ThreadDeleteResultDto {
 
   @ApiPropertyOptional({ type: () => ThreadDeletePreviewDto })
   latestPreview?: ThreadDeletePreviewDto;
+
+  @ApiPropertyOptional({
+    type: () => BranchTreeDto,
+    nullable: true,
+    description:
+      'Affected tree after local cleanup, or null when the tree root was removed.',
+  })
+  updatedTree?: BranchTreeDto | null;
 
   @ApiProperty({ type: () => [BranchAdoptionDiagnosticDto] })
   diagnostics!: BranchAdoptionDiagnosticDto[];

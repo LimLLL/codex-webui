@@ -48,11 +48,15 @@ import {
   ThreadForkResponseDto,
   ThreadListResponseDto,
   ThreadLoadedListResponseDto,
+  ThreadOpenResponseDto,
+  ThreadOverviewResponseDto,
   ThreadReadResponseDto,
-  ThreadResumeResponseDto,
   SteerTurnDto,
   ThreadSetNameRequestDto,
   ThreadStartResponseDto,
+  ThreadTurnCountsRequestDto,
+  ThreadTurnCountsResponseDto,
+  ThreadTurnsPageDto,
   ThreadUnarchiveResponseDto,
   TurnStartResponseDto,
   TurnSteerResponseDto,
@@ -67,6 +71,9 @@ const USER_INPUT_TYPES = [
   'skill',
   'mention',
 ] as const;
+
+/** Largest batch the decorative branch-graph turn-count endpoint accepts. */
+const MAX_TURN_COUNT_THREAD_IDS = 200;
 
 @ApiTags('threads')
 @ApiBearerAuth()
@@ -155,6 +162,40 @@ export class ThreadsController {
     });
   }
 
+  @Get('overview')
+  @ApiOperation({ summary: 'List branch-collapsed thread overview rows' })
+  @ApiQuery({ name: 'cursor', required: false })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'archived', required: false, type: Boolean })
+  @ApiQuery({ name: 'searchTerm', required: false })
+  @ApiQuery({ name: 'cwd', required: false })
+  @ApiQuery({
+    name: 'sortKey',
+    required: false,
+    enum: ['created_at', 'updated_at'],
+  })
+  @ApiOkResponse({ type: ThreadOverviewResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async listOverview(
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+    @Query('archived') archived?: string,
+    @Query('searchTerm') searchTerm?: string,
+    @Query('cwd') cwd?: string,
+    @Query('sortKey') sortKey?: string,
+  ) {
+    const parsedLimit = this.parsePositiveLimit(limit);
+    const parsedSortKey = this.parseSortKey(sortKey);
+    return this.threadsService.listOverview({
+      cursor,
+      limit: parsedLimit,
+      archived: archived === 'true',
+      searchTerm,
+      cwd,
+      sortKey: parsedSortKey,
+    });
+  }
+
   @Get('loaded')
   @ApiOperation({ summary: 'List loaded thread IDs' })
   @ApiQuery({ name: 'cursor', required: false })
@@ -214,10 +255,80 @@ export class ThreadsController {
   }
 
   @Post(':threadId/resume')
-  @ApiOperation({ summary: 'Resume a thread and subscribe to events' })
-  @ApiCreatedResponse({ type: ThreadResumeResponseDto })
-  async resumeThread(@Param('threadId') threadId: string) {
-    return this.threadsService.resumeThread(threadId);
+  @ApiOperation({
+    summary:
+      'Open a thread with metadata-first history and explicit ownership state',
+  })
+  @ApiCreatedResponse({ type: ThreadOpenResponseDto })
+  @ApiQuery({
+    name: 'recordActive',
+    required: false,
+    type: Boolean,
+    description:
+      "Pass false for background reopens (refresh or reconnect recovery) so the tree's active-branch pointer keeps naming what the user last opened.",
+  })
+  async resumeThread(
+    @Param('threadId') threadId: string,
+    @Query('recordActive') recordActive?: string,
+  ) {
+    // Only an explicit `false` opts out; anything else keeps the default so a
+    // caller that forgets the parameter still behaves like a user-initiated open.
+    return this.threadsService.resumeThread(threadId, {
+      recordActive: recordActive !== 'false',
+    });
+  }
+
+  @Get(':threadId/turns')
+  @ApiOperation({ summary: 'List turn history without resuming a thread' })
+  @ApiQuery({ name: 'cursor', required: false })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'sortDirection', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({
+    name: 'itemsView',
+    required: false,
+    enum: ['notLoaded', 'summary', 'full'],
+  })
+  @ApiOkResponse({ type: ThreadTurnsPageDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  listTurns(
+    @Param('threadId') threadId: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+    @Query('sortDirection') sortDirection?: string,
+    @Query('itemsView') itemsView?: string,
+  ) {
+    return this.threadsService.listTurns({
+      threadId,
+      cursor,
+      limit: this.parsePositiveLimit(limit),
+      sortDirection: this.parseSortDirection(sortDirection),
+      itemsView: this.parseItemsView(itemsView),
+    });
+  }
+
+  @Post('turn-counts')
+  @ApiOperation({ summary: 'Count thread turns without resuming threads' })
+  @ApiBody({ type: ThreadTurnCountsRequestDto })
+  @ApiCreatedResponse({ type: ThreadTurnCountsResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  countTurns(@Body() body: ThreadTurnCountsRequestDto) {
+    if (!Array.isArray(body?.threadIds)) {
+      throw BusinessException.badRequest(
+        ErrorCode.threads.threadIdsRequired,
+        'threadIds is required',
+      );
+    }
+    // Each id costs at least one app-server round trip, and a branch graph is
+    // the only caller — it has tens of nodes, not thousands. Bounding the
+    // request keeps a malformed or hostile caller from turning a decorative
+    // count into a self-inflicted load generator.
+    if (body.threadIds.length > MAX_TURN_COUNT_THREAD_IDS) {
+      throw BusinessException.badRequest(
+        ErrorCode.threads.threadIdsRequired,
+        `threadIds must contain at most ${MAX_TURN_COUNT_THREAD_IDS} ids`,
+      );
+    }
+    return this.threadsService.countTurns(body.threadIds);
   }
 
   @Post(':threadId/turns')
@@ -358,6 +469,52 @@ export class ThreadsController {
   }
 
   /** Validates and normalizes the discriminated UserInput union accepted by Codex. */
+  private parsePositiveLimit(limit: string | undefined): number | undefined {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    if (parsedLimit !== undefined && (isNaN(parsedLimit) || parsedLimit < 1)) {
+      throw BusinessException.badRequest(
+        ErrorCode.threads.invalidLimit,
+        'limit must be a positive number',
+      );
+    }
+    return parsedLimit;
+  }
+
+  private parseSortKey(
+    sortKey: string | undefined,
+  ): 'created_at' | 'updated_at' | undefined {
+    if (sortKey === undefined) return undefined;
+    if (sortKey === 'created_at' || sortKey === 'updated_at') return sortKey;
+    throw BusinessException.badRequest(
+      ErrorCode.threads.invalidSortKey,
+      'sortKey must be created_at or updated_at',
+    );
+  }
+
+  private parseSortDirection(
+    value: string | undefined,
+  ): 'asc' | 'desc' | undefined {
+    if (value === undefined) return undefined;
+    if (value === 'asc' || value === 'desc') return value;
+    throw BusinessException.badRequest(
+      ErrorCode.threads.invalidSortKey,
+      'sortDirection must be asc or desc',
+    );
+  }
+
+  private parseItemsView(
+    value: string | undefined,
+  ): 'notLoaded' | 'summary' | 'full' | undefined {
+    if (value === undefined) return undefined;
+    if (value === 'notLoaded' || value === 'summary' || value === 'full') {
+      return value;
+    }
+    throw BusinessException.badRequest(
+      ErrorCode.threads.invalidInputField,
+      'itemsView must be notLoaded, summary, or full',
+    );
+  }
+
   private async validateTurnInput(input: unknown): Promise<v2.UserInput[]> {
     if (!Array.isArray(input) || input.length === 0) {
       throw BusinessException.badRequest(

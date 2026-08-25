@@ -57,6 +57,14 @@ describe('ConversationBranchesService', () => {
         ON conversation_branch_edges (parent_thread_id);
       CREATE INDEX idx_branch_edge_root
         ON conversation_branch_edges (tree_root_thread_id);
+
+      CREATE TABLE conversation_branch_active_members (
+        tree_root_thread_id TEXT PRIMARY KEY NOT NULL,
+        active_thread_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_branch_active_members_active
+        ON conversation_branch_active_members (active_thread_id);
     `);
     const db = drizzle(sqlite, { schema }) as AppDatabase;
     service = new ConversationBranchesService(db);
@@ -445,6 +453,25 @@ describe('ConversationBranchesService', () => {
         { threadId: 'child-1', parentThreadId: 'root' },
       ],
     });
+  });
+
+  it('stores one last-writer-wins active member per tree', () => {
+    service.recordMessageBranch({
+      sourceThreadId: 'root',
+      childThreadId: 'child',
+      treeRootThreadId: 'root',
+      commonPrefixTurnId: null,
+      editedTurnId: 'turn-1',
+      inheritedTurnIds: [],
+      originalPreviewText: 'hello',
+      branchPreviewText: 'hello v2',
+    });
+
+    service.setActiveMember('root', 'child');
+    expect(service.readBranchTree('root').activeThreadId).toBe('child');
+
+    service.setActiveMember('root', 'missing');
+    expect(service.readBranchTree('root').activeThreadId).toBeNull();
   });
 
   it('refuses to reap a thread when local descendants would survive', () => {

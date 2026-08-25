@@ -111,6 +111,14 @@ export class BranchTreeDto {
   @ApiProperty()
   treeRootThreadId!: string;
 
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description:
+      'Last globally opened member for this tree, when it is still locally valid.',
+  })
+  activeThreadId!: string | null;
+
   @ApiProperty()
   tracked!: boolean;
 

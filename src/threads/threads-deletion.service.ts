@@ -9,6 +9,7 @@ import {
   ConversationBranchMutationsService,
   OrphanedLocalTopologyError,
 } from '../conversation-branches/conversation-branch-mutations.service';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import { tokenUsageSnapshots, turnDiffs, turnErrors } from '../database/schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
@@ -36,6 +37,7 @@ export class ThreadsDeletionService {
     private readonly codex: CodexService,
     private readonly planner: ThreadsDeletePlannerService,
     private readonly branchMutations: ConversationBranchMutationsService,
+    private readonly branches: ConversationBranchesService,
     private readonly pendingApprovals: PendingApprovalsService,
     private readonly resumeRegistry: ThreadResumeRegistryService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
@@ -53,6 +55,15 @@ export class ThreadsDeletionService {
     body: ThreadDeleteRequestDto,
   ): Promise<ThreadDeleteResultDto> {
     const expectedThreadIds = this.readExpectedThreadIds(body);
+    const expectedRunningThreadIds = this.readOptionalThreadIds(
+      body.expectedRunningThreadIds,
+    );
+    const expectedPendingApprovalRequestIds = this.readOptionalThreadIds(
+      body.expectedPendingApprovalRequestIds,
+    );
+    const expectedPendingApprovalThreadIds = this.readOptionalThreadIds(
+      body.expectedPendingApprovalThreadIds,
+    );
     const expectedSet = new Set(expectedThreadIds);
     const initialPlan = await this.planner.buildPlan(threadId);
     if (!this.sameSet(expectedThreadIds, initialPlan.threadIds)) {
@@ -61,6 +72,21 @@ export class ThreadsDeletionService {
         expectedThreadIds,
         initialPlan,
         'The delete plan changed since it was previewed',
+        'drift',
+      );
+    }
+    const initialStateFailure = this.confirmedDestructiveStateFailure(
+      initialPlan,
+      expectedRunningThreadIds,
+      expectedPendingApprovalRequestIds,
+      expectedPendingApprovalThreadIds,
+    );
+    if (initialStateFailure) {
+      return this.conflictResult(
+        threadId,
+        expectedThreadIds,
+        initialPlan,
+        initialStateFailure.message,
         'drift',
       );
     }
@@ -95,6 +121,21 @@ export class ThreadsDeletionService {
           'drift',
         );
       }
+      const guardedStateFailure = this.confirmedDestructiveStateFailure(
+        guardedPlan,
+        expectedRunningThreadIds,
+        expectedPendingApprovalRequestIds,
+        expectedPendingApprovalThreadIds,
+      );
+      if (guardedStateFailure) {
+        return this.conflictResult(
+          threadId,
+          expectedThreadIds,
+          guardedPlan,
+          guardedStateFailure.message,
+          'drift',
+        );
+      }
 
       const interruptFailure = await this.interruptRunningThreads(
         guardedPlan.runningThreadIds,
@@ -116,6 +157,7 @@ export class ThreadsDeletionService {
           deletedThreadIds,
           reapedThreadIds,
           failure: interruptFailure,
+          treeRootThreadId: guardedPlan.treeRootThreadId,
         });
       }
 
@@ -141,6 +183,29 @@ export class ThreadsDeletionService {
               'The delete plan changed after active turns were interrupted',
           },
           latestPreview: finalPlan,
+          treeRootThreadId: finalPlan.treeRootThreadId,
+        });
+      }
+      const finalStateFailure = this.confirmedDestructiveStateFailure(
+        finalPlan,
+        expectedRunningThreadIds,
+        expectedPendingApprovalRequestIds,
+        expectedPendingApprovalThreadIds,
+      );
+      if (finalStateFailure) {
+        return this.failureResult({
+          targetThreadId: threadId,
+          expectedThreadIds,
+          plannedThreadIds: finalPlan.threadIds,
+          deleteOrder: finalPlan.deleteOrder,
+          destructiveStarted,
+          interruptedThreadIds,
+          cancelledApprovalRequestIds,
+          deletedThreadIds,
+          reapedThreadIds,
+          failure: finalStateFailure,
+          latestPreview: finalPlan,
+          treeRootThreadId: finalPlan.treeRootThreadId,
         });
       }
 
@@ -176,6 +241,7 @@ export class ThreadsDeletionService {
             deletedThreadIds,
             reapedThreadIds,
             failure,
+            treeRootThreadId: finalPlan.treeRootThreadId,
           });
         }
       }
@@ -192,6 +258,10 @@ export class ThreadsDeletionService {
         deletedThreadIds,
         reapedThreadIds,
         remainingThreadIds: [],
+        updatedTree: this.readUpdatedTree(finalPlan.treeRootThreadId, [
+          ...deletedThreadIds,
+          ...reapedThreadIds,
+        ]),
         diagnostics: [],
       };
     } finally {
@@ -290,6 +360,7 @@ export class ThreadsDeletionService {
     expectedSet: Set<string>,
   ): ThreadDeleteFailureDto | null {
     try {
+      this.branches.clearActiveMemberForDeletedThread(threadId);
       this.branchMutations.reapDeletedThread(threadId, expectedSet);
       this.db
         .delete(tokenUsageSnapshots)
@@ -374,6 +445,75 @@ export class ThreadsDeletionService {
     return threadIds;
   }
 
+  /**
+   * Reads an optional declared-state id list.
+   *
+   * Returns null when the caller omitted the field entirely. That distinction
+   * is the whole contract: an omitted list means "I am not declaring this
+   * dimension, do not check it", whereas an empty array means "I was shown
+   * none, so any is new". Collapsing the two would make every conversation
+   * that is running or holds a pending approval permanently undeletable by any
+   * client that does not send the field.
+   */
+  private readOptionalThreadIds(raw: unknown): string[] | null {
+    if (!Array.isArray(raw)) return null;
+    return [...new Set(raw.map((id) => String(id).trim()))].filter(Boolean);
+  }
+
+  private confirmedDestructiveStateFailure(
+    plan: ThreadDeletePreviewDto,
+    expectedRunningThreadIds: string[] | null,
+    expectedPendingApprovalRequestIds: string[] | null,
+    expectedPendingApprovalThreadIds: string[] | null,
+  ): ThreadDeleteFailureDto | null {
+    const running = expectedRunningThreadIds
+      ? this.findNewIds(plan.runningThreadIds, expectedRunningThreadIds)
+      : [];
+    if (running.length > 0) {
+      return {
+        stage: 'drift',
+        code: ErrorCode.threads.deletePlanChanged,
+        message:
+          'A conversation started running after the delete confirmation was shown',
+        threadId: running[0],
+      };
+    }
+
+    // Request ids are the precise dimension — a second approval arriving on an
+    // already-pending thread is invisible at thread granularity. Fall back to
+    // thread ids only when the caller declared those instead, and check neither
+    // when the caller declared nothing.
+    const pending = expectedPendingApprovalRequestIds
+      ? this.findNewIds(
+          plan.pendingApprovals.map((request) => request.requestId),
+          expectedPendingApprovalRequestIds,
+        )
+      : expectedPendingApprovalThreadIds
+        ? this.findNewIds(
+            plan.pendingApprovalThreadIds,
+            expectedPendingApprovalThreadIds,
+          )
+        : [];
+    if (pending.length > 0) {
+      return {
+        stage: 'drift',
+        code: ErrorCode.threads.deletePlanChanged,
+        message:
+          'A pending approval arrived after the delete confirmation was shown',
+        threadId:
+          plan.pendingApprovals.find((request) =>
+            pending.includes(request.requestId),
+          )?.threadId ?? pending[0],
+      };
+    }
+    return null;
+  }
+
+  private findNewIds(current: string[], expected: string[]): string[] {
+    const expectedSet = new Set(expected);
+    return current.filter((id) => !expectedSet.has(id));
+  }
+
   private appendCancelledRequestIds(
     target: string[],
     requests: Array<{ requestId: string }>,
@@ -387,6 +527,14 @@ export class ThreadsDeletionService {
     if (left.length !== right.length) return false;
     const rightSet = new Set(right);
     return left.every((item) => rightSet.has(item));
+  }
+
+  private readUpdatedTree(
+    treeRootThreadId: string,
+    removedThreadIds: string[],
+  ): ThreadDeleteResultDto['updatedTree'] {
+    if (removedThreadIds.includes(treeRootThreadId)) return null;
+    return this.branches.readBranchTree(treeRootThreadId);
   }
 
   private conflictResult(
@@ -433,12 +581,22 @@ export class ThreadsDeletionService {
     reapedThreadIds: string[];
     failure: ThreadDeleteFailureDto;
     latestPreview?: ThreadDeletePreviewDto;
+    treeRootThreadId?: string;
   }): ThreadDeleteResultDto {
     const remainingThreadIds = params.plannedThreadIds.filter(
       (id) =>
         !params.deletedThreadIds.includes(id) &&
         !params.reapedThreadIds.includes(id),
     );
+    const updatedTree =
+      params.treeRootThreadId &&
+      params.failure.stage !== 'local_cleanup' &&
+      (params.deletedThreadIds.length > 0 || params.reapedThreadIds.length > 0)
+        ? this.readUpdatedTree(params.treeRootThreadId, [
+            ...params.deletedThreadIds,
+            ...params.reapedThreadIds,
+          ])
+        : undefined;
     return {
       targetThreadId: params.targetThreadId,
       status: params.destructiveStarted ? 'partial' : 'failed',
@@ -453,6 +611,7 @@ export class ThreadsDeletionService {
       remainingThreadIds,
       failure: params.failure,
       latestPreview: params.latestPreview,
+      ...(updatedTree !== undefined && { updatedTree }),
       diagnostics: params.latestPreview?.adoption.diagnostics ?? [],
     };
   }

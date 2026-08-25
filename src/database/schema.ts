@@ -251,3 +251,26 @@ export type ConversationBranchEdge =
   typeof conversationBranchEdges.$inferSelect;
 export type InsertConversationBranchEdge =
   typeof conversationBranchEdges.$inferInsert;
+
+/**
+ * Last viewed member for one conversation branch tree.
+ *
+ * This is global server-side view state, not a browser preference: whichever
+ * device opens a tree member most recently owns the collapsed sidebar target.
+ */
+export const conversationBranchActiveMembers = sqliteTable(
+  'conversation_branch_active_members',
+  {
+    treeRootThreadId: text('tree_root_thread_id').primaryKey(),
+    activeThreadId: text('active_thread_id').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('idx_branch_active_members_active').on(table.activeThreadId),
+  ],
+);
+
+export type ConversationBranchActiveMember =
+  typeof conversationBranchActiveMembers.$inferSelect;
+export type InsertConversationBranchActiveMember =
+  typeof conversationBranchActiveMembers.$inferInsert;
