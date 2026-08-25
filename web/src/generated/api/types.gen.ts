@@ -936,6 +936,7 @@ export type TurnErrorDto = {
 export type TurnDto = {
     id: string;
     items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
+    itemsView: 'notLoaded' | 'summary' | 'full';
     status: 'completed' | 'interrupted' | 'failed' | 'inProgress';
     error: TurnErrorDto | null;
     startedAt: number | null;
@@ -1117,6 +1118,10 @@ export type BranchGroupDto = {
 
 export type BranchTreeDto = {
     treeRootThreadId: string;
+    /**
+     * Last globally opened member for this tree, when it is still locally valid.
+     */
+    activeThreadId?: string | null;
     tracked: boolean;
     members: Array<BranchTreeMemberDto>;
     groups: Array<BranchGroupDto>;
@@ -1133,6 +1138,68 @@ export type CreateThreadDto = {
     model?: string;
     cwd?: string;
     approvalPolicy?: 'on-request' | 'never' | GranularApprovalPolicyDto | null;
+};
+
+export type ThreadOverviewRowDto = {
+    thread: ThreadDto;
+    treeRootThreadId: string;
+    openThreadId: string;
+    memberThreadIds: Array<string>;
+    hiddenThreadIds: Array<string>;
+    hasBranchDescendants: boolean;
+    latestActivityAt: number;
+    running: boolean;
+    waitingOnApproval: boolean;
+    waitingOnUserInput: boolean;
+    pendingApprovalCount: number;
+};
+
+export type ThreadOverviewResponseDto = {
+    data: Array<ThreadOverviewRowDto>;
+    nextCursor: string | null;
+};
+
+export type ThreadTurnsPageDto = {
+    data: Array<TurnDto>;
+    nextCursor: string | null;
+    backwardsCursor: string | null;
+};
+
+export type ThreadOpenResponseDto = {
+    mode: 'writable' | 'readOnly';
+    ownership: 'acquired' | 'refused';
+    ownershipRefusalMessage?: string | null;
+    thread: ThreadDto;
+    cwd: string;
+    model?: string | null;
+    modelProvider?: string | null;
+    serviceTier: 'fast' | 'flex' | null;
+    instructionSources?: Array<string>;
+    approvalPolicy?: {
+        [key: string]: unknown;
+    };
+    approvalsReviewer?: string | null;
+    sandbox?: {
+        [key: string]: unknown;
+    };
+    reasoningEffort?: string | null;
+    initialTurnsPage: ThreadTurnsPageDto;
+    turnsBackwardsCursor: string | null;
+    itemsBackwardsCursor: string | null;
+};
+
+export type ThreadTurnCountsRequestDto = {
+    threadIds: Array<string>;
+};
+
+export type ThreadTurnCountDto = {
+    threadId: string;
+    count?: number | null;
+    errorMessage?: string | null;
+};
+
+export type ThreadTurnCountsResponseDto = {
+    counts: Array<ThreadTurnCountDto>;
 };
 
 export type StartTurnDto = {
@@ -1257,6 +1324,18 @@ export type ThreadDeletePreviewDto = {
 
 export type ThreadDeleteRequestDto = {
     expectedThreadIds: Array<string>;
+    /**
+     * Running thread ids shown in the confirmation. Newly running ids force re-confirmation.
+     */
+    expectedRunningThreadIds?: Array<string>;
+    /**
+     * Threads with pending approvals shown in the confirmation. New arrivals force re-confirmation.
+     */
+    expectedPendingApprovalThreadIds?: Array<string>;
+    /**
+     * Pending approval request ids shown in the confirmation. New request ids force re-confirmation.
+     */
+    expectedPendingApprovalRequestIds?: Array<string>;
 };
 
 export type ThreadDeleteResultDto = {
@@ -1273,6 +1352,10 @@ export type ThreadDeleteResultDto = {
     remainingThreadIds: Array<string>;
     failure?: ThreadDeleteFailureDto;
     latestPreview?: ThreadDeletePreviewDto;
+    /**
+     * Affected tree after local cleanup, or null when the tree root was removed.
+     */
+    updatedTree?: BranchTreeDto | null;
     diagnostics: Array<BranchAdoptionDiagnosticDto>;
 };
 
@@ -2427,6 +2510,33 @@ export type ThreadsStartThreadResponses = {
 
 export type ThreadsStartThreadResponse = ThreadsStartThreadResponses[keyof ThreadsStartThreadResponses];
 
+export type ThreadsListOverviewData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+        archived?: boolean;
+        searchTerm?: string;
+        cwd?: string;
+        sortKey?: 'created_at' | 'updated_at';
+    };
+    url: '/api/threads/overview';
+};
+
+export type ThreadsListOverviewErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsListOverviewError = ThreadsListOverviewErrors[keyof ThreadsListOverviewErrors];
+
+export type ThreadsListOverviewResponses = {
+    200: ThreadOverviewResponseDto;
+};
+
+export type ThreadsListOverviewResponse = ThreadsListOverviewResponses[keyof ThreadsListOverviewResponses];
+
 export type ThreadsListLoadedThreadsData = {
     body?: never;
     path?: never;
@@ -2539,7 +2649,12 @@ export type ThreadsResumeThreadData = {
     path: {
         threadId: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Pass false for background reopens (refresh or reconnect recovery) so the tree's active-branch pointer keeps naming what the user last opened.
+         */
+        recordActive?: boolean;
+    };
     url: '/api/threads/{threadId}/resume';
 };
 
@@ -2550,10 +2665,37 @@ export type ThreadsResumeThreadErrors = {
 export type ThreadsResumeThreadError = ThreadsResumeThreadErrors[keyof ThreadsResumeThreadErrors];
 
 export type ThreadsResumeThreadResponses = {
-    201: ThreadResumeResponseDto;
+    201: ThreadOpenResponseDto;
 };
 
 export type ThreadsResumeThreadResponse = ThreadsResumeThreadResponses[keyof ThreadsResumeThreadResponses];
+
+export type ThreadsListTurnsData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: {
+        cursor?: string;
+        limit?: number;
+        sortDirection?: 'asc' | 'desc';
+        itemsView?: 'notLoaded' | 'summary' | 'full';
+    };
+    url: '/api/threads/{threadId}/turns';
+};
+
+export type ThreadsListTurnsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsListTurnsError = ThreadsListTurnsErrors[keyof ThreadsListTurnsErrors];
+
+export type ThreadsListTurnsResponses = {
+    200: ThreadTurnsPageDto;
+};
+
+export type ThreadsListTurnsResponse = ThreadsListTurnsResponses[keyof ThreadsListTurnsResponses];
 
 export type ThreadsStartTurnData = {
     body: StartTurnDto;
@@ -2576,6 +2718,26 @@ export type ThreadsStartTurnResponses = {
 };
 
 export type ThreadsStartTurnResponse = ThreadsStartTurnResponses[keyof ThreadsStartTurnResponses];
+
+export type ThreadsCountTurnsData = {
+    body: ThreadTurnCountsRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/threads/turn-counts';
+};
+
+export type ThreadsCountTurnsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsCountTurnsError = ThreadsCountTurnsErrors[keyof ThreadsCountTurnsErrors];
+
+export type ThreadsCountTurnsResponses = {
+    201: ThreadTurnCountsResponseDto;
+};
+
+export type ThreadsCountTurnsResponse = ThreadsCountTurnsResponses[keyof ThreadsCountTurnsResponses];
 
 export type ThreadsSteerTurnData = {
     body: SteerTurnDto;

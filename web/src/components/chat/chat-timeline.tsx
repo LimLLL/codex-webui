@@ -2,10 +2,10 @@
  * Virtualized scrollable message timeline.
  * Uses TanStack Virtual for efficient rendering of long conversations.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bot, Loader2, Pencil } from 'lucide-react';
+import { Bot, Loader2, Lock, Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertDialog,
@@ -29,11 +29,13 @@ import {
 } from '@/hooks/use-message-branches';
 import {
   adoptionBlockReason,
+  buildDeleteRequestBody,
   pickSurvivingVersion,
   useBranchAdoptionStatus,
   useDeletePreview,
   useDeleteThread,
 } from '@/hooks/use-thread-deletion';
+import { useLoadOlderHistory } from '@/hooks/use-thread-open';
 import { DeleteConversationDialog } from '@/components/branches/delete-conversation-dialog';
 import { getApiErrorMessage } from '@/lib/api-error';
 import { useTimelineStore } from '@/stores/timeline-store';
@@ -42,9 +44,38 @@ import { MessageVersionSwitcher } from './message-version-switcher';
 import { TurnBlock } from './turn-block';
 import { UserMessageBubble } from './user-message-bubble';
 
+/** Stable empty set, so "nothing is being deleted" is referentially constant. */
+const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set<string>();
+
 /** Returns true if the scroll container is near the bottom. */
 function isNearBottom(el: HTMLElement, threshold = 120): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+}
+
+/**
+ * States that this conversation is held open for writing elsewhere.
+ *
+ * Only one process may hold a paginated conversation open for writing. Losing
+ * that race leaves the history perfectly readable, so the conversation is shown
+ * rather than refused — but silently showing a conversation that rejects every
+ * message would read as the app being broken.
+ */
+function ReadOnlyBanner({ reason }: { reason: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 sm:px-4 lg:px-6 dark:text-amber-300">
+      <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <div>
+        <p className="font-medium">
+          {t('Read-only: this conversation is open in another client.')}
+        </p>
+        <p className="opacity-80">
+          {reason ||
+            t('Close it there, then reopen this conversation to continue it.')}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 interface Props {
@@ -59,6 +90,11 @@ export function ChatTimeline({ onEditMessage }: Props) {
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const threadMode = useTimelineStore((s) => s.threadMode);
   const loading = useTimelineStore((s) => s.loading);
+  const historyCursor = useTimelineStore((s) => s.historyCursor);
+  const historyLoading = useTimelineStore((s) => s.historyLoading);
+  const readOnlyReason = useTimelineStore((s) => s.readOnlyReason);
+  const deletedRemotely = useTimelineStore((s) => s.deletedRemotely);
+  const loadOlderHistory = useLoadOlderHistory(threadId);
   const [editTarget, setEditTarget] = useState<{
     turnId: string;
     content: string;
@@ -91,9 +127,28 @@ export function ChatTimeline({ onEditMessage }: Props) {
     if (text) onEditMessage?.(text);
   });
 
+  // The confirmed cascade, for as long as the request is in flight. Taken from
+  // the mutation's own variables rather than tracked separately so it can never
+  // disagree with what was actually sent. The dialog closes and the route moves
+  // to the surviving sibling the moment the request is issued, so without this
+  // the switcher on that sibling is the only thing on screen — and it was
+  // showing the pre-delete count, fully interactive, for the whole round trip.
+  const deletingThreadIds = useMemo<ReadonlySet<string>>(
+    () =>
+      deleteVersion.isPending
+        ? new Set(deleteVersion.variables?.body?.expectedThreadIds ?? [])
+        : EMPTY_THREAD_IDS,
+    [deleteVersion.isPending, deleteVersion.variables],
+  );
+
   // A turn cannot be branched while the conversation is busy, and the newest
   // user message has no turn id until `turn/started` arrives.
-  const canBranch = threadMode === 'live' && !loading && !createBranch.isPending;
+  const canBranch =
+    threadMode === 'live' &&
+    readOnlyReason === null &&
+    !deletedRemotely &&
+    !loading &&
+    !createBranch.isPending;
 
   // ── Virtualizer ─────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -185,6 +240,7 @@ export function ChatTimeline({ onEditMessage }: Props) {
   // ── Virtualized list ────────────────────────────────────────────────
   return (
     <>
+      {readOnlyReason !== null && <ReadOnlyBanner reason={readOnlyReason} />}
       {/* `scrollbar-gutter` keeps the gutter reserved: switching versions swaps
           the timeline through an empty state, and letting the scrollbar come and
           go with it visibly shifts every message sideways. */}
@@ -193,6 +249,27 @@ export function ChatTimeline({ onEditMessage }: Props) {
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
       >
+        {/* Deliberately a button rather than infinite scroll. Opening a
+            conversation now fetches only its most recent page, so older turns
+            are inserted *above* what is rendered — and prepending into a
+            virtualized list with estimated row heights moves the content the
+            user is reading. An explicit control keeps that motion something
+            they asked for. */}
+        {historyCursor !== null && (
+          <div className="flex justify-center px-3 pt-3 sm:px-4 lg:px-6">
+            <button
+              type="button"
+              disabled={historyLoading}
+              onClick={() => void loadOlderHistory()}
+              className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+            >
+              {historyLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              {historyLoading
+                ? t('Loading earlier messages…')
+                : t('Load earlier messages')}
+            </button>
+          </div>
+        )}
         <div
           className="relative px-3 sm:px-4 lg:px-6"
           style={{ height: `${virtualizer.getTotalSize()}px` }}
@@ -216,6 +293,7 @@ export function ChatTimeline({ onEditMessage }: Props) {
                     canBranch={canBranch}
                     versionsByTurnId={versionsByTurnId}
                     deleteBlockedReason={deleteBlockedReason}
+                    deletingThreadIds={deletingThreadIds}
                     onDeleteVersion={(threadId, siblingThreadIds) =>
                       setDeleteTarget({ threadId, siblingThreadIds })
                     }
@@ -270,7 +348,7 @@ export function ChatTimeline({ onEditMessage }: Props) {
         onConfirm={(preview) =>
           deleteVersion.mutate({
             path: { threadId: preview.targetThreadId },
-            body: { expectedThreadIds: preview.threadIds },
+            body: buildDeleteRequestBody(preview),
           })
         }
         onClose={() => setDeleteTarget(null)}
@@ -286,6 +364,7 @@ function TimelineEntryRow({
   canBranch,
   versionsByTurnId,
   deleteBlockedReason,
+  deletingThreadIds,
   onDeleteVersion,
   onEdit,
   t,
@@ -295,6 +374,7 @@ function TimelineEntryRow({
   canBranch: boolean;
   versionsByTurnId: Map<string, MessageVersions>;
   deleteBlockedReason: string | null;
+  deletingThreadIds: ReadonlySet<string>;
   onDeleteVersion: (threadId: string, siblingThreadIds: string[]) => void;
   onEdit: (target: { turnId: string; content: string }) => void;
   t: (key: string) => string;
@@ -319,6 +399,7 @@ function TimelineEntryRow({
             <MessageVersionSwitcher
               versions={versions}
               deleteBlockedReason={deleteBlockedReason}
+              deletingThreadIds={deletingThreadIds}
               onDeleteVersion={onDeleteVersion}
             />
           )}

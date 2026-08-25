@@ -11,7 +11,9 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import {
   threadsListBranchTreesQueryKey,
+  threadsListOverviewQueryKey,
   threadsListThreadsQueryKey,
+  threadsReadBranchTreeQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 
 const DEBOUNCE_MS = 300;
@@ -34,12 +36,12 @@ const timersByClient = new WeakMap<
  *
  * @param queryClient - Client to invalidate against
  * @param bucket - Identity of the timer to share
- * @param queryKey - Key (or key prefix) to invalidate
+ * @param queryKeys - Keys (or key prefixes) invalidated together on that timer
  */
 function scheduleInvalidate(
   queryClient: QueryClient,
   bucket: string,
-  queryKey: QueryKey,
+  queryKeys: QueryKey[],
 ): void {
   let timers = timersByClient.get(queryClient);
   if (!timers) {
@@ -53,21 +55,59 @@ function scheduleInvalidate(
     bucket,
     setTimeout(() => {
       timers.delete(bucket);
-      void queryClient.invalidateQueries({ queryKey });
+      for (const queryKey of queryKeys) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
     }, DEBOUNCE_MS),
   );
 }
 
-/** Refreshes every thread-list variant shortly after the last caller. */
+/**
+ * Refreshes every conversation-list variant shortly after the last caller.
+ *
+ * Both keys are scheduled on one timer rather than two. The sidebar reads the
+ * server-collapsed overview while other surfaces still read the flat list, and
+ * letting them land on independent schedules is precisely the mixed-moment
+ * render this helper exists to prevent.
+ */
 export function invalidateThreadListSoon(queryClient: QueryClient): void {
-  scheduleInvalidate(queryClient, 'threadList', threadsListThreadsQueryKey());
+  scheduleInvalidate(queryClient, 'threadList', [
+    threadsListOverviewQueryKey(),
+    threadsListThreadsQueryKey(),
+  ]);
 }
 
 /** Refreshes the branch topology shortly after the last caller. */
 export function invalidateBranchTreesSoon(queryClient: QueryClient): void {
+  scheduleInvalidate(queryClient, 'branchTrees', [
+    threadsListBranchTreesQueryKey(),
+  ]);
+}
+
+/**
+ * Refreshes the per-thread branch tree that drives the `< n/m >` switcher.
+ *
+ * Deleting or creating a version used to invalidate only the *list* of branch
+ * trees. That is a different cache identity with no prefix relationship to the
+ * single-tree read, so the switcher was never actively refreshed at all — its
+ * counter changed only once its own staleness window expired, which is why a
+ * deleted version kept being counted for up to thirty seconds.
+ *
+ * Every member of the affected tree is invalidated, not just the one acted on:
+ * the query is keyed by the thread being *viewed*, and the user lands on a
+ * sibling immediately after a version is removed.
+ */
+export function invalidateBranchTreeMembersSoon(
+  queryClient: QueryClient,
+  threadIds: string[],
+): void {
+  const unique = [...new Set(threadIds)].filter(Boolean);
+  if (unique.length === 0) return;
   scheduleInvalidate(
     queryClient,
-    'branchTrees',
-    threadsListBranchTreesQueryKey(),
+    `branchTree:${unique.join(',')}`,
+    unique.map((threadId) =>
+      threadsReadBranchTreeQueryKey({ path: { threadId } }),
+    ),
   );
 }

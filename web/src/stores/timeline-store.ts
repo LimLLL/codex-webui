@@ -44,6 +44,36 @@ export interface ThreadRuntimeState {
   activeTurnId: string | null;
   pendingResolvedRequestIds: Set<string>;
   hydrated: boolean;
+  /**
+   * Cursor for the next *older* page of turns, or null when history is complete.
+   *
+   * Opening a thread no longer materializes its whole history: the server
+   * returns metadata plus the most recent page. Everything before that is
+   * fetched on demand, so the timeline can be complete-but-truncated rather
+   * than simply empty, and the two states must stay distinguishable.
+   */
+  historyCursor: string | null;
+  /** True while an older-history page is being fetched. */
+  historyLoading: boolean;
+  /**
+   * Why this thread cannot be written to, or null when it is writable.
+   *
+   * Only one app-server process may hold a paginated thread open for writing.
+   * Losing that race is not a failure to open — the history is still readable —
+   * so it degrades to a read-only view that says why rather than an error.
+   */
+  readOnlyReason: string | null;
+  /**
+   * True once this conversation is known to have been destroyed elsewhere.
+   *
+   * The transcript is deliberately kept — see the `thread/deleted` handler — but
+   * keeping it must not leave the conversation writable: every send would fail
+   * against a thread that no longer exists. Distinct from
+   * {@link readOnlyReason} because the cause and the remedy differ, and telling
+   * a user their deleted conversation is "open in another client" is worse than
+   * saying nothing.
+   */
+  deletedRemotely: boolean;
   /** Millisecond timestamp for LRU-style idle subscription cleanup. */
   lastActivityAt: number;
 }
@@ -170,6 +200,25 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
   return entries;
 }
 
+/**
+ * Collects every turn id already represented in a timeline.
+ *
+ * Must consider `user` entries as well as `turn` entries: a turn carrying only
+ * a user message — one that was interrupted, or is still awaiting its first
+ * item — produces a `user` entry and no `turn` entry at all. Reading turn ids
+ * from `turn` entries alone therefore misses it, which lets a history page
+ * re-insert that message on paging and makes an already-loaded page look new
+ * on reopen.
+ */
+function collectKnownTurnIds(timeline: TimelineEntry[]): Set<string> {
+  const turnIds = new Set<string>();
+  for (const entry of timeline) {
+    if (entry.kind !== 'user' && entry.kind !== 'turn') continue;
+    if (entry.turnId) turnIds.add(entry.turnId);
+  }
+  return turnIds;
+}
+
 function createRuntime(input: ThreadRuntimeInput): ThreadRuntimeState {
   return {
     threadId: input.threadId,
@@ -187,6 +236,10 @@ function createRuntime(input: ThreadRuntimeInput): ThreadRuntimeState {
     activeTurnId: null,
     pendingResolvedRequestIds: new Set<string>(),
     hydrated: false,
+    historyCursor: null,
+    historyLoading: false,
+    readOnlyReason: null,
+    deletedRemotely: false,
     lastActivityAt: Date.now(),
   };
 }
@@ -209,6 +262,10 @@ function runtimeFromSelected(state: TimelineState): ThreadRuntimeState | null {
     activeTurnId: state.activeTurnId,
     pendingResolvedRequestIds: state.pendingResolvedRequestIds,
     hydrated: true,
+    historyCursor: state.historyCursor,
+    historyLoading: state.historyLoading,
+    readOnlyReason: state.readOnlyReason,
+    deletedRemotely: state.deletedRemotely,
     lastActivityAt: state.lastActivityAt,
   };
 }
@@ -235,6 +292,10 @@ function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineSta
       threadStatus: null,
       activeTurnId: null,
       pendingResolvedRequestIds: new Set<string>(),
+      historyCursor: null,
+      historyLoading: false,
+      readOnlyReason: null,
+      deletedRemotely: false,
       lastActivityAt: 0,
     };
   }
@@ -253,6 +314,10 @@ function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineSta
     threadStatus: runtime.threadStatus,
     activeTurnId: runtime.activeTurnId,
     pendingResolvedRequestIds: runtime.pendingResolvedRequestIds,
+    historyCursor: runtime.historyCursor,
+    historyLoading: runtime.historyLoading,
+    readOnlyReason: runtime.readOnlyReason,
+    deletedRemotely: runtime.deletedRemotely,
     lastActivityAt: runtime.lastActivityAt,
   };
 }
@@ -450,6 +515,10 @@ interface TimelineState {
   threadStatus: ThreadStatusType | null;
   activeTurnId: string | null;
   pendingResolvedRequestIds: Set<string>;
+  historyCursor: string | null;
+  historyLoading: boolean;
+  readOnlyReason: string | null;
+  deletedRemotely: boolean;
   lastActivityAt: number;
 
   ensureThreadState: (input: ThreadRuntimeInput) => void;
@@ -505,6 +574,20 @@ interface TimelineState {
   resolveApprovalByRequestId: (requestId: string | number) => void;
 
   hydrateTimelineForThread: (threadId: string, turns: TurnDto[], cwd?: string | null) => void;
+  hydrateOpenedThread: (params: {
+    threadId: string;
+    turnsNewestFirst: TurnDto[];
+    historyCursor: string | null;
+    readOnlyReason: string | null;
+    cwd?: string | null;
+  }) => void;
+  prependHistoryForThread: (
+    threadId: string,
+    turnsNewestFirst: TurnDto[],
+    nextCursor: string | null,
+  ) => void;
+  setHistoryLoadingForThread: (threadId: string, loading: boolean) => void;
+  markThreadDeletedRemotely: (threadId: string, message: string) => void;
   hydrateTokenUsageForThread: (threadId: string, turns: Array<{ turnId: string; usage: ThreadTokenUsage }>) => void;
   hydrateTurnDiffsForThread: (threadId: string, turns: Array<{ turnId: string; diff: string }>) => void;
   hydrateTurnErrorsForThread: (threadId: string, errors: Array<{ turnId: string; message: string }>) => void;
@@ -577,6 +660,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     threadStatus: null,
     activeTurnId: null,
     pendingResolvedRequestIds: new Set(),
+    historyCursor: null,
+    historyLoading: false,
+    readOnlyReason: null,
+    deletedRemotely: false,
     lastActivityAt: 0,
 
     ensureThreadState: (input) => {
@@ -899,6 +986,109 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ),
         activeTurnId: null,
         hydrated: true,
+      }));
+    },
+
+    /**
+     * Seeds a thread from a metadata-first open.
+     *
+     * The server returns the most recent page of turns newest-first, because
+     * that is the end the user is looking at; the timeline renders oldest-first,
+     * so the page is reversed here rather than at every read site.
+     */
+    hydrateOpenedThread: ({
+      threadId,
+      turnsNewestFirst,
+      historyCursor,
+      readOnlyReason,
+      cwd,
+    }) => {
+      const turns = [...turnsNewestFirst].reverse();
+      applyThreadUpdate(threadId, (runtime) => {
+        // Reopening must not undo paging. An open returns only the most recent
+        // page, so replacing the timeline with it would discard every earlier
+        // page the user had loaded — leave the conversation and come back and
+        // the history silently shrinks again.
+        //
+        // The page is kept only when it introduces nothing this client does not
+        // already hold. If it carries a turn we have never seen, the thread has
+        // moved on elsewhere and the server's view wins outright; merging
+        // partially would risk stitching two different moments together.
+        const knownTurnIds = collectKnownTurnIds(runtime.timeline);
+        const pageIsSubsumed =
+          runtime.hydrated &&
+          turns.length > 0 &&
+          turns.every((turn) => knownTurnIds.has(turn.id));
+
+        return {
+          ...runtime,
+          threadCwd: cwd ?? runtime.threadCwd,
+          loading: false,
+          timeline: pageIsSubsumed
+            ? runtime.timeline
+            : ensureUserInputTurnEntries(
+                turnsToTimeline(turns),
+                runtime.userInputRequests,
+              ),
+          activeTurnId: null,
+          hydrated: true,
+          // Keeping the existing cursor matters as much as keeping the entries:
+          // the cursor from a fresh open points just before the newest page, so
+          // adopting it would offer to re-fetch history already on screen.
+          historyCursor: pageIsSubsumed ? runtime.historyCursor : historyCursor,
+          historyLoading: false,
+          readOnlyReason,
+        };
+      });
+    },
+
+    /**
+     * Adds an older page of history above what is already rendered.
+     *
+     * Guards against double-application: a turn already present is skipped
+     * rather than duplicated, because the cursor page is inclusive of its
+     * anchor row and a retry can overlap what the previous page delivered.
+     */
+    prependHistoryForThread: (threadId, turnsNewestFirst, nextCursor) => {
+      applyThreadUpdate(threadId, (runtime) => {
+        const knownTurnIds = collectKnownTurnIds(runtime.timeline);
+        const older = [...turnsNewestFirst]
+          .reverse()
+          .filter((turn) => !knownTurnIds.has(turn.id));
+        return {
+          ...runtime,
+          timeline: [...turnsToTimeline(older), ...runtime.timeline],
+          historyCursor: nextCursor,
+          historyLoading: false,
+        };
+      });
+    },
+
+    setHistoryLoadingForThread: (threadId, historyLoading) => {
+      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, historyLoading }));
+    },
+
+    /**
+     * Marks a conversation destroyed elsewhere while keeping its transcript.
+     *
+     * Keeping what the user is reading is deliberate, but it must stop being
+     * interactive in the same step: a preserved transcript that still accepts
+     * messages is a conversation that fails on every send. Any in-flight turn
+     * state is cleared too — it can no longer complete, and leaving it would
+     * show a spinner that never resolves.
+     */
+    markThreadDeletedRemotely: (threadId, message) => {
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        deletedRemotely: true,
+        loading: false,
+        activeTurnId: null,
+        historyCursor: null,
+        historyLoading: false,
+        timeline: [
+          ...runtime.timeline,
+          { kind: 'system', content: message, severity: 'error' },
+        ],
       }));
     },
 

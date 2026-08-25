@@ -6,6 +6,7 @@ import {
   threadsDeletionDeleteThreadMutation,
   threadsDeletionPreviewDeleteOptions,
   threadsDeletionReadBranchAdoptionStatusOptions,
+  threadsReadBranchTreeQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type {
   ThreadDeletePreviewDto,
@@ -13,6 +14,7 @@ import type {
 } from '@/generated/api/types.gen';
 import { getApiErrorMessage } from '@/lib/api-error';
 import {
+  invalidateBranchTreeMembersSoon,
   invalidateBranchTreesSoon,
   invalidateThreadListSoon,
 } from '@/lib/query-invalidation';
@@ -72,6 +74,29 @@ interface DeleteArgs {
 }
 
 /**
+ * Builds the delete request body from the preview the user actually confirmed.
+ *
+ * The declared state is what makes auto-interrupt honest. Deletion interrupts
+ * whatever is running, so a conversation that starts running *after* the
+ * confirmation would be interrupted without ever having been named in it.
+ * Declaring what was on screen lets the server refuse and re-ask instead.
+ *
+ * Approval *request* ids rather than thread ids: a second approval arriving on
+ * a thread that already had one is invisible at thread granularity.
+ *
+ * @param preview - Exactly the preview rendered in the confirmation dialog
+ */
+export function buildDeleteRequestBody(preview: ThreadDeletePreviewDto) {
+  return {
+    expectedThreadIds: preview.threadIds,
+    expectedRunningThreadIds: preview.runningThreadIds,
+    expectedPendingApprovalRequestIds: preview.pendingApprovals.map(
+      (request) => request.requestId,
+    ),
+  };
+}
+
+/**
  * Picks the version to land on once `targetThreadId` is destroyed.
  *
  * Deleting a version is not deleting the conversation, so dropping the user on
@@ -106,19 +131,24 @@ interface UseDeleteThreadOptions {
   /** Runs once the mutation settles, in success and failure alike. */
   onFinished?: () => void;
   /**
-   * Resolves where to navigate when the conversation on screen is destroyed.
-   * Receives the cascade set so the caller can skip relatives that also die.
-   * Returning null (or omitting this) falls back to the empty state.
+   * Resolves where to navigate once the conversation on screen is confirmed
+   * destroyed. Receives the set the server actually removed — not the planned
+   * cascade — so a partial delete cannot send the user to a thread that is
+   * still there in name only. Returning null falls back to the empty state.
    */
-  resolveSurvivor?: (doomed: Set<string>) => string | null;
+  resolveSurvivor?: (removed: Set<string>) => string | null;
 }
 
 /**
  * Executes a confirmed cascade delete and tears down local state for it.
  *
- * Navigation happens as soon as the request is issued rather than on success:
- * the user has already confirmed, and staying inside a conversation that is
- * being destroyed produces resume and turn requests the backend now rejects.
+ * Nothing moves until the server confirms. An earlier version navigated as soon
+ * as the request was issued, on the grounds that sitting inside a conversation
+ * being destroyed produces resume and turn requests the backend rejects — but
+ * that only held while the confirmation dialog dismissed itself on click. It
+ * now stays up for the duration, so the user cannot act on the doomed thread
+ * anyway, and leaving early merely asserted a deletion that had not happened
+ * yet. A failed delete used to leave them somewhere else with nothing removed.
  */
 export function useDeleteThread({
   onFinished,
@@ -130,27 +160,71 @@ export function useDeleteThread({
 
   return useMutation({
     ...threadsDeletionDeleteThreadMutation(),
-    onMutate: (variables) => {
-      const doomed = new Set(variables.body?.expectedThreadIds ?? []);
-      const store = useTimelineStore.getState();
-      if (!store.threadId || !doomed.has(store.threadId)) return;
-
-      const survivor = resolveSurvivor?.(doomed) ?? null;
-      store.clearThread();
-      // Split rather than a ternary argument: the router types each `to` against
-      // its own params, and a union of the two options defeats that inference.
-      if (survivor) {
-        void navigate({ to: '/t/$threadId', params: { threadId: survivor } });
-      } else {
-        void navigate({ to: '/' });
-      }
-    },
     onSuccess: (result: ThreadDeleteResultDto) => {
       const removed = new Set([
         ...result.deletedThreadIds,
         ...result.reapedThreadIds,
       ]);
+
+      // Leave only if the conversation on screen is one of the ones actually
+      // gone. Keyed on what the server reports as removed rather than on what
+      // was planned: a conflict removes nothing and a partial removes some, and
+      // in both cases moving the user would misreport the outcome.
+      const store = useTimelineStore.getState();
+      if (store.threadId && removed.has(store.threadId)) {
+        const survivor = resolveSurvivor?.(removed) ?? null;
+        store.clearThread();
+        // Split rather than a ternary argument: the router types each `to`
+        // against its own params, and a union of the two defeats that inference.
+        if (survivor) {
+          void navigate({ to: '/t/$threadId', params: { threadId: survivor } });
+        } else {
+          void navigate({ to: '/' });
+        }
+      }
+
       useTimelineStore.getState().forgetThreads([...removed]);
+
+      // Write the server's own post-delete view of the tree straight into the
+      // caches that render it, rather than waiting for a refetch.
+      //
+      // The survivor list must come from the returned tree's own members. The
+      // request body carries the *doomed* set, so deriving survivors from it
+      // yields an empty list whenever the delete succeeded in full — which left
+      // the one cache that actually matters untouched: the version the user is
+      // dropped onto is a surviving sibling, not the tree root, so its switcher
+      // went on reporting the pre-delete count until something else refetched it.
+      const tree = result.updatedTree;
+      if (tree) {
+        const members = [
+          tree.treeRootThreadId,
+          ...tree.members.map((member) => member.threadId),
+        ];
+        for (const threadId of members) {
+          if (removed.has(threadId)) continue;
+          queryClient.setQueryData(
+            threadsReadBranchTreeQueryKey({ path: { threadId } }),
+            tree,
+          );
+        }
+      }
+      // Removed members keep stale trees otherwise, and a re-visit by id would
+      // read one. When no tree came back there are two very different cases:
+      // the root was deleted and nothing survives, or the server aborted before
+      // it could report one — local cleanup failures omit `updatedTree` while
+      // still having removed threads. The second leaves survivors holding a
+      // pre-delete topology, so everything the plan touched is refreshed rather
+      // than assuming there is nothing left to correct.
+      invalidateBranchTreeMembersSoon(
+        queryClient,
+        tree
+          ? [...removed]
+          : [
+              ...removed,
+              ...result.plannedThreadIds,
+              ...result.remainingThreadIds,
+            ],
+      );
 
       if (result.status === 'completed') {
         showSnackbar(

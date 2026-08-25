@@ -53,6 +53,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const threadId = useTimelineStore((s) => s.threadId);
   const threadCwd = useTimelineStore((s) => s.threadCwd);
   const threadMode = useTimelineStore((s) => s.threadMode);
+  const readOnlyReason = useTimelineStore((s) => s.readOnlyReason);
+  const deletedRemotely = useTimelineStore((s) => s.deletedRemotely);
   const loading = useTimelineStore((s) => s.loading);
   const activeTurnId = useTimelineStore((s) => s.activeTurnId);
   const hasPendingApproval = useTimelineStore((s) => {
@@ -66,7 +68,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   });
   const addUserMessage = useTimelineStore((s) => s.addUserMessage);
   const addSystemError = useTimelineStore((s) => s.addSystemError);
-  const readOnly = threadMode === 'readOnly';
+  // Three distinct ways to be unwritable, with three different remedies: an
+  // archived snapshot, a conversation whose writer ownership is held by another
+  // client, and one that was destroyed elsewhere. The latter two still show a
+  // full transcript, so nothing else about them looks read-only.
+  const readOnly =
+    threadMode === 'readOnly' || readOnlyReason !== null || deletedRemotely;
   const hasActiveTurn = Boolean(threadId && activeTurnId && !readOnly);
   const canSteer = hasActiveTurn && !hasPendingApproval;
 
@@ -205,9 +212,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // ── Render ───────────────────────────────────────────────
   return (
     <footer className="glass-4 sticky bottom-0 z-10 px-3 py-2.5 sm:px-4 sm:py-3 lg:px-6">
+      {/* Different reasons to be read-only, with different remedies. A single
+          archived-flavoured message told users to unarchive a conversation that
+          is not archived, contradicting the banner above the timeline. */}
       {readOnly && (
         <p className="mb-2 rounded-lg bg-muted px-3 py-2 text-center text-xs text-muted-foreground">
-          {t('Archived threads are read-only. Unarchive or fork to continue.')}
+          {deletedRemotely
+            ? t('This conversation was deleted and can no longer be used.')
+            : readOnlyReason !== null
+              ? t('Held open by another client. Close it there to continue here.')
+              : t('Archived threads are read-only. Unarchive or fork to continue.')}
         </p>
       )}
       <div className="relative">

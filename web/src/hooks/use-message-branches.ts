@@ -5,13 +5,15 @@ import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import {
   threadsCreateMessageBranchMutation,
-  threadsListBranchTreesQueryKey,
-  threadsListThreadsQueryKey,
   threadsReadBranchTreeOptions,
-  threadsReadBranchTreeQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { BranchTreeDto, BranchVersionDto } from '@/generated/api/types.gen';
 import { getApiErrorMessage } from '@/lib/api-error';
+import {
+  invalidateBranchTreeMembersSoon,
+  invalidateBranchTreesSoon,
+  invalidateThreadListSoon,
+} from '@/lib/query-invalidation';
 import { showSnackbar } from '@/stores/snackbar-store';
 
 /** Sibling versions of one edited message, positioned for a `< n/m >` switcher. */
@@ -106,17 +108,15 @@ export function useCreateMessageBranch(onBranchReady: (text: string) => void) {
     ...threadsCreateMessageBranchMutation(),
     onSuccess: (res, vars) => {
       const childThreadId = res.fork.thread.id;
-      void queryClient.invalidateQueries({
-        queryKey: threadsReadBranchTreeQueryKey({
-          path: { threadId: vars.path.threadId },
-        }),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: threadsListBranchTreesQueryKey(),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: threadsListThreadsQueryKey(),
-      });
+      // Both the parent and the freshly created child: the caller is about to
+      // navigate into the child, whose switcher must already know it is one of
+      // n versions rather than counting the group as it was a moment ago.
+      invalidateBranchTreeMembersSoon(queryClient, [
+        vars.path.threadId,
+        childThreadId,
+      ]);
+      invalidateBranchTreesSoon(queryClient);
+      invalidateThreadListSoon(queryClient);
       void navigate({ to: '/t/$threadId', params: { threadId: childThreadId } });
       onBranchReady(vars.body?.previewText ?? '');
     },

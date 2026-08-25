@@ -12,6 +12,7 @@ import { handleNotification, type NotificationContext } from './notification-han
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors, threadsResumeThread } from '@/generated/api/sdk.gen';
 import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
+import { applyOpenResponse } from './use-thread-open';
 import i18n from '@/i18n';
 
 type CodexLifecycleEvent =
@@ -44,8 +45,12 @@ export function useCodexSocket(enabled = true) {
 
     const ctx: NotificationContext = {
       threadId: null,
+      // Read live rather than captured: this closure outlives many selections.
+      getSelectedThreadId: () => useTimelineStore.getState().threadId,
       queryClient,
       forgetThreads: (threadIds) => useTimelineStore.getState().forgetThreads(threadIds),
+      markThreadDeletedRemotely: (threadId, message) =>
+        useTimelineStore.getState().markThreadDeletedRemotely(threadId, message),
       updateCurrentTurn: (turnId, updater) => {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().updateCurrentTurnForThread(threadId, turnId, updater);
@@ -170,14 +175,18 @@ export function useCodexSocket(enabled = true) {
           'info',
         );
         // Restore full thread state via deduped resume, then hydrate dependent data sequentially.
-        void threadsResumeThread({ path: { threadId } })
+        // Recovery after an app-server restart, not a user opening anything:
+        // the active-branch pointer must keep naming what they last chose.
+        void threadsResumeThread({
+          path: { threadId },
+          query: { recordActive: false },
+        })
           .then(async ({ data }) => {
             if (!data) return;
-            store.hydrateTimelineForThread(threadId, data.thread.turns, data.cwd);
-            store.setThreadStatusForThread(threadId, data.thread.status);
-            const activeTurn = data.thread.turns?.find((t: { status?: string }) => t.status === 'inProgress');
-            store.setActiveTurnIdForThread(threadId, activeTurn?.id ?? null);
-            store.setLoadingForThread(threadId, Boolean(activeTurn));
+            // Shared with the route and the refresh-recovery path: the response
+            // carries a recent page of turns rather than the whole history, and
+            // three separate readings of that shape is how one of them goes stale.
+            applyOpenResponse(data);
             // Hydrate after timeline is in place to avoid race.
             const [tokenRes, diffRes, errorRes] = await Promise.allSettled([
               tokenUsageReadThreadTokenUsage({ path: { threadId } }),

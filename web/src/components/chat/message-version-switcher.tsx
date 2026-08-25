@@ -1,6 +1,6 @@
 /** `< n/m >` switcher for sibling versions of an edited user message. */
 import { useNavigate } from '@tanstack/react-router';
-import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   Tooltip,
@@ -8,11 +8,21 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import type { MessageVersions } from '@/hooks/use-message-branches';
+import { cn } from '@/lib/utils';
 
 interface Props {
   versions: MessageVersions;
   /** Reason deletion is unavailable, or null when it is allowed. */
   deleteBlockedReason?: string | null;
+  /**
+   * Threads in a cascade that has been confirmed and is still in flight.
+   *
+   * The switcher used to stay fully live throughout: it kept reporting the
+   * pre-delete count and let the user page into a version that was at that
+   * moment being destroyed. Nothing on screen said anything was happening until
+   * the success toast arrived.
+   */
+  deletingThreadIds?: ReadonlySet<string>;
   /**
    * Requests deletion of one version.
    *
@@ -21,6 +31,8 @@ interface Props {
    */
   onDeleteVersion?: (threadId: string, siblingThreadIds: string[]) => void;
 }
+
+const NO_DELETIONS: ReadonlySet<string> = new Set<string>();
 
 /**
  * Navigates between sibling versions of one message.
@@ -31,13 +43,24 @@ interface Props {
 export function MessageVersionSwitcher({
   versions,
   deleteBlockedReason = null,
+  deletingThreadIds = NO_DELETIONS,
   onDeleteVersion,
 }: Props) {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { position, total } = versions;
 
-  const current = versions.versions[position - 1];
+  const { position, total } = versions;
+  const list = versions.versions;
+  // Feedback only — deliberately not an optimistic count. The versions are
+  // still there until the server says otherwise, and a counter that decrements
+  // on click would be asserting an outcome that can still fail. What the round
+  // trip needs is evidence that something is happening, and a guarantee the
+  // user cannot page into a version that is at that moment being destroyed.
+  const isDeleting = list.some((version) =>
+    deletingThreadIds.has(version.threadId),
+  );
+
+  const current = list[position - 1];
   // A group's `original` cannot be dropped on its own: every other version in
   // the group is a fork of it, so destroying it destroys the whole group — and
   // the thread it lives in, which the user knows by a different message
@@ -58,7 +81,7 @@ export function MessageVersionSwitcher({
   const showDeleteVersion = Boolean(onDeleteVersion) && Boolean(current);
 
   const goTo = (nextPosition: number) => {
-    const target = versions.versions[nextPosition - 1];
+    const target = list[nextPosition - 1];
     if (!target) return;
     void navigate({
       to: '/t/$threadId',
@@ -73,7 +96,7 @@ export function MessageVersionSwitcher({
           <button
             type="button"
             aria-label={t('Previous version')}
-            disabled={position <= 1}
+            disabled={position <= 1 || isDeleting}
             className="flex cursor-pointer items-center rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
             onClick={() => goTo(position - 1)}
           >
@@ -92,7 +115,7 @@ export function MessageVersionSwitcher({
           <button
             type="button"
             aria-label={t('Next version')}
-            disabled={position >= total}
+            disabled={position >= total || isDeleting}
             className="flex cursor-pointer items-center rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
             onClick={() => goTo(position + 1)}
           >
@@ -107,22 +130,38 @@ export function MessageVersionSwitcher({
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label={t('Delete this version')}
-              disabled={Boolean(blockedReason)}
+              aria-label={
+                isDeleting ? t('Deleting…') : t('Delete this version')
+              }
+              disabled={Boolean(blockedReason) || isDeleting}
               title={blockedReason ?? undefined}
-              className="flex cursor-pointer items-center rounded p-0.5 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
+              // Dimmed when unavailable, but not while deleting: a 30%-opacity
+              // spinner is the same "nothing is happening" signal being fixed.
+              className={cn(
+                'flex cursor-pointer items-center rounded p-0.5 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:hover:bg-transparent',
+                !isDeleting && 'disabled:opacity-30',
+              )}
               onClick={() =>
                 onDeleteVersion?.(
                   current.threadId,
-                  versions.versions.map((version) => version.threadId),
+                  list.map((version) => version.threadId),
                 )
               }
             >
-              <Trash2 className="h-3 w-3" />
+              {/* The control that was activated is the one that reports
+                  progress. A separate indicator elsewhere would leave the bin
+                  looking idle and clickable, which is what it did before. */}
+              {isDeleting ? (
+                <Loader2 className="h-3 w-3 animate-spin text-destructive" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-xs">
-            {blockedReason ?? t('Delete this version and its branches')}
+            {isDeleting
+              ? t('Deleting…')
+              : (blockedReason ?? t('Delete this version and its branches'))}
           </TooltipContent>
         </Tooltip>
       )}

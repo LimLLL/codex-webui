@@ -32,10 +32,23 @@ import i18n from '@/i18n';
 // ---------------------------------------------------------------------------
 
 export interface NotificationContext {
+  /**
+   * Thread the notification being handled belongs to.
+   *
+   * Reassigned per notification by the dispatcher so thread-scoped handlers
+   * write to the right runtime. It is therefore **not** "the thread on screen"
+   * — for any notification that carries a threadId the two are equal by
+   * construction, which silently turns `ctx.threadId === params.threadId` into
+   * a tautology. Use {@link getSelectedThreadId} for that question.
+   */
   threadId: string | null;
+  /** The thread actually being viewed, independent of notification routing. */
+  getSelectedThreadId: () => string | null;
   queryClient: QueryClient;
   /** Removes all local runtime state for threads that no longer exist. */
   forgetThreads: (threadIds: string[]) => void;
+  /** Keeps a destroyed conversation readable while making it unwritable. */
+  markThreadDeletedRemotely: (threadId: string, message: string) => void;
   updateCurrentTurn: (
     turnId: string,
     updater: (
@@ -512,11 +525,22 @@ const handleThreadDeleted: Handler = (params, ctx) => {
   const threadId = params.threadId as string | undefined;
   if (!threadId) return;
 
-  if (ctx.threadId === threadId) {
+  // Compared against the *selected* thread, not the routed one. The dispatcher
+  // sets `ctx.threadId` to this notification's own thread before calling us, so
+  // testing it here was always true: the runtime of a conversation deleted from
+  // another client was never dropped, and appending a system message to a
+  // thread this client had never opened created a ghost runtime through the
+  // store's create-if-absent helper.
+  if (ctx.getSelectedThreadId() === threadId) {
     // The runtime is deliberately left in place: dropping it would blank the
     // conversation the user is reading with no explanation, and the router is
-    // not reachable from here. Telling them is the honest minimum.
-    ctx.addSystemMessage(i18n.t('This conversation was deleted'), 'error');
+    // not reachable from here. But keeping it readable is not the same as
+    // keeping it usable — the thread is gone, so it is marked unwritable in the
+    // same step rather than left accepting messages that can only fail.
+    ctx.markThreadDeletedRemotely(
+      threadId,
+      i18n.t('This conversation was deleted'),
+    );
   } else {
     ctx.forgetThreads([threadId]);
   }

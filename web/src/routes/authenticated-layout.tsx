@@ -37,6 +37,7 @@ import type { PendingServerRequestDto } from '@/generated/api';
 import type { ApprovalRequest } from '@/types/approval';
 import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
 import { userInputFromPending } from '@/lib/user-input-parsers';
+import { applyOpenResponse } from '@/hooks/use-thread-open';
 
 const MAX_IDLE_SUBSCRIPTIONS_KEY = 'general.maxIdleSubscriptions';
 const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
@@ -175,25 +176,19 @@ export function AuthenticatedLayout() {
             subscribedThreadIds: new Set(s.subscribedThreadIds).add(tid),
           }));
 
-          // Resume to get full thread state (dedup makes this safe).
-          void threadsResumeThread({ path: { threadId: tid } })
+          // Reopen to restore state. Backend dedup makes this safe, and the
+          // shared applier is what keeps this path in step with the route's:
+          // the response carries a recent page of turns, not a whole history.
+          // `recordActive: false` — nobody opened these, the page was reloaded.
+          // Letting a bulk restore write the active-branch pointer would leave
+          // each tree naming whichever member happened to be restored last.
+          void threadsResumeThread({
+            path: { threadId: tid },
+            query: { recordActive: false },
+          })
             .then(({ data: resumeData }) => {
               if (cancelled || !resumeData) return;
-              hydrateTimelineForThread(
-                tid,
-                resumeData.thread.turns ?? [],
-                resumeData.cwd ?? resumeData.thread.cwd,
-              );
-              setThreadTitleForThread(
-                tid,
-                resumeData.thread.name ?? resumeData.thread.preview ?? null,
-              );
-              setThreadStatusForThread(tid, resumeData.thread.status);
-              const activeTurn = resumeData.thread.turns?.find(
-                (turn: { status?: string }) => turn.status === 'inProgress',
-              );
-              setActiveTurnIdForThread(tid, activeTurn?.id ?? null);
-              setLoadingForThread(tid, Boolean(activeTurn));
+              applyOpenResponse(resumeData);
             })
             .catch(() => {
               if (!cancelled) setLoadingForThread(tid, false);

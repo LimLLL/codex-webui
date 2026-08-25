@@ -4,6 +4,7 @@ import {
   Archive,
   CircleHelp,
   Loader2,
+  MessagesSquare,
   ShieldQuestion,
   Trash2,
 } from 'lucide-react';
@@ -52,8 +53,25 @@ export interface BranchGraphNodeData {
   boundaryUnknown: boolean;
   /** Unix seconds; null when app-server no longer knows the thread. */
   createdAt: number | null;
+  /**
+   * Turn count, or null when it is unknown.
+   *
+   * Decorative by construction: counting pages the stored history without
+   * resuming, and any failure yields null rather than blocking the graph. Never
+   * treat a count as evidence about what a delete would remove.
+   */
+  turnCount: number | null;
   /** Purely cosmetic: the click itself is handled by React Flow's `onNodeClick`. */
   clickable: boolean;
+  /**
+   * Deletes this node's subtree, or undefined where deletion is not offered.
+   *
+   * Present on the browse graph and absent inside the delete confirmation: a
+   * dialog that is itself asking about a deletion must not offer another one.
+   */
+  onDelete?: (threadId: string) => void;
+  /** Reason deletion is unavailable, or null when it is allowed. */
+  deleteBlockedReason?: string | null;
 }
 
 /** Compact absolute timestamp; branch trees are read by "which came first". */
@@ -84,7 +102,7 @@ export function BranchGraphNode({ data }: NodeProps) {
     <div
       style={{ width: BRANCH_NODE_WIDTH, height: BRANCH_NODE_HEIGHT }}
       className={cn(
-        'flex flex-col justify-between rounded-lg border px-3 py-2 text-left transition-colors',
+        'group/node flex flex-col justify-between rounded-lg border px-3 py-2 text-left transition-colors',
         node.isDoomed
           ? 'border-destructive/60 bg-destructive/10'
           : 'border-border bg-card',
@@ -100,7 +118,7 @@ export function BranchGraphNode({ data }: NodeProps) {
         )}
         <span
           className={cn(
-            'line-clamp-2 text-xs leading-snug',
+            'line-clamp-2 flex-1 text-xs leading-snug',
             node.isDoomed
               ? 'text-destructive line-through decoration-destructive/60'
               : 'text-foreground',
@@ -108,12 +126,41 @@ export function BranchGraphNode({ data }: NodeProps) {
         >
           {node.label}
         </span>
+        {node.onDelete && (
+          <button
+            type="button"
+            aria-label={t('Delete this branch and everything below it')}
+            title={
+              node.deleteBlockedReason ??
+              t('Delete this branch and everything below it')
+            }
+            disabled={Boolean(node.deleteBlockedReason)}
+            // Stops React Flow's node click from also opening the conversation:
+            // the two actions sit on the same element and only one was asked for.
+            onClick={(event) => {
+              event.stopPropagation();
+              node.onDelete?.(node.threadId);
+            }}
+            className="nodrag -mr-1 -mt-1 shrink-0 cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:cursor-default disabled:opacity-30 group-hover/node:opacity-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
         {createdAt && (
           <span className="tabular-nums" title={createdAt}>
             {createdAt}
+          </span>
+        )}
+        {node.turnCount !== null && (
+          <span
+            className="flex items-center gap-0.5 tabular-nums"
+            title={t('Turns in this branch')}
+          >
+            <MessagesSquare className="h-3 w-3" />
+            {node.turnCount}
           </span>
         )}
         {node.isTarget && (

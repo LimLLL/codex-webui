@@ -614,7 +614,6 @@
   "Fork point unknown: this branch was not created here.": "分叉点未知：该分支不是在此处创建的。",
   "Created outside this client; its fork point was reconstructed from disk.": "该分支不是在此处创建的；其分叉点由磁盘记录重建得出。",
   "Branch graph": "分支图",
-  "Each node is one branch of this conversation; an edge is labelled with the message that was edited to create the branch below it. Click a node to open it.": "每个节点是该对话的一个分支；边上标注的是为创建下方分支而被编辑的那条消息。点击节点即可打开。",
   "Delete this version": "删除此版本",
   "Delete this version and its branches": "删除此版本及其下游分支",
   "This is the original version. Deleting it would remove every other version of this message along with it — delete the whole branch from the outer version switcher or the sidebar instead.": "这是原始版本。删除它会连带删掉这条消息的其余全部版本 —— 若要删除整个分支，请用上层的版本切换器或侧边栏。",
@@ -636,5 +635,16 @@
   "Nothing was deleted; the plan changed. Review and try again.": "未删除任何内容：删除计划已变化，请重新确认后再试。",
   "Deletion stopped partway. Some conversations were removed.": "删除中途停止，部分对话已被移除。",
   "Could not delete this conversation.": "无法删除该对话。",
-  "Selected for deletion": "选中删除"
+  "Selected for deletion": "选中删除",
+  "This conversation is open in another client; opened read-only.": "该会话正被其它客户端占用，已以只读方式打开。",
+  "Read-only: this conversation is open in another client.": "只读：该会话正被其它客户端占用。",
+  "Close it there, then reopen this conversation to continue it.": "在那一端关闭后，重新打开本会话即可继续。",
+  "Load earlier messages": "加载更早的消息",
+  "Loading earlier messages…": "正在加载更早的消息…",
+  "Delete this branch and everything below it": "删除该分支及其下方全部内容",
+  "Turns in this branch": "该分支的轮数",
+  "Each node is one branch of this conversation; an edge is labelled with the message that was edited to create the branch below it. Click a node to open it, or use its bin icon to delete it and everything below it.": "每个节点是本对话的一个分支；连线上标注的是为创建下方分支而被编辑的那条消息。点击节点可打开，点击垃圾桶图标可删除该节点及其下方全部内容。",
+  "Held open by another client. Close it there to continue here.": "正被其它客户端占用。在那一端关闭后即可在此继续。",
+  "Deleting…": "正在删除…",
+  "This conversation was deleted and can no longer be used.": "该会话已被删除，无法继续使用。"
 }

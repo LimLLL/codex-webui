@@ -1,5 +1,5 @@
 /** Full-size, pannable branch graph for one conversation tree. */
-import { lazy, Suspense, useCallback, useMemo } from 'react';
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
@@ -15,8 +15,18 @@ import {
   threadsListThreadsOptions,
   threadsReadBranchTreeOptions,
 } from '@/generated/api/@tanstack/react-query.gen';
+import { threadsCountTurns } from '@/generated/api/sdk.gen';
+import {
+  adoptionBlockReason,
+  buildDeleteRequestBody,
+  useBranchAdoptionStatus,
+  useDeletePreview,
+  useDeleteThread,
+} from '@/hooks/use-thread-deletion';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { BranchGraphItem } from './branch-graph';
+import { DeleteConversationDialog } from './delete-conversation-dialog';
 
 // Keeps React Flow out of the entry chunk; this dialog is the only interactive
 // graph surface and is opened on demand.
@@ -43,10 +53,52 @@ export function BranchGraphDialog({ threadId, onClose }: Props) {
   const navigate = useNavigate();
   const currentThreadId = useTimelineStore((s) => s.threadId);
   const threadsById = useTimelineStore((s) => s.threadsById);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     ...threadsReadBranchTreeOptions({ path: { threadId: threadId ?? '' } }),
     enabled: Boolean(threadId),
+  });
+
+  // Deleting from the graph is deleting a *subtree*, which is unambiguous
+  // topology — so unlike the version switcher, every node is a legitimate
+  // target. The switcher's "the group original cannot be deleted here" rule is
+  // scoped to a version group; a graph node is a conversation, not a version.
+  // The graph is only an entry point: the cascade is always re-planned by the
+  // server and confirmed in the existing dialog, never derived from what is
+  // drawn here, which can be stale or locally incomplete.
+  const adoptionStatus = useBranchAdoptionStatus();
+  const deleteBlockedReason = adoptionBlockReason(adoptionStatus.data, t);
+  const deletePreview = useDeletePreview(deleteTargetId);
+  const deleteThread = useDeleteThread({
+    onFinished: () => {
+      setDeleteTargetId(null);
+      onClose();
+    },
+  });
+
+  const memberThreadIds = useMemo(
+    () => (data?.members ?? []).map((member) => member.threadId),
+    [data],
+  );
+
+  // Counts are fetched for the whole visible graph in one batched request and
+  // are allowed to fail: a node with no count renders without one.
+  const { data: turnCounts } = useQuery({
+    queryKey: ['branchGraphTurnCounts', memberThreadIds],
+    enabled: memberThreadIds.length > 0,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data: counts } = await threadsCountTurns({
+        body: { threadIds: memberThreadIds },
+      });
+      return new Map(
+        (counts?.counts ?? []).map((entry) => [
+          entry.threadId,
+          entry.count ?? null,
+        ]),
+      );
+    },
   });
 
   // Creation times are not part of the local branch topology, so they are
@@ -206,10 +258,20 @@ export function BranchGraphDialog({ threadId, onClose }: Props) {
         // `forkedFromId` instead, which is where that flag belongs.
         boundaryUnknown: false,
         createdAt: createdAtByThreadId.get(member.threadId) ?? null,
+        turnCount: turnCounts?.get(member.threadId) ?? null,
         clickable: true,
+        onDelete: setDeleteTargetId,
+        deleteBlockedReason,
       },
     }));
-  }, [data, currentThreadId, threadsById, threadList]);
+  }, [
+    data,
+    currentThreadId,
+    threadsById,
+    threadList,
+    turnCounts,
+    deleteBlockedReason,
+  ]);
 
   return (
     <Dialog open={Boolean(threadId)} onOpenChange={(next) => !next && onClose()}>
@@ -221,7 +283,7 @@ export function BranchGraphDialog({ threadId, onClose }: Props) {
           <DialogTitle>{t('Branch graph')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Each node is one branch of this conversation; an edge is labelled with the message that was edited to create the branch below it. Click a node to open it.',
+              'Each node is one branch of this conversation; an edge is labelled with the message that was edited to create the branch below it. Click a node to open it, or use its bin icon to delete it and everything below it.',
             )}
           </DialogDescription>
         </DialogHeader>
@@ -245,6 +307,24 @@ export function BranchGraphDialog({ threadId, onClose }: Props) {
           </Suspense>
         )}
       </DialogContent>
+
+      <DeleteConversationDialog
+        open={deleteTargetId !== null}
+        preview={deletePreview.data ?? null}
+        loading={deletePreview.isLoading}
+        errorMessage={
+          deletePreview.error ? getApiErrorMessage(deletePreview.error) : null
+        }
+        pending={deleteThread.isPending}
+        currentThreadId={currentThreadId}
+        onConfirm={(preview) =>
+          deleteThread.mutate({
+            path: { threadId: preview.targetThreadId },
+            body: buildDeleteRequestBody(preview),
+          })
+        }
+        onClose={() => setDeleteTargetId(null)}
+      />
     </Dialog>
   );
 }

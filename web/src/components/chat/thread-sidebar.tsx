@@ -15,36 +15,30 @@ import {
   threadsArchiveThreadMutation,
   threadsCompactThreadMutation,
   threadsForkThreadMutation,
-  threadsListBranchTreesOptions,
-  threadsListThreadsOptions,
-  threadsListThreadsQueryKey,
-  threadsResumeThreadMutation,
+  threadsListOverviewOptions,
   threadsSetThreadNameMutation,
   threadsStartThreadMutation,
   threadsUnarchiveThreadMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors } from '@/generated/api/sdk.gen';
 import type { ThreadDto } from '@/generated/api';
+import type { ThreadOverviewRowDto } from '@/generated/api/types.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useLayoutStore } from '@/stores/layout-store';
 import { cn } from '@/lib/utils';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { invalidateThreadListSoon } from '@/lib/query-invalidation';
 import { BranchGraphDialog } from '@/components/branches/branch-graph-dialog';
 import { DeleteConversationDialog } from '@/components/branches/delete-conversation-dialog';
 import {
   adoptionBlockReason,
+  buildDeleteRequestBody,
   useBranchAdoptionStatus,
   useDeletePreview,
   useDeleteThread,
 } from '@/hooks/use-thread-deletion';
 import type { ConfirmAction } from './sidebar/sidebar-types';
-import {
-  threadLabel,
-  groupByWorkspace,
-  buildBranchMemberIndex,
-  buildBranchRootIndex,
-  collapseBranchThreads,
-} from './sidebar/sidebar-types';
+import { threadLabel, groupByWorkspace } from './sidebar/sidebar-types';
 import { ThreadRow } from './sidebar/thread-row';
 import { WorkspaceOverview } from './sidebar/workspace-overview';
 import { WorkspaceDetail } from './sidebar/workspace-detail';
@@ -80,10 +74,6 @@ export function ThreadSidebar() {
   const hydrateTokenUsageForThread = useTimelineStore((s) => s.hydrateTokenUsageForThread);
   const hydrateTurnDiffsForThread = useTimelineStore((s) => s.hydrateTurnDiffsForThread);
   const hydrateTurnErrorsForThread = useTimelineStore((s) => s.hydrateTurnErrorsForThread);
-  const setThreadTitleForThread = useTimelineStore((s) => s.setThreadTitleForThread);
-  const setLoadingForThread = useTimelineStore((s) => s.setLoadingForThread);
-  const setThreadStatusForThread = useTimelineStore((s) => s.setThreadStatusForThread);
-  const setActiveTurnIdForThread = useTimelineStore((s) => s.setActiveTurnIdForThread);
   const addSystemError = useTimelineStore((s) => s.addSystemError);
   const queryClient = useQueryClient();
 
@@ -107,29 +97,31 @@ export function ThreadSidebar() {
   const [graphTargetId, setGraphTargetId] = useState<string | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────────
+  // The sidebar reads one server-side projection. It used to join a paginated
+  // thread list with the branch topology on the client, fold branches into
+  // their root row and lift the newest member's timestamp for sorting — a
+  // derivation over two independently refetched queries. Whichever landed
+  // first was rendered, so a single delete visibly reshuffled the list twice.
+  // Debouncing could not fix that: it coalesces repeats of one query, not the
+  // gap between two.
   const overviewThreadsQuery = useQuery({
-    ...threadsListThreadsOptions({
+    ...threadsListOverviewOptions({
       query: { archived: false, limit: 100, sortKey: 'updated_at' },
     }),
   });
   const overviewArchivedQuery = useQuery({
-    ...threadsListThreadsOptions({
+    ...threadsListOverviewOptions({
       query: { archived: true, limit: 5, sortKey: 'updated_at' },
     }),
   });
   const detailQuery = useQuery({
-    ...threadsListThreadsOptions({
+    ...threadsListOverviewOptions({
       query:
         sidebarView.type === 'workspaceDetail'
           ? { archived: false, cwd: sidebarView.cwd, cursor: cursor ?? undefined, limit: 20, sortKey: 'updated_at' }
           : { archived: true, cursor: cursor ?? undefined, limit: 20, sortKey: 'updated_at' },
     }),
     enabled: sidebarView.type !== 'overview',
-  });
-
-  const branchTreesQuery = useQuery({
-    ...threadsListBranchTreesOptions(),
-    staleTime: 30_000,
   });
 
   // ── Deletion ────────────────────────────────────────────────────────
@@ -142,62 +134,69 @@ export function ThreadSidebar() {
     onFinished: () => setDeleteTargetId(null),
   });
 
-  // Branch members are versions of a message, not conversations of their own,
-  // so they are folded into the row of their tree root everywhere threads list.
-  const branchRootIndex = useMemo(
-    () => buildBranchRootIndex(branchTreesQuery.data),
-    [branchTreesQuery.data],
+  // Rows arrive already collapsed and sorted; the client only indexes them so
+  // a row can be looked up by the thread it displays.
+  const rowsByView = useMemo(
+    () => ({
+      active: overviewThreadsQuery.data?.data ?? [],
+      archived: overviewArchivedQuery.data?.data ?? [],
+      detail: detailQuery.data?.data ?? [],
+    }),
+    [overviewThreadsQuery.data, overviewArchivedQuery.data, detailQuery.data],
   );
-  const branchMemberIndex = useMemo(
-    () => buildBranchMemberIndex(branchTreesQuery.data),
-    [branchTreesQuery.data],
-  );
+  const rowByThreadId = useMemo(() => {
+    const index = new Map<string, ThreadOverviewRowDto>();
+    for (const row of [
+      ...rowsByView.active,
+      ...rowsByView.archived,
+      ...rowsByView.detail,
+    ]) {
+      index.set(row.thread.id, row);
+    }
+    return index;
+  }, [rowsByView]);
+
+  // Every hidden member maps to the row that stands for it, so a deep link to a
+  // branch still lights up the row the user can see.
+  const displayThreadIdByMember = useMemo(() => {
+    const index = new Map<string, string>();
+    for (const row of rowByThreadId.values()) {
+      for (const memberId of row.memberThreadIds) {
+        index.set(memberId, row.thread.id);
+      }
+    }
+    return index;
+  }, [rowByThreadId]);
+
   const activeThreads = useMemo(
-    () => collapseBranchThreads(overviewThreadsQuery.data?.data ?? [], branchRootIndex),
-    [overviewThreadsQuery.data, branchRootIndex],
+    () => rowsByView.active.map((row) => row.thread),
+    [rowsByView.active],
   );
   const archivedThreads = useMemo(
-    () => collapseBranchThreads(overviewArchivedQuery.data?.data ?? [], branchRootIndex),
-    [overviewArchivedQuery.data, branchRootIndex],
+    () => rowsByView.archived.map((row) => row.thread),
+    [rowsByView.archived],
   );
   const workspaceGroups = useMemo(() => groupByWorkspace(activeThreads), [activeThreads]);
   const detailThreads = useMemo(
-    () => collapseBranchThreads(detailQuery.data?.data ?? [], branchRootIndex),
-    [detailQuery.data, branchRootIndex],
+    () => rowsByView.detail.map((row) => row.thread),
+    [rowsByView.detail],
   );
 
-  // A deep link to a branch must light up the root row the branch lives under.
   const highlightedThreadId = threadId
-    ? (branchRootIndex.get(threadId) ?? threadId)
+    ? (displayThreadIdByMember.get(threadId) ?? threadId)
     : null;
 
-  const invalidateThreads = () => {
-    void queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
-  };
+  // Shares the timer the socket dispatcher uses, so a mutation and the
+  // notification it provokes produce one refetch rather than two.
+  const invalidateThreads = () => invalidateThreadListSoon(queryClient);
 
   // ── Thread open helpers ─────────────────────────────────────────────
-  const resumeThread = useMutation({
-    ...threadsResumeThreadMutation(),
-    onSuccess: (res) => {
-      const tid = res.thread.id;
-      setThreadTitleForThread(tid, threadLabel(res.thread));
-      hydrateTimelineForThread(tid, res.thread.turns, res.cwd);
-      setThreadStatusForThread(tid, res.thread.status);
-      const activeTurn = res.thread.turns.find((turn) => turn.status === 'inProgress');
-      setActiveTurnIdForThread(tid, activeTurn?.id ?? null);
-      setLoadingForThread(tid, Boolean(activeTurn));
-      void tokenUsageReadThreadTokenUsage({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTokenUsageForThread(tid, data.turns))
-        .catch(() => undefined);
-      void turnDiffReadThreadTurnDiffs({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTurnDiffsForThread(tid, data.turns))
-        .catch(() => undefined);
-      void turnErrorsReadThreadTurnErrors({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTurnErrorsForThread(tid, data.errors))
-        .catch(() => undefined);
-    },
-    onError: (_err, vars) => setLoadingForThread(vars.path.threadId, false),
-  });
+  //
+  // The sidebar navigates and nothing more. Opening — resume, hydration, the
+  // loading decision — belongs to the route, which is the only place that can
+  // know a conversation is already on screen. Doing it here as well meant one
+  // click resumed the same thread twice, and resume is not a read: it claims
+  // writer ownership.
 
   /**
    * True when the thread is already open *and on screen*.
@@ -206,21 +205,31 @@ export function ThreadSidebar() {
    * settings, diagnostics or integrations, so store state alone cannot answer
    * "is a click a no-op" — the chat view has to actually be the one showing.
    */
-  const isThreadOnScreen = (thread: ThreadDto, mode: 'live' | 'readOnly') =>
-    thread.id === threadId && threadMode === mode && activeView === 'chat';
+  const isThreadOnScreen = (threadIdToCheck: string, mode: 'live' | 'readOnly') =>
+    threadIdToCheck === threadId && threadMode === mode && activeView === 'chat';
+
+  /**
+   * Resolves which member of a collapsed row to actually open.
+   *
+   * A row stands for a whole branch tree, so opening it at the tree root would
+   * discard the branch the user was last reading and force them to step back
+   * through the version switcher one at a time. The server resolves the pointer
+   * — it is shared across devices — and falls back to the displayed thread.
+   */
+  const openTargetFor = (thread: ThreadDto): string =>
+    rowByThreadId.get(thread.id)?.openThreadId ?? thread.id;
 
   /** Navigate to archived thread — ThreadView handles loading (resume → fail → read). */
   const openArchivedThread = (thread: ThreadDto) => {
-    if (isThreadOnScreen(thread, 'readOnly')) return;
-    void navigate({ to: '/t/$threadId', params: { threadId: thread.id } });
+    const target = openTargetFor(thread);
+    if (isThreadOnScreen(target, 'readOnly')) return;
+    void navigate({ to: '/t/$threadId', params: { threadId: target } });
   };
 
   const openLiveThread = (thread: ThreadDto) => {
-    if (isThreadOnScreen(thread, 'live')) return;
-    setActiveThread(thread.id, thread.cwd, threadLabel(thread));
-    setLoadingForThread(thread.id, true);
-    resumeThread.mutate({ path: { threadId: thread.id } });
-    void navigate({ to: '/t/$threadId', params: { threadId: thread.id } });
+    const target = openTargetFor(thread);
+    if (isThreadOnScreen(target, 'live')) return;
+    void navigate({ to: '/t/$threadId', params: { threadId: target } });
   };
 
   /**
@@ -232,10 +241,9 @@ export function ThreadSidebar() {
    */
   const switchAfterArchive = (archivedId: string) => {
     const current = useTimelineStore.getState();
-    const archivedTree = new Set([
-      archivedId,
-      ...(branchMemberIndex.get(archivedId) ?? []),
-    ]);
+    const archivedTree = new Set(
+      rowByThreadId.get(archivedId)?.memberThreadIds ?? [archivedId],
+    );
     if (
       !current.threadId ||
       !archivedTree.has(current.threadId) ||
@@ -265,9 +273,8 @@ export function ThreadSidebar() {
   const archiveThread = useMutation({
     ...threadsArchiveThreadMutation(),
     onSuccess: (_res, vars) => {
-      const treeIds = [
+      const treeIds = rowByThreadId.get(vars.path.threadId)?.memberThreadIds ?? [
         vars.path.threadId,
-        ...(branchMemberIndex.get(vars.path.threadId) ?? []),
       ];
       for (const id of treeIds) useTimelineStore.getState().unsubscribeThread(id);
       switchAfterArchive(vars.path.threadId);
@@ -355,33 +362,44 @@ export function ThreadSidebar() {
 
   // ── Shared thread-row renderer (passed to overview/detail) ──────────
   const renderThreadRow = (thread: ThreadDto, archived: boolean) => {
+    const row = rowByThreadId.get(thread.id);
     const readRuntime = (id: string) =>
       id === threadId ? { loading, approvals, threadStatus } : threadsById[id];
 
-    // A hidden branch has no row of its own, so anything that needs the user's
-    // attention inside it has to surface on the tree's visible root row.
-    const treeRuntimes = [
-      readRuntime(thread.id),
-      ...(branchMemberIndex.get(thread.id) ?? []).map(readRuntime),
-    ].filter((runtime) => runtime !== undefined);
+    // Row flags come from the server, which already lifted them off hidden
+    // branch members. Local socket state is layered on top because it is
+    // instantaneous where the projection is only as fresh as its last refetch.
+    // This is safe in a way the old client-side join was not: these flags feed
+    // badges, never ordering, so a difference between the two sources cannot
+    // reshuffle the list.
+    const treeRuntimes = (row?.memberThreadIds ?? [thread.id])
+      .map(readRuntime)
+      .filter((runtime) => runtime !== undefined);
 
     const isRunning = treeRuntimes.some((runtime) => runtime.loading);
     const activeFlags = treeRuntimes.flatMap((runtime) =>
       runtime.threadStatus?.type === 'active' ? runtime.threadStatus.activeFlags : [],
     );
-    // Count hydrated pending approvals (source of truth for badge).
-    const pendingApprovalCount = treeRuntimes.reduce(
+    const localPendingCount = treeRuntimes.reduce(
       (total, runtime) =>
         total +
         Object.values(runtime.approvals ?? {}).filter((a) => a.status === 'pending').length,
       0,
     );
+    const pendingApprovalCount = Math.max(
+      localPendingCount,
+      row?.pendingApprovalCount ?? 0,
+    );
     const waitingOnApproval =
-      activeFlags.includes('waitingOnApproval') || pendingApprovalCount > 0;
-    const waitingOnUserInput = activeFlags.includes('waitingOnUserInput');
+      Boolean(row?.waitingOnApproval) ||
+      activeFlags.includes('waitingOnApproval') ||
+      pendingApprovalCount > 0;
+    const waitingOnUserInput =
+      Boolean(row?.waitingOnUserInput) || activeFlags.includes('waitingOnUserInput');
     // "Generating" = thread active but not blocked on any user-facing request.
     const generating =
-      treeRuntimes.some((runtime) => runtime.threadStatus?.type === 'active') &&
+      (Boolean(row?.running) ||
+        treeRuntimes.some((runtime) => runtime.threadStatus?.type === 'active')) &&
       !waitingOnApproval &&
       !waitingOnUserInput;
 
@@ -397,7 +415,7 @@ export function ThreadSidebar() {
         pendingApproval={waitingOnApproval}
         pendingApprovalCount={pendingApprovalCount}
         waitingOnUserInput={waitingOnUserInput}
-        hasBranchDescendants={branchMemberIndex.has(thread.id)}
+        hasBranchDescendants={Boolean(row?.hasBranchDescendants)}
         onOpen={() => { if (archived) void openArchivedThread(thread); else openLiveThread(thread); }}
         onRename={() => startRename(thread)}
         onArchive={() => setConfirmAction({ type: 'archive', thread })}
@@ -558,7 +576,7 @@ export function ThreadSidebar() {
         onConfirm={(preview) =>
           deleteThread.mutate({
             path: { threadId: preview.targetThreadId },
-            body: { expectedThreadIds: preview.threadIds },
+            body: buildDeleteRequestBody(preview),
           })
         }
         onClose={() => setDeleteTargetId(null)}

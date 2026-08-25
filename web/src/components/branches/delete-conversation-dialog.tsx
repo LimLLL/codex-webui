@@ -87,6 +87,11 @@ export function DeleteConversationDialog({
         external: thread.source === 'server',
         boundaryUnknown: thread.source === 'server',
         createdAt: thread.createdAt ?? null,
+        // No counts here, and no delete affordance: this dialog is already the
+        // confirmation for one deletion, and a decorative number fetched per
+        // node would sit next to a list whose whole purpose is to be exact
+        // about what is destroyed.
+        turnCount: null,
         clickable: false,
       },
     }));
@@ -241,10 +246,25 @@ export function DeleteConversationDialog({
           <AlertDialogAction
             disabled={!canConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            onClick={() => preview && onConfirm(preview)}
+            // `preventDefault` keeps the dialog mounted through the request.
+            // Radix closes on action by default, which dismissed the only
+            // progress indicator on screen the instant it became relevant: the
+            // spinner below could never render, `onOpenChange`'s `!pending`
+            // guard never had anything to guard, and the user was returned to a
+            // fully interactive version switcher still showing the pre-delete
+            // count. The dialog is dismissed by the mutation settling instead.
+            onClick={(event) => {
+              event.preventDefault();
+              // Re-checked here, not just on `disabled`: the attribute only
+              // takes effect after React paints, so a fast double click can
+              // enqueue two cascades. The backend turns the second into a
+              // conflict, but a destructive action should not depend on that.
+              if (!canConfirm || !preview) return;
+              onConfirm(preview);
+            }}
           >
             {pending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-            {t('Delete permanently')}
+            {pending ? t('Deleting…') : t('Delete permanently')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
