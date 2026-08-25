@@ -138,6 +138,23 @@ function parseTurnItem(item: Record<string, unknown>): TurnItem | null {
         fileDiff: changes?.[0]?.diff ?? '',
       };
     }
+    case 'contextCompaction':
+      return {
+        type: 'contextCompaction',
+        itemId: id,
+        content: '',
+        completed: true,
+      };
+    case 'enteredReviewMode':
+    case 'exitedReviewMode':
+      // `review` names what was reviewed (e.g. "current changes"); it is the
+      // only useful text these markers carry.
+      return {
+        type,
+        itemId: id,
+        content: (item.review as string) ?? '',
+        completed: true,
+      };
     default:
       return null;
   }
@@ -186,13 +203,22 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
       .map(parseTurnItem)
       .filter((it): it is TurnItem => it !== null);
 
-    if (turnItems.length > 0 || plan) {
+    // A summary turn may look empty here purely because app-server withheld
+    // its reasoning and plan items, so it still needs an entry to hang the
+    // on-demand top-up off.
+    const itemsView = turn.itemsView as
+      | 'notLoaded'
+      | 'summary'
+      | 'full'
+      | undefined;
+    if (turnItems.length > 0 || plan || itemsView === 'summary') {
       entries.push({
         kind: 'turn',
         turnId: turn.id,
         plan,
         items: turnItems,
         completed: turn.status === 'completed',
+        ...(itemsView && { itemsView }),
       });
     }
   }
@@ -604,6 +630,12 @@ interface TimelineState {
     turnId: string,
     itemId: string,
     updater: (existing: TurnItem | undefined) => TurnItem,
+  ) => void;
+  /** Replaces a summary turn's items with the full set fetched on demand. */
+  applyFullTurnItemsForThread: (
+    threadId: string,
+    turnId: string,
+    items: Array<Record<string, unknown>>,
   ) => void;
   updateTurnDiffForThread: (threadId: string, turnId: string, diff: string) => void;
   updateTurnPlanForThread: (threadId: string, turnId: string, plan: TurnPlanState) => void;
@@ -1160,6 +1192,34 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       applyThreadUpdate(threadId, (runtime) => updateRuntimeTurnItem(runtime, turnId, itemId, updater));
     },
 
+    applyFullTurnItemsForThread: (threadId, turnId, items) => {
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        timeline: runtime.timeline.map((entry) => {
+          if (entry.kind !== 'turn' || entry.turnId !== turnId) return entry;
+          // The request may have been in flight while live notifications
+          // rebuilt this turn. A persisted snapshot is older than anything
+          // that streamed in, so it may only fill gaps — never overwrite.
+          if (entry.itemsView !== 'summary') return entry;
+          const parsed = items
+            .map(parseTurnItem)
+            .filter((item): item is TurnItem => item !== null);
+          const liveItemIds = new Set(entry.items.map((item) => item.itemId));
+          const restored = parsed.filter(
+            (item) => !liveItemIds.has(item.itemId),
+          );
+          return {
+            ...entry,
+            // Live items keep their position and their streamed state; the
+            // snapshot only contributes what the summary view had withheld.
+            items: [...restored, ...entry.items],
+            plan: entry.plan ?? parsePersistedPlan(items),
+            // Marking it full is what stops the top-up from firing again.
+            itemsView: 'full' as const,
+          };
+        }),
+      }));
+    },
     updateTurnDiffForThread: (threadId, turnId, diff) => {
       applyThreadUpdate(threadId, (runtime) => updateRuntimeDiff(runtime, turnId, diff));
     },

@@ -10,6 +10,8 @@ import {
   appsListAppsQueryKey,
   codexStatusGetStatusQueryKey,
   mcpServersListServersQueryKey,
+  threadCommandsReadCollaborationModeQueryKey,
+  threadCommandsReadGoalQueryKey,
   threadsListThreadsQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { FileUpdateChangeDto, RateLimitSnapshotDto } from '@/generated/api';
@@ -19,6 +21,7 @@ import {
 } from '@/lib/query-invalidation';
 import { useAccountStore } from '@/stores/account-store';
 import { useMcpStore } from '@/stores/mcp-store';
+import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import type { AuthMode, PlanType } from '@/types/account';
 import type { ThreadTokenUsage, ThreadStatusType } from '@/types/codex-notifications';
@@ -251,6 +254,24 @@ const handleItemStarted: Handler = (params, ctx) => {
       command: (item.command as string) ?? '',
     }));
   }
+  // Compaction can start on its own (auto-compact) as well as from /compact,
+  // so the timeline has to show it regardless of who triggered it.
+  if (item.type === 'contextCompaction') {
+    ctx.updateTurnItem(turnId, id, () => ({
+      type: 'contextCompaction',
+      itemId: id,
+      content: '',
+      completed: false,
+    }));
+  }
+  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
+    ctx.updateTurnItem(turnId, id, () => ({
+      type: item.type as 'enteredReviewMode' | 'exitedReviewMode',
+      itemId: id,
+      content: (item.review as string) ?? '',
+      completed: false,
+    }));
+  }
 };
 
 const handleItemCompleted: Handler = (params, ctx) => {
@@ -312,6 +333,26 @@ const handleItemCompleted: Handler = (params, ctx) => {
       fileDiff: firstChange?.diff || existing?.fileDiff || '',
     }));
   }
+  if (item.type === 'contextCompaction') {
+    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
+      ...(existing ?? {
+        type: 'contextCompaction' as const,
+        itemId: completedItemId,
+        content: '',
+      }),
+      completed: true,
+    }));
+  }
+  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
+    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
+      ...(existing ?? {
+        type: item.type as 'enteredReviewMode' | 'exitedReviewMode',
+        itemId: completedItemId,
+      }),
+      content: (item.review as string) || existing?.content || '',
+      completed: true,
+    }));
+  }
 };
 
 /** turn/completed payload is { threadId, turn: { id, status, error } }. */
@@ -341,6 +382,46 @@ const handleTurnCompleted: Handler = (params, ctx) => {
   }
 
   void ctx.queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
+};
+
+/**
+ * Collaboration mode has no side-effect-free read, so this notification is the
+ * only way the backend learns a mode changed elsewhere — another tab, the CLI,
+ * or the desktop app. Without invalidating here the plan badge would keep
+ * showing whatever this tab last wrote.
+ */
+const handleThreadSettingsUpdated: Handler = (params, ctx) => {
+  const threadId = params.threadId as string | undefined;
+  if (!threadId) return;
+  void ctx.queryClient.invalidateQueries({
+    queryKey: threadCommandsReadCollaborationModeQueryKey({
+      path: { threadId },
+    }),
+  });
+
+  // Entering Plan mode makes app-server rewrite the thread's reasoning effort,
+  // so the badge has to be told. This is recorded per thread and for display
+  // only — writing it into `effortOverride` would make it ride along on the
+  // next `turn/start` and force this effort onto a different thread.
+  const settings = params.threadSettings as
+    | { effort?: string | null }
+    | undefined;
+  if (!settings) return;
+  useModelStore
+    .getState()
+    .setObservedThreadEffort(
+      threadId,
+      (settings.effort ?? null) as ReasoningEffort | null,
+    );
+};
+
+/** Keeps the goal row live when a goal changes outside this tab. */
+const handleThreadGoalChanged: Handler = (params, ctx) => {
+  const threadId = params.threadId as string | undefined;
+  if (!threadId) return;
+  void ctx.queryClient.invalidateQueries({
+    queryKey: threadCommandsReadGoalQueryKey({ path: { threadId } }),
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -702,6 +783,9 @@ const HANDLERS: Record<string, Handler> = {
   'thread/archived': handleThreadArchived,
   'thread/unarchived': handleThreadUnarchived,
   'thread/deleted': handleThreadDeleted,
+  'thread/settings/updated': handleThreadSettingsUpdated,
+  'thread/goal/updated': handleThreadGoalChanged,
+  'thread/goal/cleared': handleThreadGoalChanged,
   'turn/started': handleTurnStarted,
   'thread/compacted': handleThreadCompacted,
   'model/rerouted': handleModelRerouted,

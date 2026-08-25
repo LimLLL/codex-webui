@@ -1,12 +1,95 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import type { v2 } from '../../codex/codex-schema';
-import { approvalPolicySchema, userInputSchema } from '../../codex/dto/v2';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
+import type { ModeKind, ReasoningEffort, v2 } from '../../codex/codex-schema';
+import {
+  approvalPolicySchema,
+  threadItemSchema,
+  userInputSchema,
+} from '../../codex/dto/v2';
 import {
   NULLABLE_STRING_SCHEMA,
+  REASONING_EFFORT_VALUES,
+  oneOfSchema,
   nullableStringEnumSchema,
 } from '../../codex/dto/v2/openapi.schema';
 import { ThreadDto } from '../../codex/dto/v2/thread.dto';
 import { TurnDto } from '../../codex/dto/v2/turn.dto';
+
+export const COLLABORATION_MODE_VALUES = ['plan', 'default'] as const;
+
+export const COLLABORATION_MODE_SOURCE_VALUES = [
+  'unknown',
+  'notification',
+  'accepted',
+] as const;
+
+export const THREAD_GOAL_STATUS_VALUES = [
+  'active',
+  'paused',
+  'blocked',
+  'usageLimited',
+  'budgetLimited',
+  'complete',
+] as const;
+
+export const REVIEW_TARGET_TYPE_VALUES = [
+  'uncommittedChanges',
+  'baseBranch',
+  'commit',
+  'custom',
+] as const;
+
+/** One app-server collaboration mode preset suitable for a slash command row. */
+export class CollaborationModePresetDto {
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty(nullableStringEnumSchema(COLLABORATION_MODE_VALUES))
+  mode!: ModeKind | null;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  model!: string | null;
+
+  @ApiProperty(nullableStringEnumSchema(REASONING_EFFORT_VALUES))
+  reasoningEffort!: ReasoningEffort | null;
+}
+
+/** Runtime list of collaboration mode presets advertised by app-server. */
+export class CollaborationModesResponseDto {
+  @ApiProperty({ type: () => [CollaborationModePresetDto] })
+  data!: CollaborationModePresetDto[];
+}
+
+/** Observed collaboration mode state for a thread, or an honest unknown. */
+export class ThreadCollaborationModeStateDto {
+  @ApiProperty()
+  observed!: boolean;
+
+  @ApiProperty({
+    enum: COLLABORATION_MODE_SOURCE_VALUES,
+    description:
+      'How the backend learned this value. unknown means app-server has not emitted observable settings in this process.',
+  })
+  source!: (typeof COLLABORATION_MODE_SOURCE_VALUES)[number];
+
+  @ApiProperty(nullableStringEnumSchema(COLLABORATION_MODE_VALUES))
+  mode!: ModeKind | null;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  model!: string | null;
+
+  @ApiProperty(nullableStringEnumSchema(REASONING_EFFORT_VALUES))
+  reasoningEffort!: ReasoningEffort | null;
+}
+
+/** Request body for updating a thread's next-turn collaboration mode. */
+export class SetThreadCollaborationModeDto {
+  @ApiProperty({ enum: COLLABORATION_MODE_VALUES })
+  mode!: ModeKind;
+}
 
 /** Request body for creating a Codex thread. */
 export class CreateThreadDto {
@@ -64,6 +147,143 @@ export class ThreadSetNameRequestDto {
   name!: string;
 }
 
+/** Current persisted background goal for a thread. */
+export class ThreadGoalDto {
+  @ApiProperty()
+  threadId!: string;
+
+  @ApiProperty()
+  objective!: string;
+
+  @ApiProperty({ enum: THREAD_GOAL_STATUS_VALUES })
+  status!: v2.ThreadGoalStatus;
+
+  @ApiProperty({ nullable: true, type: Number })
+  tokenBudget!: number | null;
+
+  @ApiProperty()
+  tokensUsed!: number;
+
+  @ApiProperty()
+  timeUsedSeconds!: number;
+
+  @ApiProperty()
+  createdAt!: number;
+
+  @ApiProperty()
+  updatedAt!: number;
+}
+
+/** Response body for reading a thread goal. */
+export class ThreadGoalResponseDto {
+  @ApiProperty({ type: () => ThreadGoalDto, nullable: true })
+  goal!: ThreadGoalDto | null;
+}
+
+/** Response body for setting or pausing/resuming a thread goal. */
+export class ThreadGoalSetResponseDto {
+  @ApiProperty({ type: () => ThreadGoalDto })
+  goal!: ThreadGoalDto;
+}
+
+/**
+ * Request body for creating or partially updating a thread goal.
+ *
+ * Every field is optional, but at least one must be present. Only `tokenBudget`
+ * accepts an explicit null, which resets the budget to the configured limit
+ * rather than removing it.
+ */
+export class SetThreadGoalDto {
+  @ApiPropertyOptional({ minLength: 1, maxLength: 4000 })
+  objective?: string;
+
+  @ApiPropertyOptional({ enum: THREAD_GOAL_STATUS_VALUES })
+  status?: v2.ThreadGoalStatus;
+
+  @ApiPropertyOptional({ nullable: true, type: Number })
+  tokenBudget?: number | null;
+}
+
+/** Response body for clearing a thread goal. */
+export class ThreadGoalClearResponseDto {
+  @ApiProperty()
+  cleared!: boolean;
+}
+
+/** Review target for staged, unstaged, and untracked repository changes. */
+export class ReviewUncommittedChangesTargetDto {
+  @ApiProperty({ enum: ['uncommittedChanges'] })
+  type!: 'uncommittedChanges';
+}
+
+/** Review target for a diff against a named base branch. */
+export class ReviewBaseBranchTargetDto {
+  @ApiProperty({ enum: ['baseBranch'] })
+  type!: 'baseBranch';
+
+  @ApiProperty({ minLength: 1 })
+  branch!: string;
+}
+
+/** Review target for a specific commit. */
+export class ReviewCommitTargetDto {
+  @ApiProperty({ enum: ['commit'] })
+  type!: 'commit';
+
+  @ApiProperty({ minLength: 1 })
+  sha!: string;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  title!: string | null;
+}
+
+/** Review target for free-form reviewer instructions. */
+export class ReviewCustomTargetDto {
+  @ApiProperty({ enum: ['custom'] })
+  type!: 'custom';
+
+  @ApiProperty({ minLength: 1 })
+  instructions!: string;
+}
+
+export const REVIEW_TARGET_EXTRA_MODELS = [
+  ReviewUncommittedChangesTargetDto,
+  ReviewBaseBranchTargetDto,
+  ReviewCommitTargetDto,
+  ReviewCustomTargetDto,
+] as const;
+
+export const reviewTargetSchema = oneOfSchema([
+  { $ref: getSchemaPath(ReviewUncommittedChangesTargetDto) },
+  { $ref: getSchemaPath(ReviewBaseBranchTargetDto) },
+  { $ref: getSchemaPath(ReviewCommitTargetDto) },
+  { $ref: getSchemaPath(ReviewCustomTargetDto) },
+]);
+
+/** Request body for starting an inline code review turn. */
+export class StartReviewDto {
+  @ApiProperty(reviewTargetSchema)
+  target!: v2.ReviewTarget;
+}
+
+/** Response body for starting a code review. */
+export class ReviewStartResponseDto {
+  @ApiProperty({ type: () => TurnDto })
+  turn!: TurnDto;
+
+  @ApiProperty()
+  reviewThreadId!: string;
+}
+
+/** Request body for forking a thread through the WebUI. */
+export class ForkThreadDto {
+  @ApiPropertyOptional({
+    description:
+      'Opt in to native deferred goal continuation on the fork. Defaults to false.',
+  })
+  carryGoal?: boolean;
+}
+
 /** Query controls for non-resuming paged history reads. */
 export class ThreadTurnsListQueryDto {
   @ApiPropertyOptional()
@@ -77,6 +297,21 @@ export class ThreadTurnsListQueryDto {
 
   @ApiPropertyOptional({ enum: ['notLoaded', 'summary', 'full'] })
   itemsView?: 'notLoaded' | 'summary' | 'full';
+}
+
+/**
+ * Full persisted items for a single turn.
+ *
+ * Used to top a turn up to full detail after it was fetched in the cheaper
+ * `summary` view, which app-server returns without `reasoning` or `plan`.
+ */
+export class ThreadTurnItemsResponseDto {
+  @ApiProperty({
+    type: 'array',
+    items: threadItemSchema(false) as Record<string, unknown>,
+    description: 'Items belonging to the turn, oldest first.',
+  })
+  items!: unknown[];
 }
 
 /** One page of turn history returned without materializing a whole thread. */

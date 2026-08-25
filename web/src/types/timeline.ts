@@ -18,7 +18,12 @@ export interface TurnItem {
     | 'agentMessage'
     | 'mcpToolCall'
     | 'commandExecution'
-    | 'fileChange';
+    | 'fileChange'
+    /** Emitted while Codex compacts history, manually or automatically. */
+    | 'contextCompaction'
+    /** Brackets an inline review turn; `content` holds the review subject. */
+    | 'enteredReviewMode'
+    | 'exitedReviewMode';
   itemId: string;
   content: string;
   completed: boolean;
@@ -60,4 +65,11 @@ export type TimelineEntry =
       diff?: string;
       /** Structured/streamed AI plan for this turn. */
       plan?: TurnPlanState;
+      /**
+       * Detail level the items were fetched at. `summary` omits `reasoning`
+       * and `plan`, so such a turn can be topped up to `full` on demand.
+       * Absent for turns assembled from live notifications, which are complete
+       * by construction.
+       */
+      itemsView?: 'notLoaded' | 'summary' | 'full';
     };

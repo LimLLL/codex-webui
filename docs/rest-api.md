@@ -40,6 +40,12 @@
 
 **Allowlist**: profile, model, review_model, model_provider, model_context_window, model_auto_compact_token_limit, instructions, developer_instructions, compact_prompt, model_reasoning_effort, model_reasoning_summary, model_verbosity, web_search, service_tier
 
+### Codex Feedback
+
+| Method | Path                  | Controller              | 说明                                                                                                     |
+| ------ | --------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/codex/feedback` | CodexFeedbackController | 上传 feedback 到 app-server。Body: `{ classification, reason?, threadId?, includeLogs?, tags? }`，`includeLogs` 默认 `false`；不暴露任意 `extraLogFiles` 路径 |
+
 ### Account
 
 | Method | Path                        | Controller        | 说明                                                                    |
@@ -58,10 +64,17 @@
 | GET    | `/api/threads`                                   | ThreadsController         | 列表。Query: `cursor, limit, archived, searchTerm, cwd, sortKey`                                                     |
 | GET    | `/api/threads/loaded`                            | ThreadsController         | 列出 app-server 内存中加载的 thread IDs。Query: `cursor, limit`。用于 refresh recovery                               |
 | GET    | `/api/threads/branch-trees`                      | ThreadsController         | 列出本地已知的消息级分支树                                                                                           |
+| GET    | `/api/threads/collaboration-modes`               | ThreadCommandsController  | 调 `collaborationMode/list` 返回 app-server collaboration mode preset                                      |
 | GET    | `/api/threads/branch-adoption/status`            | ThreadsDeletionController | 读取启动期外部分叉认领扫描器状态、计数和诊断；删除 preview/execute 均受该状态门控                                    |
 | GET    | `/api/threads/:threadId`                         | ThreadsController         | 读取单个 thread。Query: `includeTurns`                                                                               |
 | GET    | `/api/threads/:threadId/branch-state`            | ThreadsController         | 读取 compact guard 状态与持久化树成员。包含本地创建和启动期认领的拓扑，不做每请求 app-server 扫描                    |
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
+| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。用于把 `summary` 视图的 turn 按需补齐 `reasoning`/`plan` |
+| GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification/成功写入暴露设置，返回 `observed:false` |
+| PATCH  | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 设置 next-turn collaboration mode，不启动 turn；需要已解析出 thread 当前 model，否则 400。**不写 null effort**（会被 app-server 当作清空）；进入 Plan 时记录被顶掉的 effort，退出时还原 |
+| GET    | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 读取 thread 持久化 goal，未设置时 `{ goal:null }`                                                                      |
+| PATCH  | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 创建/更新 goal。Body 支持 `objective`（≤4000 字符）、`status`、`tokenBudget`；至少提供一个字段；仅 `tokenBudget` 接受显式 `null`（透传给 app-server 走默认预算重置），`objective`/`status` 传 null 会 400 |
+| DELETE | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 清除 thread goal，返回 `{ cleared }`                                                                                 |
 | GET    | `/api/threads/:threadId/delete-preview`          | ThreadsDeletionController | 预览删除该 thread 及所有 fork 后代：返回确认用 id 集、叶到根删除顺序、运行中会话、待审批、扫描器诊断与 blocker       |
 | POST   | `/api/threads/:threadId/delete`                  | ThreadsDeletionController | 按确认过的 `expectedThreadIds` 执行级联删除；执行前和自动中断后重新规划，id 集漂移时返回结构化 conflict/partial 结果 |
 | POST   | `/api/threads/:threadId/resume`                  | ThreadsController         | metadata-first 打开：`thread.turns` 恒为空，最近一页在 `initialTurnsPage`，更早历史用 `turnsBackwardsCursor` 翻页。写所有权被占时返回 `mode: readOnly` / `ownership: refused` / `ownershipRefusalMessage`。查询参数 `recordActive=false` 用于后台重开（刷新/重连/auto-resume），使其不改写活跃分支指针 |
@@ -69,8 +82,9 @@
 | POST   | `/api/threads/:threadId/unarchive`               | ThreadsController         | 取消归档本地已知整棵分支树                                                                                           |
 | POST   | `/api/threads/:threadId/compact`                 | ThreadsController         | 压缩上下文；有本地后代时返回 conflict                                                                                |
 | POST   | `/api/threads/:threadId/branches`                | ThreadsController         | 编辑历史 user message：`thread/fork(beforeTurnId)` 后持久化分支拓扑                                                  |
-| POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | 普通 fork，不写入消息级版本拓扑                                                                                      |
+| POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | 普通 fork，不写入消息级版本拓扑。Body 可选 `{ carryGoal?: boolean }`，默认 false；`ephemeral:true` 不支持            |
 | PATCH  | `/api/threads/:threadId/name`                    | ThreadsController         | 设置 thread 显示名                                                                                                   |
+| POST   | `/api/threads/:threadId/review`                  | ThreadCommandsController  | 启动 inline `review/start` turn。支持 uncommittedChanges/custom/baseBranch/commit target；不暴露 detached review      |
 | POST   | `/api/threads/:threadId/turns`                   | ThreadsController         | 发送消息。Body: `{ input: UserInput[] }`，支持 text/image/localImage/skill/mention                                   |
 | POST   | `/api/threads/:threadId/turns/:turnId/steer`     | ThreadsController         | 向进行中的 turn 发送 rich user input                                                                                 |
 | POST   | `/api/threads/:threadId/turns/:turnId/interrupt` | ThreadsController         | 中断进行中的 turn                                                                                                    |
@@ -146,20 +160,28 @@
 | POST /threads                         | `thread/start`                                                |
 | GET /threads                          | `thread/list`                                                 |
 | GET /threads/overview                 | `thread/list` plus local/adopted topology projection          |
+| GET /threads/collaboration-modes      | `collaborationMode/list`                                      |
 | GET /threads/:id                      | `thread/read`                                                 |
+| GET /threads/:id/collaboration-mode   | local observed settings cache                                 |
+| PATCH /threads/:id/collaboration-mode | experimental `thread/settings/update`                         |
+| GET /threads/:id/goal                 | `thread/goal/get`                                             |
+| PATCH /threads/:id/goal               | `thread/goal/set`                                             |
+| DELETE /threads/:id/goal              | `thread/goal/clear`                                           |
 | POST /threads/:id/resume              | `thread/resume` with experimental metadata-first history      |
 | GET /threads/:id/turns                | experimental `thread/turns/list`                              |
 | POST /threads/turn-counts             | experimental `thread/turns/list` without resuming             |
 | POST /threads/:id/turns               | `turn/start`                                                  |
 | POST /threads/:id/turns/:id/interrupt | `turn/interrupt`                                              |
+| POST /threads/:id/review              | `review/start` with `delivery: "inline"`                      |
 | POST /threads/:id/archive             | `thread/archive`                                              |
 | POST /threads/:id/unarchive           | `thread/unarchive`                                            |
 | POST /threads/:id/compact             | `thread/compact/start`                                        |
 | POST /threads/:id/branches            | `thread/fork` with experimental `beforeTurnId`                |
-| POST /threads/:id/fork                | `thread/fork`                                                 |
+| POST /threads/:id/fork                | `thread/fork` optionally with `deferGoalContinuation`         |
 | GET /threads/branch-adoption/status   | local rollout scanner state                                   |
 | GET /threads/:id/delete-preview       | `thread/list` plus local/adopted topology                     |
 | POST /threads/:id/delete              | `turn/interrupt` as needed, then `thread/delete` leaf-to-root |
+| POST /codex/feedback                  | `feedback/upload`                                             |
 | GET /models                           | `model/list`                                                  |
 | GET /skills                           | `skills/list`                                                 |
 | POST /skills/config                   | `skills/config/write`                                         |

@@ -11,6 +11,8 @@ import { AgentMessageItem } from './turn-items/agent-message-item';
 import { ToolCallItem } from './turn-items/tool-call-item';
 import { CommandItem } from './turn-items/command-item';
 import { FileChangeItem } from './turn-items/file-change-item';
+import { TurnMarkerItem } from './turn-items/turn-marker-item';
+import { useTurnItemsTopUp } from '@/hooks/use-turn-items-topup';
 import { DiffViewer } from './turn-items/diff-viewer';
 import { ToolCallGroup } from './turn-items/tool-call-group';
 import { ApprovalItem } from './turn-items/approval-item';
@@ -109,17 +111,45 @@ function ItemWithRequests({ item }: { item: TurnItem }) {
           {inputCard}
         </>
       );
+    case 'contextCompaction':
+    case 'enteredReviewMode':
+    case 'exitedReviewMode':
+      return (
+        <>
+          <TurnMarkerItem item={item} />
+          {inputCard}
+        </>
+      );
   }
 }
 
 export function TurnBlock({ entry }: Props) {
   const { t } = useTranslation();
   const userInputRequests = useTimelineStore((s) => s.userInputRequests);
+  // History opens in the cheap `summary` view, which withholds reasoning and
+  // plan items; a rendered turn fetches its own full items once.
+  useTurnItemsTopUp({
+    threadId: useTimelineStore((s) => s.threadId),
+    turnId: entry.turnId,
+    itemsView: entry.itemsView,
+    completed: entry.completed,
+  });
   // Render user-input requests whose itemId doesn't match any existing turn item.
   const itemIds = new Set(entry.items.map((item) => item.itemId));
   const unattachedInputs = Object.values(userInputRequests).filter(
     (req) => req.turnId === entry.turnId && !itemIds.has(req.itemId),
   );
+
+  // A summary turn holds an entry purely so the top-up above can be mounted,
+  // and a turn whose only item was the user message stays empty even after it.
+  // Rendering the shell anyway would leave a bare assistant avatar with nothing
+  // in it. The hook still ran, so bailing out here does not prevent the fetch.
+  const hasContent =
+    entry.items.length > 0 ||
+    Boolean(entry.plan) ||
+    entry.diff !== undefined ||
+    unattachedInputs.length > 0;
+  if (!hasContent) return null;
 
   return (
     <div className="mb-6 flex gap-3">

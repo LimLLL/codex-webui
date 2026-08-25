@@ -17,6 +17,7 @@ import {
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { ModelDto } from '@/generated/api';
 import { useModelStore } from '@/stores/model-store';
+import { useTimelineStore } from '@/stores/timeline-store';
 import { cn } from '@/lib/utils';
 
 type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -43,6 +44,10 @@ export function ModelSelector() {
   const effortOverride = useModelStore((s) => s.effortOverride);
   const setModelOverride = useModelStore((s) => s.setModelOverride);
   const setEffortOverride = useModelStore((s) => s.setEffortOverride);
+  const selectedThreadId = useTimelineStore((s) => s.threadId);
+  const observedEffort = useModelStore((s) =>
+    selectedThreadId ? s.observedEffortByThread[selectedThreadId] : null,
+  );
 
   // Config model from status (lightweight, cached)
   const { data: statusData } = useQuery({
@@ -59,7 +64,10 @@ export function ModelSelector() {
   const models = modelsData?.data?.filter((m) => !m.hidden) ?? [];
   const activeModelId = modelOverride ?? configModel ?? null;
   const activeModel = models.find((m) => m.model === activeModelId);
-  const activeEffort = effortOverride ?? activeModel?.defaultReasoningEffort ?? null;
+  // An explicit user choice wins; otherwise show what app-server reports for
+  // this thread, which is how Plan mode's imposed effort becomes visible.
+  const activeEffort =
+    effortOverride ?? observedEffort ?? activeModel?.defaultReasoningEffort ?? null;
 
   const displayModel = activeModel
     ? modelLabel(activeModel)

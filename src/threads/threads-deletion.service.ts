@@ -15,6 +15,7 @@ import { tokenUsageSnapshots, turnDiffs, turnErrors } from '../database/schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import {
   isDescendantRejectedError,
   isNotMaterializedError,
@@ -40,6 +41,7 @@ export class ThreadsDeletionService {
     private readonly branches: ConversationBranchesService,
     private readonly pendingApprovals: PendingApprovalsService,
     private readonly resumeRegistry: ThreadResumeRegistryService,
+    private readonly settingsObserver: ThreadSettingsObserverService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
   ) {}
@@ -351,6 +353,10 @@ export class ThreadsDeletionService {
 
     const cleanupFailure = this.reapLocalThread(threadId, expectedSet);
     if (cleanupFailure) return cleanupFailure;
+    // The observer normally evicts on `thread/deleted`, but a thread that was
+    // already gone app-server side never emits one, so drop it explicitly here
+    // to keep observed settings from outliving the thread.
+    this.settingsObserver.forget(threadId);
     reapedThreadIds.push(threadId);
     return null;
   }

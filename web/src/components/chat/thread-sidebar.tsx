@@ -44,6 +44,8 @@ import { WorkspaceOverview } from './sidebar/workspace-overview';
 import { WorkspaceDetail } from './sidebar/workspace-detail';
 import { RenameDialog, ConfirmDialog } from './sidebar/sidebar-dialogs';
 import { DirectoryPickerDialog } from './sidebar/directory-picker-dialog';
+import { ForkGoalDialog } from './sidebar/fork-goal-dialog';
+import { useForkWithGoal } from '@/hooks/use-fork-with-goal';
 
 /** Derives the active "view" from the current route path. */
 function useActiveView(): 'chat' | 'files' | 'terminal' | 'diagnostics' | 'settings' | 'integrations' | 'other' {
@@ -319,6 +321,12 @@ export function ThreadSidebar() {
     },
   });
 
+  // Forking asks about the source goal first, and only when one is live.
+  const fork = useForkWithGoal({
+    onFork: (threadId, carryGoal) =>
+      forkThread.mutate({ path: { threadId }, body: { carryGoal } }),
+  });
+
   const updateThreadName = useMutation({
     ...threadsSetThreadNameMutation(),
     onSuccess: (_res, vars) => {
@@ -421,7 +429,7 @@ export function ThreadSidebar() {
         onArchive={() => setConfirmAction({ type: 'archive', thread })}
         onUnarchive={() => unarchiveThread.mutate({ path: { threadId: thread.id } })}
         onCompact={() => setConfirmAction({ type: 'compact', thread })}
-        onFork={() => forkThread.mutate({ path: { threadId: thread.id } })}
+        onFork={() => void fork.requestFork(thread.id)}
         deleteBlockedReason={deleteBlockedReason}
         onDelete={() => setDeleteTargetId(thread.id)}
         onShowBranchGraph={() => setGraphTargetId(thread.id)}
@@ -563,6 +571,13 @@ export function ThreadSidebar() {
         open={dirPickerOpen}
         onClose={() => setDirPickerOpen(false)}
         onSelect={(cwd) => createThread.mutate({ body: { cwd } })}
+      />
+      <ForkGoalDialog
+        key={fork.prompt?.threadId ?? 'idle'}
+        prompt={fork.prompt}
+        pending={forkThread.isPending}
+        onConfirm={fork.confirm}
+        onCancel={fork.cancel}
       />
       <DeleteConversationDialog
         open={deleteTargetId !== null}

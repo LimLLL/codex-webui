@@ -35,6 +35,16 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 线程相关 predicate 集中在 `src/threads/thread-errors.ts`，用于区分未 materialized、实验 fork boundary 不支持、非法 fork boundary、删除有后代失败等情况。
 
+## App-server 扩展能力
+
+部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
+
+- `collaborationMode/list`：`ThreadCommandsService.listCollaborationModes()` 读取 preset 列表，返回 `data`/`modes` 两种已知列表包裹形态。
+- `thread/settings/update`：`ThreadCommandsService.setCollaborationMode()` 只写 `collaborationMode`，要求先从 app-server 观察到或从 start/resume/fork 响应缓存中解析出非空 model；`developer_instructions:null` 交给 app-server 使用内置 mode 指令。
+- `thread/fork.deferGoalContinuation`：`ThreadsService.forkThread()` 仅在 REST body 显式 `carryGoal:true` 时发送，且不支持 `ephemeral:true`。
+
+`ThreadSettingsObserverService` 监听 `thread/settings/updated` notification，并在 app-server generation ready 时清空缓存。由于 app-server 没有无副作用读取当前 collaboration mode 的接口，`GET /api/threads/:id/collaboration-mode` 在未观察到设置时返回 `observed:false`，不会通过写操作探测状态。
+
 ## 请求关联
 
 - `nextId` 自增分配 request id
