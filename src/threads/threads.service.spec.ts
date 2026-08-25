@@ -22,37 +22,37 @@ function localBranchState(threadId: string) {
 
 describe('ThreadsService', () => {
   let service: ThreadsService;
-  const mockCodex = { request: jest.fn() };
+  const mockCodex = { request: vi.fn() };
   const mockResumeRegistry = {
-    ensureOpened: jest.fn(),
-    markResumed: jest.fn(),
-    cacheResponse: jest.fn(),
-    forget: jest.fn(),
+    ensureOpened: vi.fn(),
+    markResumed: vi.fn(),
+    cacheResponse: vi.fn(),
+    forget: vi.fn(),
   };
   const mockBranches = {
-    attachPendingVersionTurn: jest.fn(),
-    hasKnownDescendants: jest.fn(),
-    listKnownTreeThreadIds: jest.fn(),
-    listBranchTrees: jest.fn(),
-    readBranchState: jest.fn(),
-    readBranchTree: jest.fn(),
-    recordMessageBranch: jest.fn(),
-    resolveTreeRootThreadId: jest.fn(),
-    setActiveMember: jest.fn(),
+    attachPendingVersionTurn: vi.fn(),
+    hasKnownDescendants: vi.fn(),
+    listKnownTreeThreadIds: vi.fn(),
+    listBranchTrees: vi.fn(),
+    readBranchState: vi.fn(),
+    readBranchTree: vi.fn(),
+    recordMessageBranch: vi.fn(),
+    resolveTreeRootThreadId: vi.fn(),
+    setActiveMember: vi.fn(),
   };
   const mockBranching = {
-    createMessageBranch: jest.fn(),
+    createMessageBranch: vi.fn(),
   };
   const mockDeletionRegistry = {
-    assertMutable: jest.fn(),
+    assertMutable: vi.fn(),
   };
   const mockHistory = {
-    readThreadMetadata: jest.fn(),
-    listTurns: jest.fn(),
-    countTurnsForThreads: jest.fn(),
+    readThreadMetadata: vi.fn(),
+    listTurns: vi.fn(),
+    countTurnsForThreads: vi.fn(),
   };
   const mockOverview = {
-    listOverview: jest.fn(),
+    listOverview: vi.fn(),
   };
 
   beforeEach(async () => {

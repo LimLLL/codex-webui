@@ -2,7 +2,7 @@ import { CodexService } from '../codex/codex.service';
 import { ThreadHistoryService } from './thread-history.service';
 
 describe('ThreadHistoryService', () => {
-  const mockCodex = { request: jest.fn() };
+  const mockCodex = { request: vi.fn() };
   let service: ThreadHistoryService;
 
   beforeEach(() => {

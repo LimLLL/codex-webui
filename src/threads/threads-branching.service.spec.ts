@@ -7,15 +7,15 @@ import { ThreadsBranchingService } from './threads-branching.service';
 describe('ThreadsBranchingService', () => {
   let service: ThreadsBranchingService;
 
-  const mockCodex = { request: jest.fn() };
+  const mockCodex = { request: vi.fn() };
   const mockResumeRegistry = {
-    markResumed: jest.fn(),
-    cacheResponse: jest.fn(),
-    forget: jest.fn(),
+    markResumed: vi.fn(),
+    cacheResponse: vi.fn(),
+    forget: vi.fn(),
   };
   const mockBranches = {
-    recordMessageBranch: jest.fn(),
-    resolveTreeRootThreadId: jest.fn(),
+    recordMessageBranch: vi.fn(),
+    resolveTreeRootThreadId: vi.fn(),
   };
 
   beforeEach(() => {

@@ -4,7 +4,7 @@ import { CodexService } from '../codex/codex.service';
 
 describe('ModelsService', () => {
   let service: ModelsService;
-  const mockCodex = { request: jest.fn() };
+  const mockCodex = { request: vi.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({

@@ -1,9 +1,7 @@
 import { EventEmitter } from 'node:events';
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type Database from 'better-sqlite3';
 import type { CodexProcessManager } from '../codex/codex-process-manager.service';
-import type { AppDatabase } from '../database/database.constants';
-import * as schema from '../database/schema';
+import { createTestDatabase } from '../database/database.testing';
 import { TurnErrorsService } from './turn-errors.service';
 
 describe('TurnErrorsService', () => {
@@ -12,19 +10,10 @@ describe('TurnErrorsService', () => {
   let service: TurnErrorsService;
 
   beforeEach(() => {
-    sqlite = new Database(':memory:');
-    sqlite.exec(`
-      CREATE TABLE turn_errors (
-        thread_id TEXT NOT NULL,
-        turn_id TEXT NOT NULL,
-        message TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (thread_id, turn_id)
-      );
-      CREATE INDEX idx_turn_errors_thread ON turn_errors (thread_id);
-    `);
+    const testDb = createTestDatabase();
+    sqlite = testDb.sqlite;
+    const db = testDb.db;
     emitter = new EventEmitter();
-    const db = drizzle(sqlite, { schema }) as AppDatabase;
     const branches = {
       resolveProvenance: (threadId: string) => ({
         threadIds: [threadId],
@@ -114,7 +103,7 @@ describe('TurnErrorsService', () => {
   });
 
   it('returns errors ordered by createdAt', () => {
-    const nowSpy = jest
+    const nowSpy = vi
       .spyOn(Date, 'now')
       .mockReturnValueOnce(1000)
       .mockReturnValueOnce(2000);

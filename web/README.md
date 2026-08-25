@@ -1,73 +1,43 @@
-# React + TypeScript + Vite
+# Codex WebUI — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + Vite 8 client for the Codex WebUI backend. Talks to it over `REST /api/*` and
+Socket.IO (`/socket.io`, namespace `/ws`); `pnpm dev` proxies both to `localhost:8172`.
 
-Currently, two official plugins are available:
+Build output goes to `../public/`, which the NestJS `ServeStaticModule` serves — so the
+production image ships a single origin with no separate frontend host.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Commands
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+pnpm dev            # Dev server on :5173, proxying /api + /socket.io to the backend
+pnpm build          # tsc -b + vite build → ../public/
+pnpm test           # Vitest (jsdom + Testing Library)
+pnpm test:watch     # Vitest in watch mode
+pnpm lint           # ESLint
+pnpm generate:api   # Regenerate the Hey API SDK from the backend OpenAPI spec
+                    # (requires the backend to be running)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Add a shadcn/ui component with `npx shadcn@latest add <component>`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Layout
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Path | Contents |
+|------|----------|
+| `src/routes/` | TanStack Router pages |
+| `src/components/` | UI components (`ui/` is shadcn/Radix) |
+| `src/stores/` | Zustand stores — `timeline-store` holds per-thread state |
+| `src/hooks/` | Socket, thread-opening, breakpoint and file hooks |
+| `src/generated/api/` | Hey API SDK — generated, do not edit |
+| `src/test/setup.ts` | Vitest setup (Testing Library cleanup) |
+
+## Tests
+
+Colocated `*.spec.ts` / `*.spec.tsx`, run by Vitest with `globals: true` against jsdom.
+`vitest.config.ts` merges `vite.config.ts` so tests resolve the `@` alias and use the same
+React plugin as the build rather than a second, drifting copy.
+
+## Docs
+
+Architecture and per-subsystem docs live in [`../docs/`](../docs/); start with
+[`frontend-ui.md`](../docs/frontend-ui.md) and [`frontend-state.md`](../docs/frontend-state.md).

@@ -8,10 +8,10 @@ describe('SkillsService', () => {
   let moduleRef: TestingModule;
   let service: SkillsService;
 
-  const codexService = { request: jest.fn() };
+  const codexService = { request: vi.fn() };
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     moduleRef = await Test.createTestingModule({
       providers: [
         SkillsService,

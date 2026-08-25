@@ -9,10 +9,10 @@ describe('AccountService', () => {
   let moduleRef: TestingModule;
   let service: AccountService;
 
-  const codexService = { request: jest.fn() };
+  const codexService = { request: vi.fn() };
   const codexStatusService = {
-    getProviderStatus: jest.fn(),
-    invalidateCache: jest.fn(),
+    getProviderStatus: vi.fn(),
+    invalidateCache: vi.fn(),
   };
 
   const provider = {
@@ -25,7 +25,7 @@ describe('AccountService', () => {
   };
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     moduleRef = await Test.createTestingModule({
       providers: [
         AccountService,

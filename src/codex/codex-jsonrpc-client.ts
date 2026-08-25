@@ -193,8 +193,16 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
     this.process.kill();
   }
 
-  /** Writes a raw JSONL line: {"ts","dir","msg"} — each line is valid JSON. */
+  /**
+   * Writes a raw JSONL line: {"ts","dir","msg"} — each line is valid JSON.
+   *
+   * Bails once the client is closed: both `destroy()` and the process `close`
+   * handler end the stream, but stdout keeps draining its buffer afterwards, so
+   * late-arriving frames would otherwise write after end and raise an uncaught
+   * ERR_STREAM_WRITE_AFTER_END on the audit stream.
+   */
   private writeJsonl(dir: 'in' | 'out', msg: unknown): void {
+    if (this.closed) return;
     const line = JSON.stringify(
       { ts: new Date().toISOString(), dir, msg },
       bigintReplacer,

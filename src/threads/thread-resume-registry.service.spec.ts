@@ -5,13 +5,13 @@ import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 
 describe('ThreadResumeRegistryService', () => {
   const mockHistory = {
-    resumeMetadataFirst: jest.fn(),
-    readThreadMetadata: jest.fn(),
-    listTurns: jest.fn(),
+    resumeMetadataFirst: vi.fn(),
+    readThreadMetadata: vi.fn(),
+    listTurns: vi.fn(),
   };
   const mockManager = {
-    addLifecycleListener: jest.fn(),
-    getGeneration: jest.fn(),
+    addLifecycleListener: vi.fn(),
+    getGeneration: vi.fn(),
   };
   let service: ThreadResumeRegistryService;
 

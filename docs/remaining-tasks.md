@@ -199,7 +199,7 @@
 - [ ] 大文件分页/只读预览。
 - [ ] 自动编码检测、只读模式、保存前备份与更清晰的 mtime 冲突恢复。
 - [ ] 文件 watcher 与 app-server fs watch 的事件去重/合并策略。
-- [ ] multipart upload e2e 测试（Fastify 插件在测试上下文注册有问题，已延后）。
+- [ ] multipart upload e2e 测试（Fastify 插件在测试上下文注册有问题，已延后）。注：项目当前**没有任何 e2e 设施** —— 原先那个脚手架残留的 `test/app.e2e-spec.ts` 已随 Vitest 迁移一并删除（它 `beforeEach` 全量启动 AppModule，会 spawn 真实 app-server 并扫描真实 CODEX_HOME，单轮 15s+ 且结果取决于开发机上的历史会话量）。重建时的正确形态是：SQLite 这类自管依赖用真的（临时目录），app-server 这类外部进程用 `overrideProvider` 替身，`beforeAll` 复用一个 app 实例。
 
 ### Terminal 增强 ✅
 
@@ -272,7 +272,9 @@
 - [ ] 主包体积：入口 chunk 约 4.1 MB（gzip 1.25 MB），Monaco / xterm / shiki / pdf.js / xlsx 均在其中。React Flow 已拆出独立 chunk（179 kB），其余仍待按路由拆分。
 - [ ] 当前打开的会话被他处删除时无法自动离开：通知分发层拿不到 router，只加了系统条目告知用户，runtime 刻意保留以免无解释地清空正在阅读的内容（现已同时标记 `deletedRemotely`，输入与建分支禁用，不再是可写的僵尸会话）。可行方向是沿用既有的 `codex-webui:*` CustomEvent 模式，由 layout 监听并导航。
 - [ ] 认领扫描器对**多跳外部 fork** 可能过度继承：`resolveInheritedTurns` 在父本身也是 fork 时无条件带上父的完整继承前缀，只按 `endByteOffset` 过滤父自身文件内的轮次，未用 `history_base.endOrdinalExclusive` 截断继承自更上游祖先的轮次。若外部 fork 的边界落在父的继承前缀之内，继承轮列表与公共前缀分组会算错，进而产生错误的版本组。保守修法是无法证明该映射时**跳过**该多跳情形的消息版本认领，只记拓扑。属上一轮既有问题。
-- [ ] 前端删除/打开交互链路无测试覆盖：本轮用户手工实测发现 3 处缺陷（缓存幸存集合取错、无 pending 态、提前导航），全部落在这条链路上。建议补：store 层（只含用户消息的轮次不重复前插、重开不替换已覆盖页）、通知层（当前会话被删后保留 transcript 但不可写）、删除 mutation 缓存（completed / partial 有树 / partial 无树 / conflict 四态）、确认框（`preventDefault` 保持挂载、双击只提交一次）。
+- [x] 前端测试基建：Vitest + jsdom + Testing Library（`web/vitest.config.ts` 合并 `vite.config.ts` 复用 alias 与 React 插件）。已覆盖 store 层（只含用户消息的轮次不重复前插、真正更早的轮次仍前插）、通知层（`markThreadDeletedRemotely` 保留 transcript 但清 loading/activeTurn/cursor 并置 `deletedRemotely`）、`forgetThreads` 四态（后台线程驱逐 / 当前选中线程不被写回缓存 / 已订阅线程退房 / 空列表 no-op）、确认框（同帧双击只提交一次、in-flight 与 `canDelete=false` 不提交、失败后仍可重试）。所有断言均经变异检验确认非空跑 —— 双击那条正是这样证伪了上一轮那版无效修复（详见 frontend-ui.md）。
+- [x] 删除 mutation 四态（`use-thread-deletion.spec.tsx`）：`completed` 导航到 `resolveSurvivor` 选中的版本、无幸存者时回空态、把服务端返回的树写进幸存成员的缓存而不写被删成员；`conflict` 一个都没删所以不挪动用户；`partial` 有树只失效 removed，无树则连同 planned/remaining 一起兜底刷新。
+- [x] 「重开不替换已覆盖页」（`hydrateOpenedThread` 的 `pageIsSubsumed` 分支）：已覆盖页不被最新页顶掉且不吞掉已翻出的更早历史、cursor 不被换成会重复拉取的新值；反向用例确认页中出现未见过的轮次时服务端视图整体取胜。
 - [ ] `GET /api/threads/overview` 的代价是 O(库内会话总数)：实测 154 会话单次全量枚举约 900ms（冷）/400ms（热），带 `cwd`/`searchTerm` 过滤时仍需两次完整枚举。这是「后端统一投影」换取排序正确性的固有成本，不打算退回客户端 join。若真实使用中可感知，下一步是后端加一层短生命周期投影缓存（由 thread/branch/approval 变更失效），而不是继续调前端防抖。
 - [ ] 打开线程只加载最近一页 turns，更早历史需点「加载更早的消息」。这是 metadata-first 的固有取舍（换来打开 47ms / 2.8 KB）。若长会话回看体验不佳，可考虑按滚动位置预取，但需先解决虚拟列表前插的滚动锚定问题。
 - [x] diff 面板增强：`@git-diff-view/react` + `@git-diff-view/shiki` GitHub 风格 diff 视图（split/unified 切换、语法高亮、error boundary fallback）。

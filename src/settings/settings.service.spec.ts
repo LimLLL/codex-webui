@@ -1,33 +1,14 @@
 /** Unit tests for SettingsService: seed, reconcile, DB/env/default chain. */
 import { ConfigService } from '@nestjs/config';
 import { BusinessException } from '../common/business.exception';
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import type { AppDatabase } from '../database/database.constants';
-import * as schema from '../database/schema';
+import { createTestDatabase } from '../database/database.testing';
 import { TERMINAL_SETTING_KEYS } from './settings.definitions';
 import { SettingsService } from './settings.service';
 
-const SETTINGS_DDL = `
-  CREATE TABLE settings (
-    key text PRIMARY KEY NOT NULL,
-    value text,
-    type text NOT NULL,
-    category text NOT NULL,
-    description text NOT NULL,
-    default_value text NOT NULL,
-    constraints text NOT NULL,
-    updated_at integer NOT NULL
-  );
-  CREATE INDEX idx_settings_category ON settings (category);
-`;
-
 function createService(env: Record<string, string | undefined> = {}) {
-  const sqlite = new Database(':memory:');
-  sqlite.exec(SETTINGS_DDL);
-  const db = drizzle(sqlite, { schema }) as unknown as AppDatabase;
+  const { db, sqlite } = createTestDatabase();
   const config = {
-    get: jest.fn((key: string) => env[key]),
+    get: vi.fn((key: string) => env[key]),
   } as unknown as ConfigService;
   const service = new SettingsService(db, config);
   return { service, sqlite };

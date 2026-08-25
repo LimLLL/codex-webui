@@ -7,10 +7,10 @@ describe('McpServersService', () => {
   let moduleRef: TestingModule;
   let service: McpServersService;
 
-  const codexService = { request: jest.fn() };
+  const codexService = { request: vi.fn() };
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     moduleRef = await Test.createTestingModule({
       providers: [
         McpServersService,

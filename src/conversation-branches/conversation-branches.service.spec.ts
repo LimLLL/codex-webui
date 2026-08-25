@@ -1,7 +1,5 @@
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import type { AppDatabase } from '../database/database.constants';
-import * as schema from '../database/schema';
+import type Database from 'better-sqlite3';
+import { createTestDatabase } from '../database/database.testing';
 import {
   ConversationBranchMutationsService,
   OrphanedLocalTopologyError,
@@ -14,59 +12,9 @@ describe('ConversationBranchesService', () => {
   let mutations: ConversationBranchMutationsService;
 
   beforeEach(() => {
-    sqlite = new Database(':memory:');
-    sqlite.exec(`
-      CREATE TABLE conversation_branch_groups (
-        group_id TEXT PRIMARY KEY NOT NULL,
-        tree_root_thread_id TEXT NOT NULL,
-        common_prefix_turn_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX uniq_branch_group_root_prefix
-        ON conversation_branch_groups (tree_root_thread_id, common_prefix_turn_id);
-
-      CREATE TABLE conversation_branch_versions (
-        version_id TEXT PRIMARY KEY NOT NULL,
-        group_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        version_index INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'local',
-        message_turn_id TEXT,
-        preview_text TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX uniq_branch_version_group_thread
-        ON conversation_branch_versions (group_id, thread_id);
-      CREATE UNIQUE INDEX uniq_branch_version_group_index
-        ON conversation_branch_versions (group_id, version_index);
-
-      CREATE TABLE conversation_branch_edges (
-        child_thread_id TEXT PRIMARY KEY NOT NULL,
-        parent_thread_id TEXT NOT NULL,
-        tree_root_thread_id TEXT NOT NULL,
-        fork_before_turn_id TEXT NOT NULL,
-        common_prefix_turn_id TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'local',
-        inherited_turn_ids TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX idx_branch_edge_parent
-        ON conversation_branch_edges (parent_thread_id);
-      CREATE INDEX idx_branch_edge_root
-        ON conversation_branch_edges (tree_root_thread_id);
-
-      CREATE TABLE conversation_branch_active_members (
-        tree_root_thread_id TEXT PRIMARY KEY NOT NULL,
-        active_thread_id TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX idx_branch_active_members_active
-        ON conversation_branch_active_members (active_thread_id);
-    `);
-    const db = drizzle(sqlite, { schema }) as AppDatabase;
+    const testDb = createTestDatabase();
+    sqlite = testDb.sqlite;
+    const db = testDb.db;
     service = new ConversationBranchesService(db);
     mutations = new ConversationBranchMutationsService(db);
   });

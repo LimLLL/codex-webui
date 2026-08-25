@@ -15,10 +15,16 @@ The backend (NestJS) talks to `codex app-server` over stdio JSON-RPC and pushes 
 
 **Chat & Threads**
 - Run multiple threads concurrently, grouped by workspace
-- Archive, fork, rollback, rename threads
+- Archive, fork, rename threads
 - Markdown rendering + Shiki syntax highlighting
 - `@` file mentions, image paste
 - Steer/stop running turns
+
+**Message-Level Branching**
+- Editing any past message creates a new version; switch between them like ChatGPT
+- Branch graph visualising the whole conversation tree, marking fork points, running state and pending approvals
+- Cascading delete: removing a branch takes its descendants with it, and the exact set to be destroyed is shown as both a graph and a list beforehand
+- Startup scan of rollout records adopts branch topology created outside the WebUI (e.g. by the CLI)
 
 **Approval Flow**
 - In-page cards for command execution and file change approvals
@@ -62,12 +68,17 @@ Browser
   React 19 · Vite 8 · TanStack (Router + Query + Virtual)
   Zustand · Socket.IO Client · Monaco Editor · xterm.js
   Tailwind CSS 4 · shadcn/ui · Framer Motion · dnd-kit
+  React Flow (@xyflow/react) + d3-hierarchy (branch graph)
      ↕  REST + WebSocket
 Server
   NestJS 11 · Fastify 5 · Socket.IO · node-pty
   SQLite (better-sqlite3 + Drizzle ORM) · Pino
      ↕  stdio JSON-RPC
   codex app-server (child process)
+
+Testing
+  Vitest (both ends) · SWC (backend decorator metadata)
+  jsdom + Testing Library (frontend components)
 ```
 
 ## Quick Start
@@ -172,12 +183,14 @@ Docker Compose keeps `WORKSPACE_ROOTS=/workspaces` as a bootstrap fallback for t
 ```bash
 pnpm start:dev          # Backend dev server
 pnpm build              # Compile backend
-pnpm test               # Run tests
-pnpm lint               # ESLint
+pnpm test               # Backend tests (Vitest)
+pnpm test:cov           # Backend tests with coverage
+pnpm lint               # ESLint (frontend included)
 pnpm db:generate        # Generate DB migration
 pnpm db:migrate         # Run migrations
 cd web && pnpm dev      # Frontend dev server
 cd web && pnpm build    # Build frontend (outputs to public/)
+cd web && pnpm test     # Frontend tests (Vitest + jsdom)
 ```
 
 ## HTTPS / Reverse Proxy

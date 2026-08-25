@@ -6,19 +6,19 @@ describe('ThreadsController rich input validation', () => {
   let controller: ThreadsController;
 
   const threadsService = {
-    startTurn: jest.fn(),
-    steerTurn: jest.fn(),
-    listLoadedThreads: jest.fn(),
+    startTurn: vi.fn(),
+    steerTurn: vi.fn(),
+    listLoadedThreads: vi.fn(),
   };
   const filesService = {
-    resolveSafePath: jest.fn(),
+    resolveSafePath: vi.fn(),
   };
   const chatUploadService = {
-    resolveStoredUploadPath: jest.fn(),
+    resolveStoredUploadPath: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     threadsService.startTurn.mockResolvedValue({
       turn: { id: 'turn1' },
     });

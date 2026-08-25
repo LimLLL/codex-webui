@@ -15,10 +15,16 @@
 
 **对话与线程**
 - 多线程并发运行，互不干扰
-- 线程按工作区分组，支持归档、fork、回滚、重命名
+- 线程按工作区分组，支持归档、fork、重命名
 - Markdown 渲染 + Shiki 代码高亮
 - `@` 引用文件、粘贴图片
 - 追问（steer）和中断（stop）正在执行的 turn
+
+**消息级分支**
+- 编辑任意一条历史消息即产生新版本，像 ChatGPT 一样在版本间左右切换
+- 分支图可视化整棵对话树，标注分叉点、运行状态与待审批
+- 级联删除：删除一个分支会连带其全部下游，删除前用图和列表列清将要销毁的确切集合
+- 启动时扫描 rollout 记录，认领在 WebUI 之外（如 CLI）创建的分支拓扑
 
 **审批流程**
 - 命令执行、文件变更的审批卡片，直接在页面上操作
@@ -62,12 +68,17 @@
   React 19 · Vite 8 · TanStack (Router + Query + Virtual)
   Zustand · Socket.IO Client · Monaco Editor · xterm.js
   Tailwind CSS 4 · shadcn/ui · Framer Motion · dnd-kit
+  React Flow (@xyflow/react) + d3-hierarchy（分支图）
      ↕  REST + WebSocket
 后端
   NestJS 11 · Fastify 5 · Socket.IO · node-pty
   SQLite (better-sqlite3 + Drizzle ORM) · Pino
      ↕  stdio JSON-RPC
   codex app-server（子进程）
+
+测试
+  Vitest（前后端统一）· SWC（后端装饰器元数据）
+  jsdom + Testing Library（前端组件）
 ```
 
 ## 快速开始
@@ -172,12 +183,14 @@ Docker Compose 保留 `WORKSPACE_ROOTS=/workspaces`，用于首次启动时为�
 ```bash
 pnpm start:dev          # 后端开发模式
 pnpm build              # 编译后端
-pnpm test               # 运行测试
-pnpm lint               # ESLint 检查
+pnpm test               # 后端测试（Vitest）
+pnpm test:cov           # 后端测试 + 覆盖率
+pnpm lint               # ESLint 检查（含前端）
 pnpm db:generate        # 生成数据库迁移
 pnpm db:migrate         # 执行迁移
 cd web && pnpm dev      # 前端开发模式
 cd web && pnpm build    # 前端构建（输出到 public/）
+cd web && pnpm test     # 前端测试（Vitest + jsdom）
 ```
 
 ## HTTPS / 反向代理

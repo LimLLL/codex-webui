@@ -12,7 +12,7 @@ function createMockProcess(): ChildProcess {
       cb();
     },
   });
-  proc.kill = jest.fn();
+  proc.kill = vi.fn();
   return proc;
 }
 
@@ -56,30 +56,26 @@ describe('CodexJsonRpcClient', () => {
     } satisfies Partial<CodexRpcError>);
   });
 
-  it('should emit notification events', (done) => {
-    client.on('notification', (notification) => {
-      expect(notification).toEqual({
-        method: 'thread/started',
-        params: { threadId: 't1' },
-      });
-      done();
-    });
+  it('should emit notification events', async () => {
+    const received = new Promise((resolve) =>
+      client.once('notification', resolve),
+    );
 
     proc.stdout!.push(
       JSON.stringify({ method: 'thread/started', params: { threadId: 't1' } }) +
         '\n',
     );
+
+    await expect(received).resolves.toEqual({
+      method: 'thread/started',
+      params: { threadId: 't1' },
+    });
   });
 
-  it('should emit serverRequest events', (done) => {
-    client.on('serverRequest', (req) => {
-      expect(req).toEqual({
-        method: 'item/commandExecution/requestApproval',
-        id: 99,
-        params: { command: 'rm -rf' },
-      });
-      done();
-    });
+  it('should emit serverRequest events', async () => {
+    const received = new Promise((resolve) =>
+      client.once('serverRequest', resolve),
+    );
 
     proc.stdout!.push(
       JSON.stringify({
@@ -88,10 +84,16 @@ describe('CodexJsonRpcClient', () => {
         params: { command: 'rm -rf' },
       }) + '\n',
     );
+
+    await expect(received).resolves.toEqual({
+      method: 'item/commandExecution/requestApproval',
+      id: 99,
+      params: { command: 'rm -rf' },
+    });
   });
 
   it('should send initialized notification after initialize', async () => {
-    const writeSpy = jest.spyOn(proc.stdin!, 'write');
+    const writeSpy = vi.spyOn(proc.stdin!, 'write');
 
     const promise = client.initialize({
       clientInfo: { name: 'test', title: null, version: '0.0.1' },

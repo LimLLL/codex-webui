@@ -22,12 +22,12 @@ describe('ChatUploadService', () => {
       path.join(os.tmpdir(), 'codex-webui-chat-'),
     );
     const configService = {
-      get: jest.fn((key: string) =>
+      get: vi.fn((key: string) =>
         key === 'CODEX_HOME' ? tempCodexHome : undefined,
       ),
     } as unknown as ConfigService;
     const settingsService = {
-      getNumberSetting: jest.fn(() => 1024 * 1024),
+      getNumberSetting: vi.fn(() => 1024 * 1024),
     } as unknown as SettingsService;
     service = new ChatUploadService(configService, settingsService);
   });

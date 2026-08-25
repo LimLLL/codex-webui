@@ -1,4 +1,18 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "web", "**/*spec.ts"]
+  "compilerOptions": {
+    // Production source must not see Vitest globals. The root tsconfig exposes
+    // them so specs (which rely on `globals: true` rather than imports) and the
+    // editor/linter resolve `vi`/`describe`; the build has no such need.
+    "types": ["node"]
+  },
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "web",
+    "**/*spec.ts",
+    "**/*.testing.ts",
+    "vitest.config.mts"
+  ]
 }

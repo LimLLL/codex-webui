@@ -5,7 +5,7 @@ import { CodexProcessManager } from './codex-process-manager.service';
 describe('CodexService', () => {
   let service: CodexService;
   const mockClient = {
-    request: jest.fn(),
+    request: vi.fn(),
   };
 
   beforeEach(async () => {

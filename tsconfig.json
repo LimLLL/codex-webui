@@ -10,6 +10,7 @@
     "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    "types": ["node", "vitest/globals"],
     "allowSyntheticDefaultImports": true,
     "target": "ES2023",
     "sourceMap": true,

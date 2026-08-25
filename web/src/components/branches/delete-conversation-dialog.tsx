@@ -1,5 +1,5 @@
 /** Confirmation for the cascading conversation delete. */
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -106,6 +106,18 @@ export function DeleteConversationDialog({
   const approvalCount = preview?.pendingApprovals.length ?? 0;
   const blocked = Boolean(preview && !preview.canDelete);
   const canConfirm = Boolean(preview) && !blocked && !pending && !loading;
+
+  // Latches the submit synchronously. `canConfirm` and the `disabled` attribute
+  // are both derived from props, so two clicks landing in the same frame read
+  // the identical pre-submit values and each start a cascade. A ref is the only
+  // one of the three that updates without waiting for a render.
+  const submittingRef = useRef(false);
+  useEffect(() => {
+    // Call sites keep this dialog mounted and only toggle `open`, so the latch
+    // outlives one delete and must be released on settle — otherwise the button
+    // is dead for every later delete in the session.
+    if (!pending) submittingRef.current = false;
+  }, [pending]);
 
   return (
     <AlertDialog open={open} onOpenChange={(next) => !next && !pending && onClose()}>
@@ -255,11 +267,11 @@ export function DeleteConversationDialog({
             // count. The dialog is dismissed by the mutation settling instead.
             onClick={(event) => {
               event.preventDefault();
-              // Re-checked here, not just on `disabled`: the attribute only
-              // takes effect after React paints, so a fast double click can
-              // enqueue two cascades. The backend turns the second into a
-              // conflict, but a destructive action should not depend on that.
+              // The backend turns a duplicate cascade into a conflict, but a
+              // destructive action should not depend on that.
               if (!canConfirm || !preview) return;
+              if (submittingRef.current) return;
+              submittingRef.current = true;
               onConfirm(preview);
             }}
           >

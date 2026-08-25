@@ -30,28 +30,28 @@ const readyAdoption = {
 describe('ThreadsDeletionService', () => {
   let service: ThreadsDeletionService;
   let requestLog: string[];
-  const mockCodex = { request: jest.fn() };
+  const mockCodex = { request: vi.fn() };
   const mockAdoption = {
-    assertReadyForDeletion: jest.fn(),
-    getBlockingDiagnostics: jest.fn(),
-    getStatus: jest.fn(),
+    assertReadyForDeletion: vi.fn(),
+    getBlockingDiagnostics: vi.fn(),
+    getStatus: vi.fn(),
   };
   const mockBranchMutations = {
-    listEdges: jest.fn(),
-    reapDeletedThread: jest.fn(),
+    listEdges: vi.fn(),
+    reapDeletedThread: vi.fn(),
   };
   const mockBranches = {
-    clearActiveMemberForDeletedThread: jest.fn(),
-    readBranchTree: jest.fn(),
+    clearActiveMemberForDeletedThread: vi.fn(),
+    readBranchTree: vi.fn(),
   };
   const mockPendingApprovals = {
-    listPending: jest.fn(),
-    cancelPendingForThreads: jest.fn(),
+    listPending: vi.fn(),
+    cancelPendingForThreads: vi.fn(),
   };
-  const mockResumeRegistry = { forget: jest.fn() };
+  const mockResumeRegistry = { forget: vi.fn() };
   const mockDeletionRegistry = {
-    begin: jest.fn(),
-    end: jest.fn(),
+    begin: vi.fn(),
+    end: vi.fn(),
   };
   const mockDb = makeDbMock();
 
@@ -570,9 +570,9 @@ function listResponse(
 
 function makeDbMock() {
   return {
-    delete: jest.fn(() => ({
-      where: jest.fn(() => ({
-        run: jest.fn(),
+    delete: vi.fn(() => ({
+      where: vi.fn(() => ({
+        run: vi.fn(),
       })),
     })),
   };

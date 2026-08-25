@@ -95,13 +95,13 @@ describe('CodexStatusService', () => {
   let service: CodexStatusService;
   let moduleRef: TestingModule;
 
-  const mockClient = { request: jest.fn() };
+  const mockClient = { request: vi.fn() };
   const mockProcessManager = {
-    getClient: jest.fn(),
-    getInitResult: jest.fn(),
+    getClient: vi.fn(),
+    getInitResult: vi.fn(),
   };
-  const mockCodex = { request: jest.fn() };
-  const mockConfig = { get: jest.fn() };
+  const mockCodex = { request: vi.fn() };
+  const mockConfig = { get: vi.fn() };
 
   beforeEach(async () => {
     moduleRef = await Test.createTestingModule({
@@ -124,7 +124,7 @@ describe('CodexStatusService', () => {
   });
 
   afterEach(async () => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
     await moduleRef.close();
   });
 
@@ -325,7 +325,7 @@ describe('CodexStatusService', () => {
 
   it('should cache ready responses for 30 seconds and refresh after TTL', async () => {
     let now = 1_000_000;
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
     mockSuccessfulProbes();
 
     await service.getStatus();

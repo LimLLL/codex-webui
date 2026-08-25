@@ -11,45 +11,45 @@ describe('ThreadsGateway', () => {
   const listeners: Record<string, (...args: unknown[]) => void> = {};
 
   const mockManager = {
-    addListener: jest.fn(
+    addListener: vi.fn(
       (event: string, handler: (...args: unknown[]) => void) => {
         listeners[event] = handler;
       },
     ),
-    getClient: jest.fn(),
+    getClient: vi.fn(),
   };
 
   const mockAuthService = {
-    authenticateToken: jest.fn(),
+    authenticateToken: vi.fn(),
   };
 
   const mockActiveThreads = {
-    subscribe: jest.fn(),
-    unsubscribe: jest.fn(),
-    removeSocket: jest.fn(),
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    removeSocket: vi.fn(),
   };
 
   const mockPendingApprovals = {
-    recordServerRequest: jest.fn(),
-    markResolved: jest.fn(),
-    respondToRequest: jest.fn(),
-    listPending: jest.fn().mockReturnValue([]),
+    recordServerRequest: vi.fn(),
+    markResolved: vi.fn(),
+    respondToRequest: vi.fn(),
+    listPending: vi.fn().mockReturnValue([]),
   };
 
   /** Captures the gateway's release listener so tests can fire it directly. */
   let releaseListener: ((threadIds: string[]) => void) | null = null;
 
   const mockDeletionRegistry = {
-    isDeleting: jest.fn().mockReturnValue(false),
-    onRelease: jest.fn((listener: (threadIds: string[]) => void) => {
+    isDeleting: vi.fn().mockReturnValue(false),
+    onRelease: vi.fn((listener: (threadIds: string[]) => void) => {
       releaseListener = listener;
       return () => undefined;
     }),
   };
 
   const mockServer = {
-    to: jest.fn().mockReturnThis(),
-    emit: jest.fn(),
+    to: vi.fn().mockReturnThis(),
+    emit: vi.fn(),
   };
 
   beforeEach(async () => {
@@ -71,13 +71,13 @@ describe('ThreadsGateway', () => {
     gateway.server = mockServer as never;
     gateway.afterInit();
 
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockServer.to.mockReturnThis();
     mockDeletionRegistry.isDeleting.mockReturnValue(false);
   });
 
   it('should join room on subscribe', () => {
-    const client = { id: 'c1', join: jest.fn() };
+    const client = { id: 'c1', join: vi.fn() };
     const result = gateway.handleSubscribe(client as never, {
       threadId: 't1',
     });
@@ -87,7 +87,7 @@ describe('ThreadsGateway', () => {
   });
 
   it('should leave room on unsubscribe', () => {
-    const client = { id: 'c1', leave: jest.fn() };
+    const client = { id: 'c1', leave: vi.fn() };
     const result = gateway.handleUnsubscribe(client as never, {
       threadId: 't1',
     });
@@ -182,7 +182,7 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c1',
       handshake: { auth: { token: 'test-api-key' }, headers: {} },
-      disconnect: jest.fn(),
+      disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();
@@ -196,7 +196,7 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c2',
       handshake: { auth: { token: 'wrong-key' }, headers: {} },
-      disconnect: jest.fn(),
+      disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
     expect(client.disconnect).toHaveBeenCalledWith(true);
@@ -210,7 +210,7 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c3',
       handshake: { auth: {}, headers: {} },
-      disconnect: jest.fn(),
+      disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
     expect(client.disconnect).toHaveBeenCalledWith(true);
@@ -227,7 +227,7 @@ describe('ThreadsGateway', () => {
         auth: {},
         headers: { authorization: 'Bearer some-jwt-token' },
       },
-      disconnect: jest.fn(),
+      disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c5',
       handshake: { auth: { token: 'Bearer some-jwt-token' }, headers: {} },
-      disconnect: jest.fn(),
+      disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
     expect(client.disconnect).not.toHaveBeenCalled();

@@ -6,10 +6,10 @@ import { PendingApprovalsService } from '../pending-approvals/pending-approvals.
 import { ThreadsOverviewService } from './threads-overview.service';
 
 describe('ThreadsOverviewService', () => {
-  const mockCodex = { request: jest.fn() };
-  const mockBranchMutations = { listEdges: jest.fn() };
-  const mockBranches = { listActiveMembers: jest.fn() };
-  const mockPendingApprovals = { listPending: jest.fn() };
+  const mockCodex = { request: vi.fn() };
+  const mockBranchMutations = { listEdges: vi.fn() };
+  const mockBranches = { listActiveMembers: vi.fn() };
+  const mockPendingApprovals = { listPending: vi.fn() };
   let service: ThreadsOverviewService;
 
   beforeEach(() => {

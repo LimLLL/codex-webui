@@ -31,8 +31,8 @@ describe('ApiKeyGuard', () => {
 
   beforeEach(() => {
     authService = {
-      authenticateToken: jest.fn().mockResolvedValue({ ok: true }),
-      verifyJwt: jest.fn().mockResolvedValue(true),
+      authenticateToken: vi.fn().mockResolvedValue({ ok: true }),
+      verifyJwt: vi.fn().mockResolvedValue(true),
     };
     const reflector = {
       getAllAndOverride: () => false,
