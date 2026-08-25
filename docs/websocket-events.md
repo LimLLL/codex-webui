@@ -45,6 +45,8 @@ codex app-server (stdout JSONL)
 | `terminal.output` | `{ terminalId, data }` | PTY 输出 |
 | `terminal.exit` | `{ terminalId, exitCode }` | PTY 进程退出 |
 
+`thread/settings/updated`、`thread/goal/updated`、`thread/goal/cleared` 以及 inline review 产生的 `turn/*` / `item/*` notification 走同一个 `codex.notification` 通道，按 `params.threadId` 投递到对应 room。后端不额外归一化这些事件。
+
 ## Notification Dispatcher 架构
 
 前端使用 `notification-handlers.ts` 的 method→handler dispatch map 处理所有 ~50 个 ServerNotification 方法，分三个 Tier：

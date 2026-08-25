@@ -148,6 +148,82 @@ describe('reopening a thread', () => {
   });
 });
 
+/** A summary-view turn: app-server withheld its reasoning and plan items. */
+function summaryTurn(id: string, text: string): TurnDto {
+  return {
+    id,
+    items: [{ type: 'userMessage', content: [{ type: 'text', text }] }],
+    itemsView: 'summary',
+    status: 'completed',
+  } as unknown as TurnDto;
+}
+
+describe('on-demand turn item top-up', () => {
+  it('keeps an entry for a summary turn so the top-up has somewhere to land', () => {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [summaryTurn('turn-1', 'hi')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    const turnEntry = runtime.timeline.find((e) => e.kind === 'turn');
+    expect(turnEntry).toBeDefined();
+    expect(turnEntry).toMatchObject({ itemsView: 'summary' });
+  });
+
+  it('fills in the withheld items and marks the turn full', () => {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [summaryTurn('turn-1', 'hi')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+
+    useTimelineStore
+      .getState()
+      .applyFullTurnItemsForThread('t1', 'turn-1', [
+        { type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+        { type: 'reasoning', id: 'r1', summary: ['thinking'] },
+        { type: 'plan', id: 'p1', text: '# the plan' },
+      ]);
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
+    expect(turnEntry).toMatchObject({ itemsView: 'full' });
+    expect(turnEntry.kind === 'turn' && turnEntry.plan?.explanation).toContain(
+      'the plan',
+    );
+    expect(
+      turnEntry.kind === 'turn' && turnEntry.items.map((i) => i.type),
+    ).toEqual(['reasoning']);
+  });
+
+  // A persisted snapshot is older than anything that streamed in live, so it
+  // must never replace a turn that notifications have already rebuilt.
+  it('refuses to overwrite a turn that is no longer summary', () => {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hi')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+
+    useTimelineStore
+      .getState()
+      .applyFullTurnItemsForThread('t1', 'turn-1', [
+        { type: 'agentMessage', id: 'stale', text: 'stale snapshot' },
+      ]);
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
+    expect(
+      turnEntry.kind === 'turn' && turnEntry.items[0]?.content,
+    ).toBe('reply');
+  });
+});
+
 describe('markThreadDeletedRemotely', () => {
   it('locks the thread while keeping the transcript', () => {
     const store = useTimelineStore.getState();

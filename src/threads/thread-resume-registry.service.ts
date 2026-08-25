@@ -1,7 +1,7 @@
 /** Generation-scoped resume registry for non-idempotent thread/resume calls. */
 import { Injectable, Logger } from '@nestjs/common';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
-import type { v2 } from '../codex/codex-schema';
+import type { ReasoningEffort, v2 } from '../codex/codex-schema';
 import type { ThreadOpenResponseDto } from './dto/threads.dto';
 import {
   isNotMaterializedError,
@@ -112,6 +112,19 @@ export class ThreadResumeRegistryService {
     response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
   ): void {
     this.responseCache.set(threadId, response);
+  }
+
+  /** Returns the cached resolved model from a successful start/resume/fork. */
+  readCachedModel(threadId: string): string | null {
+    const model = this.responseCache.get(threadId)?.model;
+    return typeof model === 'string' && model.trim().length > 0
+      ? model.trim()
+      : null;
+  }
+
+  /** Returns the cached resolved reasoning effort from a start/resume/fork. */
+  readCachedEffort(threadId: string): ReasoningEffort | null {
+    return this.responseCache.get(threadId)?.reasoningEffort ?? null;
   }
 
   /** Returns true when the thread has already been resumed in this generation. */

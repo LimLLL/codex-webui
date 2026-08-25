@@ -9,6 +9,7 @@ import type { AppDatabase } from '../database/database.constants';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import { ThreadsDeletionService } from './threads-deletion.service';
 
@@ -49,6 +50,7 @@ describe('ThreadsDeletionService', () => {
     cancelPendingForThreads: vi.fn(),
   };
   const mockResumeRegistry = { forget: vi.fn() };
+  const mockSettingsObserver = { forget: vi.fn() };
   const mockDeletionRegistry = {
     begin: vi.fn(),
     end: vi.fn(),
@@ -70,6 +72,7 @@ describe('ThreadsDeletionService', () => {
       mockBranches as unknown as ConversationBranchesService,
       mockPendingApprovals as unknown as PendingApprovalsService,
       mockResumeRegistry as unknown as ThreadResumeRegistryService,
+      mockSettingsObserver as unknown as ThreadSettingsObserverService,
       mockDeletionRegistry as unknown as ThreadDeletionRegistryService,
       mockDb as unknown as AppDatabase,
     );
@@ -124,6 +127,32 @@ describe('ThreadsDeletionService', () => {
     expect(result.deleteOrder).toEqual(['grandchild', 'child', 'root']);
     expect(deleted).toEqual(['grandchild', 'child', 'root']);
     expect(mockBranchMutations.reapDeletedThread).toHaveBeenCalledTimes(3);
+  });
+
+  // The observer normally evicts on `thread/deleted`, but a thread app-server
+  // has already forgotten emits no such notification, so the reap path has to
+  // drop the observed settings itself or the cache outlives the thread.
+  it('evicts observed settings even when app-server reports the thread as gone', async () => {
+    mockCodex.request.mockImplementation((method: string, params) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(listResponse(params, [makeThread('root')]));
+      }
+      if (method === 'thread/delete') {
+        throw new CodexRpcError({
+          code: -32600,
+          message: 'no rollout found for thread id root',
+        });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+    });
+
+    expect(result.status).toBe('completed');
+    expect(mockSettingsObserver.forget).toHaveBeenCalledWith('root');
   });
 
   it('returns a conflict when the planned id set changes under the delete guard', async () => {

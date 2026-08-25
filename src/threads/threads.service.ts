@@ -16,6 +16,7 @@ import type {
   ThreadOpenResponseDto,
   ThreadOverviewResponseDto,
   ThreadTurnCountsResponseDto,
+  ThreadTurnItemsResponseDto,
   ThreadTurnsPageDto,
 } from './dto/threads.dto';
 import {
@@ -46,6 +47,10 @@ type ExperimentalThreadStartParams = v2.ThreadStartParams & {
 };
 
 type ThreadWithHistoryMode = v2.Thread & { historyMode?: string };
+
+type ThreadForkParamsWithGoalCarry = v2.ThreadForkParams & {
+  deferGoalContinuation?: boolean;
+};
 
 @Injectable()
 export class ThreadsService {
@@ -212,6 +217,25 @@ export class ThreadsService {
     return this.history.listTurns(params);
   }
 
+  /**
+   * Reads one turn's full persisted items without resuming the thread.
+   *
+   * Lets a client that opened a thread with the cheap `summary` view top a
+   * single turn up to full detail, recovering the `reasoning` and `plan` items
+   * that view omits.
+   *
+   * @param threadId - Thread that owns the turn
+   * @param turnId - Turn whose items should be returned
+   * @returns The turn's items, oldest first
+   */
+  async listTurnItems(
+    threadId: string,
+    turnId: string,
+  ): Promise<ThreadTurnItemsResponseDto> {
+    const entries = await this.history.listTurnItems(threadId, turnId);
+    return { items: entries.map((entry) => entry.item) };
+  }
+
   /** Counts graph-node turns without resuming; failures become unknown counts. */
   async countTurns(threadIds: string[]): Promise<ThreadTurnCountsResponseDto> {
     return {
@@ -346,13 +370,25 @@ export class ThreadsService {
    * @param threadId - The source thread identifier
    * @returns The forked thread and resolved settings
    */
-  async forkThread(threadId: string): Promise<v2.ThreadForkResponse> {
+  async forkThread(
+    threadId: string,
+    options: { carryGoal?: boolean; ephemeral?: boolean } = {},
+  ): Promise<v2.ThreadForkResponse> {
     this.deletionRegistry.assertMutable(threadId);
+    if (options.carryGoal && options.ephemeral) {
+      throw BusinessException.badRequest(
+        ErrorCode.threads.invalidForkOptions,
+        'deferGoalContinuation cannot be combined with ephemeral forks',
+      );
+    }
+    const params: ThreadForkParamsWithGoalCarry = {
+      threadId,
+      ...(options.ephemeral !== undefined && { ephemeral: options.ephemeral }),
+      ...(options.carryGoal && { deferGoalContinuation: true }),
+    };
     const response = await this.codex.request<v2.ThreadForkResponse>(
       'thread/fork',
-      {
-        threadId,
-      },
+      params,
     );
     this.resumeRegistry.markResumed(response.thread.id);
     this.resumeRegistry.cacheResponse(response.thread.id, response);

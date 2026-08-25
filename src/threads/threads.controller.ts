@@ -44,6 +44,7 @@ import { ThreadsService } from './threads.service';
 import {
   CODEX_V2_EXTRA_MODELS,
   CreateThreadDto,
+  ForkThreadDto,
   StartTurnDto,
   ThreadForkResponseDto,
   ThreadListResponseDto,
@@ -56,6 +57,7 @@ import {
   ThreadStartResponseDto,
   ThreadTurnCountsRequestDto,
   ThreadTurnCountsResponseDto,
+  ThreadTurnItemsResponseDto,
   ThreadTurnsPageDto,
   ThreadUnarchiveResponseDto,
   TurnStartResponseDto,
@@ -278,6 +280,19 @@ export class ThreadsController {
     });
   }
 
+  @Get(':threadId/turns/:turnId/items')
+  @ApiOperation({
+    summary: "Read one turn's full persisted items without resuming",
+  })
+  @ApiOkResponse({ type: ThreadTurnItemsResponseDto })
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  listTurnItems(
+    @Param('threadId') threadId: string,
+    @Param('turnId') turnId: string,
+  ) {
+    return this.threadsService.listTurnItems(threadId, turnId);
+  }
+
   @Get(':threadId/turns')
   @ApiOperation({ summary: 'List turn history without resuming a thread' })
   @ApiQuery({ name: 'cursor', required: false })
@@ -437,9 +452,17 @@ export class ThreadsController {
 
   @Post(':threadId/fork')
   @ApiOperation({ summary: 'Fork a thread' })
+  @ApiBody({ type: ForkThreadDto, required: false })
   @ApiCreatedResponse({ type: ThreadForkResponseDto })
-  async forkThread(@Param('threadId') threadId: string) {
-    return this.threadsService.forkThread(threadId);
+  @ApiBadRequestResponse({ type: ApiErrorResponseDto })
+  async forkThread(
+    @Param('threadId') threadId: string,
+    @Body() body?: ForkThreadDto,
+  ) {
+    return this.threadsService.forkThread(
+      threadId,
+      this.validateForkBody(body),
+    );
   }
 
   @Patch(':threadId/name')
@@ -513,6 +536,51 @@ export class ThreadsController {
       ErrorCode.threads.invalidInputField,
       'itemsView must be notLoaded, summary, or full',
     );
+  }
+
+  /** Parses fork options and rejects unsupported ephemeral fork requests. */
+  private validateForkBody(body: ForkThreadDto | undefined): {
+    carryGoal?: boolean;
+    ephemeral?: boolean;
+  } {
+    if (body === undefined || body === null) return {};
+    if (!this.isRecord(body)) {
+      throw BusinessException.badRequest(
+        ErrorCode.validation.bodyRequired,
+        'Fork options must be an object',
+      );
+    }
+
+    const carryGoal = this.readOptionalBoolean(body, 'carryGoal');
+    const ephemeral = this.readOptionalBoolean(body, 'ephemeral');
+    if (ephemeral === true) {
+      throw BusinessException.badRequest(
+        ErrorCode.threads.invalidForkOptions,
+        'Ephemeral forks are not supported by this endpoint',
+      );
+    }
+
+    return {
+      ...(carryGoal !== undefined && { carryGoal }),
+      ...(ephemeral !== undefined && { ephemeral }),
+    };
+  }
+
+  /** Reads an optional boolean from a plain request object. */
+  private readOptionalBoolean(
+    body: TurnInputRecord,
+    field: string,
+  ): boolean | undefined {
+    const value = body[field];
+    if (value === undefined) return undefined;
+    if (typeof value !== 'boolean') {
+      throw BusinessException.badRequest(
+        ErrorCode.validation.typeMismatch,
+        `${field} must be a boolean`,
+        { field, type: 'boolean' },
+      );
+    }
+    return value;
   }
 
   private async validateTurnInput(input: unknown): Promise<v2.UserInput[]> {

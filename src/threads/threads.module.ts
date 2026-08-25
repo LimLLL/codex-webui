@@ -10,7 +10,10 @@ import { ThreadDeletionModule } from '../thread-deletion/thread-deletion.module'
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { AutoResumeService } from './auto-resume.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { ThreadHistoryService } from './thread-history.service';
+import { ThreadCommandsController } from './thread-commands.controller';
+import { ThreadCommandsService } from './thread-commands.service';
 import { ThreadsBranchingService } from './threads-branching.service';
 import { ThreadsController } from './threads.controller';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
@@ -31,7 +34,11 @@ import { ThreadsService } from './threads.service';
     PendingApprovalsModule,
     ThreadDeletionModule,
   ],
-  controllers: [ThreadsController, ThreadsDeletionController],
+  controllers: [
+    ThreadsController,
+    ThreadsDeletionController,
+    ThreadCommandsController,
+  ],
   providers: [
     ThreadsService,
     ThreadsBranchingService,
@@ -41,6 +48,8 @@ import { ThreadsService } from './threads.service';
     ActiveThreadRegistryService,
     ThreadHistoryService,
     ThreadResumeRegistryService,
+    ThreadSettingsObserverService,
+    ThreadCommandsService,
     ThreadsOverviewService,
     AutoResumeService,
   ],
@@ -52,6 +61,8 @@ import { ThreadsService } from './threads.service';
     ActiveThreadRegistryService,
     ThreadHistoryService,
     ThreadResumeRegistryService,
+    ThreadSettingsObserverService,
+    ThreadCommandsService,
     ThreadsOverviewService,
   ],
 })

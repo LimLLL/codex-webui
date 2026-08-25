@@ -41,6 +41,22 @@ type ExperimentalResumeParams = v2.ThreadResumeParams & {
   };
 };
 
+/** One item plus the turn it belongs to, as returned by `thread/items/list`. */
+export interface ThreadItemEntry {
+  turnId?: string;
+  item: Record<string, unknown>;
+}
+
+interface ThreadItemsPage {
+  data?: ThreadItemEntry[];
+  nextCursor?: string | null;
+}
+
+const TURN_ITEMS_PAGE_SIZE = 500;
+
+/** Backstop so a misbehaving cursor cannot page forever. */
+const TURN_ITEMS_MAX_PAGES = 20;
+
 const TURN_COUNT_PAGE_SIZE = 200;
 const TURN_COUNT_CONCURRENCY = 4;
 /**
@@ -129,6 +145,60 @@ export class ThreadHistoryService {
       itemsView: params.itemsView ?? undefined,
     });
     return this.normalizeTurnsPage(response);
+  }
+
+  /**
+   * Reads every persisted item for one turn without resuming the thread.
+   *
+   * The `summary` turns view app-server returns by default omits `reasoning`
+   * and `plan` items, so a client that opened a thread cheaply has no way to
+   * show them. This tops a single turn up to full detail on demand instead of
+   * paying for full detail across the whole first page.
+   *
+   * @param threadId - Thread that owns the turn
+   * @param turnId - Turn whose items should be returned
+   * @returns Items belonging to that turn, oldest first
+   * @throws BusinessException when app-server's store cannot page items
+   */
+  async listTurnItems(
+    threadId: string,
+    turnId: string,
+  ): Promise<ThreadItemEntry[]> {
+    const entries: ThreadItemEntry[] = [];
+    let cursor: string | undefined;
+
+    // The turn filter does not disable pagination, and the caller marks the
+    // result as complete — so stopping at the first page would silently drop
+    // the tail of a long turn and never retry it.
+    for (let page = 0; page < TURN_ITEMS_MAX_PAGES; page += 1) {
+      const response = await this.codex.request<ThreadItemsPage>(
+        'thread/items/list',
+        {
+          threadId,
+          turnId,
+          cursor,
+          limit: TURN_ITEMS_PAGE_SIZE,
+          sortDirection: 'asc',
+        },
+      );
+      if (Array.isArray(response?.data)) entries.push(...response.data);
+
+      const nextCursor = this.nullableString(response?.nextCursor);
+      if (!nextCursor) break;
+      if (nextCursor === cursor) {
+        // A cursor that does not advance would otherwise spin until the page
+        // cap, re-fetching the same items each time.
+        this.logger.warn(
+          `thread/items/list cursor did not advance for thread=${threadId} turn=${turnId}; stopping`,
+        );
+        break;
+      }
+      cursor = nextCursor;
+    }
+
+    // Entries carry their own turnId so unfiltered pages can be grouped; the
+    // filter is advisory, so drop anything that leaked in from another turn.
+    return entries.filter((entry) => !entry.turnId || entry.turnId === turnId);
   }
 
   /**

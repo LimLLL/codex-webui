@@ -357,6 +357,26 @@ export type RawConfigWriteResponseDto = {
     filePath: string;
 };
 
+export type FeedbackUploadRequestDto = {
+    classification: string;
+    reason?: string | null;
+    threadId?: string | null;
+    /**
+     * Whether Codex should attach logs to the feedback report.
+     */
+    includeLogs?: boolean;
+    tags?: {
+        [key: string]: string;
+    } | null;
+};
+
+export type FeedbackUploadResponseDto = {
+    /**
+     * Tracking thread id for the submitted report, not the conversation it refers to.
+     */
+    threadId: string;
+};
+
 export type AccountDto = {
     type: 'apiKey' | 'chatgpt';
     /**
@@ -1188,6 +1208,13 @@ export type ThreadOpenResponseDto = {
     itemsBackwardsCursor: string | null;
 };
 
+export type ThreadTurnItemsResponseDto = {
+    /**
+     * Items belonging to the turn, oldest first.
+     */
+    items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
+};
+
 export type ThreadTurnCountsRequestDto = {
     threadIds: Array<string>;
 };
@@ -1231,6 +1258,13 @@ export type CreateMessageBranchDto = {
      * Preview text for the edited version before the new turn exists.
      */
     previewText?: string;
+};
+
+export type ForkThreadDto = {
+    /**
+     * Opt in to native deferred goal continuation on the fork. Defaults to false.
+     */
+    carryGoal?: boolean;
 };
 
 export type ThreadSetNameRequestDto = {
@@ -1357,6 +1391,90 @@ export type ThreadDeleteResultDto = {
      */
     updatedTree?: BranchTreeDto | null;
     diagnostics: Array<BranchAdoptionDiagnosticDto>;
+};
+
+export type ReviewUncommittedChangesTargetDto = {
+    type: 'uncommittedChanges';
+};
+
+export type ReviewBaseBranchTargetDto = {
+    type: 'baseBranch';
+    branch: string;
+};
+
+export type ReviewCommitTargetDto = {
+    type: 'commit';
+    sha: string;
+    title: string | null;
+};
+
+export type ReviewCustomTargetDto = {
+    type: 'custom';
+    instructions: string;
+};
+
+export type CollaborationModePresetDto = {
+    name: string;
+    mode: 'plan' | 'default' | null;
+    model: string | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+};
+
+export type CollaborationModesResponseDto = {
+    data: Array<CollaborationModePresetDto>;
+};
+
+export type ThreadCollaborationModeStateDto = {
+    observed: boolean;
+    /**
+     * How the backend learned this value. unknown means app-server has not emitted observable settings in this process.
+     */
+    source: 'unknown' | 'notification' | 'accepted';
+    mode: 'plan' | 'default' | null;
+    model: string | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+};
+
+export type ThreadGoalDto = {
+    threadId: string;
+    objective: string;
+    status: 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';
+    tokenBudget: number | null;
+    tokensUsed: number;
+    timeUsedSeconds: number;
+    createdAt: number;
+    updatedAt: number;
+};
+
+export type ThreadGoalResponseDto = {
+    goal: ThreadGoalDto | null;
+};
+
+export type ThreadGoalSetResponseDto = {
+    goal: ThreadGoalDto;
+};
+
+export type ThreadGoalClearResponseDto = {
+    cleared: boolean;
+};
+
+export type ReviewStartResponseDto = {
+    turn: TurnDto;
+    reviewThreadId: string;
+};
+
+export type SetThreadCollaborationModeDto = {
+    mode: 'plan' | 'default';
+};
+
+export type SetThreadGoalDto = {
+    objective?: string;
+    status?: 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';
+    tokenBudget?: number | null;
+};
+
+export type StartReviewDto = {
+    target: ReviewUncommittedChangesTargetDto | ReviewBaseBranchTargetDto | ReviewCommitTargetDto | ReviewCustomTargetDto;
 };
 
 export type PendingServerRequestsResponseDto = {
@@ -2296,6 +2414,26 @@ export type CodexConfigUpdateRawConfigResponses = {
 
 export type CodexConfigUpdateRawConfigResponse = CodexConfigUpdateRawConfigResponses[keyof CodexConfigUpdateRawConfigResponses];
 
+export type CodexFeedbackUploadFeedbackData = {
+    body: FeedbackUploadRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/feedback';
+};
+
+export type CodexFeedbackUploadFeedbackErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type CodexFeedbackUploadFeedbackError = CodexFeedbackUploadFeedbackErrors[keyof CodexFeedbackUploadFeedbackErrors];
+
+export type CodexFeedbackUploadFeedbackResponses = {
+    201: FeedbackUploadResponseDto;
+};
+
+export type CodexFeedbackUploadFeedbackResponse = CodexFeedbackUploadFeedbackResponses[keyof CodexFeedbackUploadFeedbackResponses];
+
 export type AccountReadAccountData = {
     body?: never;
     path?: never;
@@ -2670,6 +2808,29 @@ export type ThreadsResumeThreadResponses = {
 
 export type ThreadsResumeThreadResponse = ThreadsResumeThreadResponses[keyof ThreadsResumeThreadResponses];
 
+export type ThreadsListTurnItemsData = {
+    body?: never;
+    path: {
+        threadId: string;
+        turnId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/turns/{turnId}/items';
+};
+
+export type ThreadsListTurnItemsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadsListTurnItemsError = ThreadsListTurnItemsErrors[keyof ThreadsListTurnItemsErrors];
+
+export type ThreadsListTurnItemsResponses = {
+    200: ThreadTurnItemsResponseDto;
+};
+
+export type ThreadsListTurnItemsResponse = ThreadsListTurnItemsResponses[keyof ThreadsListTurnItemsResponses];
+
 export type ThreadsListTurnsData = {
     body?: never;
     path: {
@@ -2870,7 +3031,7 @@ export type ThreadsCreateMessageBranchResponses = {
 export type ThreadsCreateMessageBranchResponse = ThreadsCreateMessageBranchResponses[keyof ThreadsCreateMessageBranchResponses];
 
 export type ThreadsForkThreadData = {
-    body?: never;
+    body?: ForkThreadDto;
     path: {
         threadId: string;
     };
@@ -2879,6 +3040,7 @@ export type ThreadsForkThreadData = {
 };
 
 export type ThreadsForkThreadErrors = {
+    400: ApiErrorResponseDto;
     401: ApiErrorResponseDto;
 };
 
@@ -2973,6 +3135,154 @@ export type ThreadsDeletionDeleteThreadResponses = {
 };
 
 export type ThreadsDeletionDeleteThreadResponse = ThreadsDeletionDeleteThreadResponses[keyof ThreadsDeletionDeleteThreadResponses];
+
+export type ThreadCommandsListCollaborationModesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/threads/collaboration-modes';
+};
+
+export type ThreadCommandsListCollaborationModesErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsListCollaborationModesError = ThreadCommandsListCollaborationModesErrors[keyof ThreadCommandsListCollaborationModesErrors];
+
+export type ThreadCommandsListCollaborationModesResponses = {
+    200: CollaborationModesResponseDto;
+};
+
+export type ThreadCommandsListCollaborationModesResponse = ThreadCommandsListCollaborationModesResponses[keyof ThreadCommandsListCollaborationModesResponses];
+
+export type ThreadCommandsReadCollaborationModeData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/collaboration-mode';
+};
+
+export type ThreadCommandsReadCollaborationModeErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsReadCollaborationModeError = ThreadCommandsReadCollaborationModeErrors[keyof ThreadCommandsReadCollaborationModeErrors];
+
+export type ThreadCommandsReadCollaborationModeResponses = {
+    200: ThreadCollaborationModeStateDto;
+};
+
+export type ThreadCommandsReadCollaborationModeResponse = ThreadCommandsReadCollaborationModeResponses[keyof ThreadCommandsReadCollaborationModeResponses];
+
+export type ThreadCommandsSetCollaborationModeData = {
+    body: SetThreadCollaborationModeDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/collaboration-mode';
+};
+
+export type ThreadCommandsSetCollaborationModeErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsSetCollaborationModeError = ThreadCommandsSetCollaborationModeErrors[keyof ThreadCommandsSetCollaborationModeErrors];
+
+export type ThreadCommandsSetCollaborationModeResponses = {
+    200: ThreadCollaborationModeStateDto;
+};
+
+export type ThreadCommandsSetCollaborationModeResponse = ThreadCommandsSetCollaborationModeResponses[keyof ThreadCommandsSetCollaborationModeResponses];
+
+export type ThreadCommandsClearGoalData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/goal';
+};
+
+export type ThreadCommandsClearGoalErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsClearGoalError = ThreadCommandsClearGoalErrors[keyof ThreadCommandsClearGoalErrors];
+
+export type ThreadCommandsClearGoalResponses = {
+    200: ThreadGoalClearResponseDto;
+};
+
+export type ThreadCommandsClearGoalResponse = ThreadCommandsClearGoalResponses[keyof ThreadCommandsClearGoalResponses];
+
+export type ThreadCommandsReadGoalData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/goal';
+};
+
+export type ThreadCommandsReadGoalErrors = {
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsReadGoalError = ThreadCommandsReadGoalErrors[keyof ThreadCommandsReadGoalErrors];
+
+export type ThreadCommandsReadGoalResponses = {
+    200: ThreadGoalResponseDto;
+};
+
+export type ThreadCommandsReadGoalResponse = ThreadCommandsReadGoalResponses[keyof ThreadCommandsReadGoalResponses];
+
+export type ThreadCommandsSetGoalData = {
+    body: SetThreadGoalDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/goal';
+};
+
+export type ThreadCommandsSetGoalErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsSetGoalError = ThreadCommandsSetGoalErrors[keyof ThreadCommandsSetGoalErrors];
+
+export type ThreadCommandsSetGoalResponses = {
+    200: ThreadGoalSetResponseDto;
+};
+
+export type ThreadCommandsSetGoalResponse = ThreadCommandsSetGoalResponses[keyof ThreadCommandsSetGoalResponses];
+
+export type ThreadCommandsStartReviewData = {
+    body: StartReviewDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/review';
+};
+
+export type ThreadCommandsStartReviewErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type ThreadCommandsStartReviewError = ThreadCommandsStartReviewErrors[keyof ThreadCommandsStartReviewErrors];
+
+export type ThreadCommandsStartReviewResponses = {
+    201: ReviewStartResponseDto;
+};
+
+export type ThreadCommandsStartReviewResponse = ThreadCommandsStartReviewResponses[keyof ThreadCommandsStartReviewResponses];
 
 export type PendingApprovalsListPendingData = {
     body?: never;

@@ -1,5 +1,6 @@
 /** Unit tests for ThreadsController rich user input validation. */
 import { BusinessException } from '../common/business.exception';
+import { ErrorCode } from '../common/error-codes';
 import { ThreadsController } from './threads.controller';
 
 describe('ThreadsController rich input validation', () => {
@@ -9,6 +10,7 @@ describe('ThreadsController rich input validation', () => {
     startTurn: vi.fn(),
     steerTurn: vi.fn(),
     listLoadedThreads: vi.fn(),
+    forkThread: vi.fn(),
   };
   const filesService = {
     resolveSafePath: vi.fn(),
@@ -23,6 +25,9 @@ describe('ThreadsController rich input validation', () => {
       turn: { id: 'turn1' },
     });
     threadsService.steerTurn.mockResolvedValue({ turnId: 'turn1' });
+    threadsService.forkThread.mockResolvedValue({
+      thread: { id: 'thread2' },
+    });
     threadsService.listLoadedThreads.mockResolvedValue({
       data: ['thread1'],
       nextCursor: null,
@@ -53,6 +58,24 @@ describe('ThreadsController rich input validation', () => {
     await expect(
       controller.listLoadedThreads(undefined, '0'),
     ).rejects.toBeInstanceOf(BusinessException);
+  });
+
+  it('passes fork goal carry explicitly', async () => {
+    await controller.forkThread('thread1', { carryGoal: true });
+
+    expect(threadsService.forkThread).toHaveBeenCalledWith('thread1', {
+      carryGoal: true,
+    });
+  });
+
+  it('rejects unsupported ephemeral fork bodies', async () => {
+    await expect(
+      controller.forkThread('thread1', {
+        ephemeral: true,
+      } as never),
+    ).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.invalidForkOptions,
+    });
   });
 
   it('normalizes missing text_elements to an empty array', async () => {

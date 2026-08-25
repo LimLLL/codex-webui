@@ -2,7 +2,7 @@
  * Chat message input orchestrator.
  * Delegates attachment management to useChatAttachments and @ mention to useChatMention.
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Send, Square, TerminalSquare } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +21,13 @@ import { useTimelineStore } from '@/stores/timeline-store';
 import { useModelStore } from '@/stores/model-store';
 import { useChatAttachments } from '@/hooks/use-chat-attachments';
 import { useChatMention } from '@/hooks/use-chat-mention';
+import { useSlashCommands } from '@/hooks/use-slash-commands';
+import { useSlashDispatch } from '@/hooks/use-slash-dispatch';
+import { SLASH_COMMANDS, parseSlashInput } from '@/lib/slash-commands';
+import { SlashPopover } from './slash-popover';
+import { SlashDialogs } from './slash-dialogs';
+import { GoalProgressRow } from './goal-progress-row';
+import { PlanModeBadge } from './plan-mode-badge';
 import { SecurityPolicyBadge } from './security-policy-badge';
 import { ModelSelector } from './model-selector';
 import { TokenUsageRing } from './token-usage-ring';
@@ -96,6 +103,29 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     setValue,
     threadCwd,
     addSystemError,
+  });
+
+  // ── Slash command palette ────────────────────────────────
+  const slashAvailability = useMemo(
+    () => ({ hasThread: Boolean(threadId), readOnly, hasActiveTurn }),
+    [threadId, readOnly, hasActiveTurn],
+  );
+  const slashDispatch = useSlashDispatch({ threadId, onError: addSystemError });
+  const {
+    slashOpen,
+    slashFiltered,
+    slashSelectedIndex,
+    detectSlash,
+    closeSlash,
+    handleSlashSelect,
+    handleSlashKeyDown,
+  } = useSlashCommands({
+    availability: slashAvailability,
+    // Running a command consumes the draft, exactly like the native composer.
+    onRun: (command) => {
+      setValue('');
+      slashDispatch.runCommand(command);
+    },
   });
 
   // ── Mention hook ─────────────────────────────────────────
@@ -188,24 +218,52 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     interruptTurn.mutate({ path: { threadId, turnId: activeTurnId } });
   }, [threadId, activeTurnId, interruptTurn]);
 
+  /**
+   * Runs the draft as a slash command when it is one, and reports whether it
+   * consumed the submit.
+   *
+   * This has to gate BOTH send and steer: a trailing space closes the palette,
+   * and during an active turn submit routes to steer, so a send-only check
+   * would ship `/plan ` to the running turn as steering text.
+   */
+  const tryRunSlashCommand = useCallback((): boolean => {
+    const parsed = parseSlashInput(valueRef.current.trim());
+    if (!parsed) return false;
+    const command = SLASH_COMMANDS.find((c) => c.name === parsed.name);
+    if (!command) return false;
+    // An unavailable command still consumes the submit; sending it as prose
+    // would be a worse outcome than doing nothing.
+    if (!command.unavailableReason(slashAvailability)) {
+      setValue('');
+      closeSlash();
+      slashDispatch.runCommand(command);
+    }
+    return true;
+  }, [valueRef, slashAvailability, closeSlash, slashDispatch]);
+
   const handleSubmit = useCallback(() => {
+    if (tryRunSlashCommand()) return;
     if (hasActiveTurn) { handleSteer(); return; }
     handleSend();
-  }, [hasActiveTurn, handleSteer, handleSend]);
+  }, [tryRunSlashCommand, hasActiveTurn, handleSteer, handleSend]);
 
   // ── Input handlers ───────────────────────────────────────
   const handleChange = useCallback((newValue: string) => {
     setValue(newValue);
+    detectSlash(newValue);
     detectMention(newValue);
-  }, [detectMention]);
+  }, [detectSlash, detectMention]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Slash palette first: while it is open the draft is a command, not prose,
+    // so Enter must run the command rather than send a message.
+    if (handleSlashKeyDown(e)) return;
     if (handleMentionKeyDown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }
-  }, [handleMentionKeyDown, handleSubmit]);
+  }, [handleSlashKeyDown, handleMentionKeyDown, handleSubmit]);
 
   const hasContent = value.trim().length > 0 || attachments.length > 0;
 
@@ -224,11 +282,23 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
               : t('Archived threads are read-only. Unarchive or fork to continue.')}
         </p>
       )}
+      {/* Goal is a durable objective, not a transcript entry, so it stays
+          pinned above the composer for as long as it is set. */}
+      <GoalProgressRow threadId={threadId} readOnly={readOnly} />
+
       <div className="relative">
         <AttachmentChips
           attachments={chipAttachments}
           onRemove={handleRemoveAttachment}
           className="rounded-t-xl border border-b-0 border-border/40 bg-background/40"
+        />
+
+        <SlashPopover
+          open={slashOpen}
+          filtered={slashFiltered}
+          selectedIndex={slashSelectedIndex}
+          availability={slashAvailability}
+          onSelect={handleSlashSelect}
         />
 
         <MentionPopover
@@ -269,6 +339,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           <div className="flex items-center justify-between px-2 pb-2">
             <div className="flex items-center gap-1">
               <ModelSelector />
+              <PlanModeBadge
+                state={slashDispatch.collaborationMode}
+                pending={slashDispatch.planPending}
+                disabled={!threadId || readOnly}
+                onToggle={slashDispatch.togglePlanMode}
+              />
               <SecurityPolicyBadge />
               <McpStatusBadge />
               <SkillSelector
@@ -297,7 +373,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                     size="sm"
                     className="h-7 rounded-lg px-2.5 text-xs transition-transform duration-200 hover:scale-105 active:scale-95"
                     disabled={!hasContent || !canSteer || steer.isPending}
-                    onClick={handleSteer}
+                    onClick={handleSubmit}
                     title={t('Steer current turn')}
                   >
                     {t('Steer')}
@@ -318,7 +394,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                   size="icon"
                   className="h-7 w-7 rounded-lg transition-transform duration-200 hover:scale-105 active:scale-95"
                   disabled={!threadId || !hasContent || loading || readOnly}
-                  onClick={handleSend}
+                  onClick={handleSubmit}
                 >
                   <Send className="h-3.5 w-3.5" />
                 </Button>
@@ -327,6 +403,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           </div>
         </div>
       </div>
+
+      <SlashDialogs
+        dialog={slashDispatch.dialog}
+        threadId={threadId}
+        onClose={() => slashDispatch.setDialog(null)}
+        onError={addSystemError}
+      />
     </footer>
   );
 });

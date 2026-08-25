@@ -294,9 +294,14 @@
 - [ ] App tool-level config（per-tool enabled + approval_mode）。
 - [ ] App/Plugin ID 字符集放宽：当前 config allowlist 正则只接受 `[A-Za-z0-9_-]+`，若 app-server 返回含 `.`/`:`/`/` 等字符的 ID，config 写入会 400。需用真实 app/list 样本确认后放宽。
 - [ ] Plugins `cwds` 查询参数类型修正：后端 `@ApiQuery` 缺 `type: String`，SDK 生成为 `Array<unknown>`。前端暂不传 cwds，启用 repo marketplace 过滤时需修。
-- [ ] `review/start` 代码审查模式。
+- [x] Slash-command 后端能力：collaboration mode preset/list + settings update cache、thread goal read/set/clear、inline `review/start`、`feedback/upload`、fork opt-in `deferGoalContinuation`。
+- [x] Slash-command 前端入口：composer `/` palette、plan indicator、goal progress row、review/feedback dialogs、`contextCompaction`/`enteredReviewMode`/`exitedReviewMode` item 渲染、fork 带 goal 勾选框。
+- [ ] `/shell`（`thread/shellCommand`）：原语为 unsandboxed 全权限且绕过线程沙箱策略，等同于 Web 端 RCE 入口。需服务端开关（默认关）+ 逐次确认 + 独立安全评审后才能做。
+- [ ] `/side` 副任务：ephemeral fork + `thread/inject_items` 注入边界 prompt，需要完整的临时会话生命周期与 UI。
+- [ ] turn queue（`thread/queue/add`，每线程上限 100 + `thread/queue/changed`）：原生支持排队跟进 turn，但需要独立的队列 UX（可见队列/编辑/删除/重排/失败恢复）。
+- [ ] `/prompts:<name>` 自定义 prompt：官方文档称 `~/.codex/prompts/*.md` 会出现在 slash 列表，但 0.149.1 app-server README 无对应方法，ACP 的 `CustomPrompt` 属 v1 遗留，需实测确认。
 - [x] `config/read`、`config/batchWrite`、profile/settings UI：CodexConfigController（GET/PATCH structured + GET/PUT raw），Settings Codex tab（14 curated fields + profile switch + security read-only + Monaco raw editor），共享 json-safe 工具。
-- [ ] `thread/backgroundTerminals/clean`、collaboration mode 等 experimentalApi 能力按开关暴露。
+- [ ] `thread/backgroundTerminals/clean` 等剩余 experimentalApi 能力按开关暴露。
 
 ### 数据、检索与审计
 

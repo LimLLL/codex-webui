@@ -134,6 +134,14 @@ export const ErrorCode = {
     deleteOrphanedLocalTopology: 'threads.delete_orphaned_local_topology',
     deleteThreadIdSetRequired: 'threads.delete_thread_id_set_required',
     threadIdsRequired: 'threads.thread_ids_required',
+    invalidCollaborationMode: 'threads.invalid_collaboration_mode',
+    collaborationModeUnavailable: 'threads.collaboration_mode_unavailable',
+    collaborationModeModelRequired: 'threads.collaboration_mode_model_required',
+    invalidGoal: 'threads.invalid_goal',
+    invalidGoalStatus: 'threads.invalid_goal_status',
+    invalidReviewTarget: 'threads.invalid_review_target',
+    reviewDetachedUnsupported: 'threads.review_detached_unsupported',
+    invalidForkOptions: 'threads.invalid_fork_options',
   },
 
   // ── Settings ───────────────────────────────────────────────────────
@@ -227,6 +235,7 @@ export const ErrorCode = {
     valueInvalidJson: 'codex.value_invalid_json',
     /** Codex config write failed. */
     writeFailed: 'codex.write_failed',
+    invalidFeedback: 'codex.invalid_feedback',
   },
 
   // ── Pending Approvals ──────────────────────────────────────────────

@@ -391,4 +391,27 @@ describe('ThreadsService', () => {
       previewText: 'edited',
     });
   });
+
+  it('forks with deferred goal continuation only when requested', async () => {
+    mockCodex.request.mockResolvedValue({
+      thread: { id: 'child', historyMode: 'paginated' },
+      model: 'gpt-5',
+    });
+
+    await service.forkThread('source', { carryGoal: true });
+
+    expect(mockCodex.request).toHaveBeenCalledWith('thread/fork', {
+      threadId: 'source',
+      deferGoalContinuation: true,
+    });
+    expect(mockResumeRegistry.markResumed).toHaveBeenCalledWith('child');
+  });
+
+  it('rejects fork requests that combine goal carry with ephemeral forks', async () => {
+    await expect(
+      service.forkThread('source', { carryGoal: true, ephemeral: true }),
+    ).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.invalidForkOptions,
+    });
+  });
 });
