@@ -82,6 +82,7 @@ codex app-server (stdout JSONL)
 | `thread/closed` | active thread → 系统条目; debounced 失效 thread list |
 | `thread/archived` | active thread → 系统条目; debounced 失效 thread list |
 | `thread/unarchived` | debounced 失效 thread list |
+| `thread/deleted` | 清除该 thread 的全部本地 runtime 与订阅；debounced 失效 thread list + branch trees。当前打开的会话例外：只加系统条目，不清 runtime（见下）|
 | `turn/started` | 初始化空 turn block, 设置 loading |
 | `thread/compacted` | active thread → info 系统条目 |
 | `model/rerouted` | active thread → warning 系统条目 + info toast |
@@ -117,6 +118,9 @@ dev 模式 `console.debug`，不静默丢弃。
 | `item/tool/requestUserInput` | 解析为 UserInputRequest（EXPERIMENTAL），渲染 UserInputCard（radio/checkbox/text/password）|
 
 用户点击 Accept/Decline → `codex.serverResponse` → 后端回传 app-server。
+
+**删除期间的抑制与重放**：thread 处于删除守卫内时，gateway 仍照常写入 SQLite（保持 `pending`），但**不广播**该 thread 的 server request，并把它暂存在内存里。守卫释放时逐条重放：只重放 DB 里仍为 `pending` 的（真正被删掉的 thread 其待审批已在本地清理阶段置为 `cancelled`）。中止的删除因此不会留下"app-server 还在等、UI 却永远看不到"的请求。详见 [approval.md](approval.md)。
+
 用户提交 UserInputCard → `pendingApprovalsRespond` REST → 后端回传 app-server。
 `serverRequest/resolved` 通知 → 按 requestId 匹配审批/用户输入卡片 → 标记为 resolved。
 
