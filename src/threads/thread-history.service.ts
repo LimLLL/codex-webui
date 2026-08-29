@@ -1,6 +1,7 @@
 /** Experimental paged thread-history access isolated from stable Codex types. */
 import { Injectable, Logger } from '@nestjs/common';
 import type { v2 } from '../codex/codex-schema';
+import { isCodexRpcError } from '../codex/codex-errors';
 import { CodexService } from '../codex/codex.service';
 
 export type TurnItemsView = 'notLoaded' | 'summary' | 'full';
@@ -164,6 +165,27 @@ export class ThreadHistoryService {
     threadId: string,
     turnId: string,
   ): Promise<ThreadItemEntry[]> {
+    try {
+      return await this.listTurnItemsDirect(threadId, turnId);
+    } catch (err) {
+      if (
+        !isCodexRpcError(err) ||
+        err.code !== -32601 ||
+        err.method !== 'thread/items/list'
+      ) {
+        throw err;
+      }
+      this.logger.debug(
+        `thread/items/list is unavailable; falling back to full turn pages for thread=${threadId} turn=${turnId}`,
+      );
+      return this.listTurnItemsFromTurns(threadId, turnId);
+    }
+  }
+
+  private async listTurnItemsDirect(
+    threadId: string,
+    turnId: string,
+  ): Promise<ThreadItemEntry[]> {
     const entries: ThreadItemEntry[] = [];
     let cursor: string | undefined;
 
@@ -199,6 +221,30 @@ export class ThreadHistoryService {
     // Entries carry their own turnId so unfiltered pages can be grouped; the
     // filter is advisory, so drop anything that leaked in from another turn.
     return entries.filter((entry) => !entry.turnId || entry.turnId === turnId);
+  }
+
+  /** Compatibility path for app-server builds that expose turns paging first. */
+  private async listTurnItemsFromTurns(
+    threadId: string,
+    turnId: string,
+  ): Promise<ThreadItemEntry[]> {
+    let cursor: string | null | undefined;
+    for (let page = 0; page < TURN_COUNT_MAX_PAGES; page += 1) {
+      const turnsPage = await this.listTurns({
+        threadId,
+        cursor,
+        limit: TURN_COUNT_PAGE_SIZE,
+        sortDirection: 'desc',
+        itemsView: 'full',
+      });
+      const turn = turnsPage.data.find((candidate) => candidate.id === turnId);
+      if (turn) {
+        return turn.items.map((item) => ({ turnId, item }));
+      }
+      cursor = turnsPage.nextCursor;
+      if (!cursor) break;
+    }
+    throw new Error(`Turn ${turnId} was not found in thread ${threadId}`);
   }
 
   /**

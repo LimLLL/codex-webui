@@ -1,4 +1,5 @@
 import { CodexService } from '../codex/codex.service';
+import { CodexRpcError } from '../codex/codex-errors';
 import { ThreadHistoryService } from './thread-history.service';
 
 describe('ThreadHistoryService', () => {
@@ -93,5 +94,41 @@ describe('ThreadHistoryService', () => {
     await expect(service.countTurnsForThreads(['missing'])).resolves.toEqual([
       { threadId: 'missing', count: null, errorMessage: 'gone' },
     ]);
+  });
+
+  it('falls back to full turn pages when thread/items/list is unsupported', async () => {
+    mockCodex.request
+      .mockRejectedValueOnce(
+        new CodexRpcError(
+          { code: -32601, message: 'thread/items/list is not supported yet' },
+          { method: 'thread/items/list' },
+        ),
+      )
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 'turn-1',
+            items: [{ type: 'plan', id: 'item-1', text: 'Plan' }],
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      });
+
+    await expect(service.listTurnItems('t1', 'turn-1')).resolves.toEqual([
+      {
+        turnId: 'turn-1',
+        item: { type: 'plan', id: 'item-1', text: 'Plan' },
+      },
+    ]);
+    expect(mockCodex.request).toHaveBeenNthCalledWith(
+      2,
+      'thread/turns/list',
+      expect.objectContaining({
+        threadId: 't1',
+        itemsView: 'full',
+        sortDirection: 'desc',
+      }),
+    );
   });
 });
