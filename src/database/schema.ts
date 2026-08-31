@@ -116,6 +116,10 @@ export const turnErrors = sqliteTable(
     threadId: text('thread_id').notNull(),
     turnId: text('turn_id').notNull(),
     message: text('message').notNull(),
+    errorCategory: text('error_category'),
+    additionalDetails: text('additional_details'),
+    misalignmentErrorType: text('misalignment_error_type'),
+    misalignmentExplanation: text('misalignment_explanation'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
