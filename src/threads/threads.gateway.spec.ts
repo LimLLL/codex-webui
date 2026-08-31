@@ -111,6 +111,45 @@ describe('ThreadsGateway', () => {
     );
   });
 
+  it('removes misalignment steering before emitting an error to clients', () => {
+    listeners['notification']({
+      method: 'error',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        willRetry: false,
+        error: {
+          message: 'blocked',
+          codexErrorInfo: 'misalignmentPolicyViolation',
+          additionalDetails: null,
+          misalignment: {
+            errorType: 'policy',
+            detailedExplanation: 'display this',
+            steer: { message: 'do not send this' },
+          },
+        },
+      },
+    });
+
+    expect(mockServer.emit).toHaveBeenCalledWith('codex.notification', {
+      method: 'error',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        willRetry: false,
+        error: {
+          message: 'blocked',
+          codexErrorInfo: 'misalignmentPolicyViolation',
+          additionalDetails: null,
+          misalignment: {
+            errorType: 'policy',
+            detailedExplanation: 'display this',
+          },
+        },
+      },
+    });
+  });
+
   it('should broadcast non-thread notifications', () => {
     const notification = {
       method: 'error',

@@ -1,7 +1,10 @@
 import { ChildProcess } from 'node:child_process';
 import { EventEmitter, Readable, Writable } from 'node:stream';
 import { CodexRpcError } from './codex-errors';
-import { CodexJsonRpcClient } from './codex-jsonrpc-client';
+import {
+  CodexJsonRpcClient,
+  serializeCodexAuditEntry,
+} from './codex-jsonrpc-client';
 
 function createMockProcess(): ChildProcess {
   const proc = new EventEmitter() as ChildProcess;
@@ -70,6 +73,26 @@ describe('CodexJsonRpcClient', () => {
       method: 'thread/started',
       params: { threadId: 't1' },
     });
+  });
+
+  it('redacts misalignment explanation and steering from the audit line', () => {
+    const line = serializeCodexAuditEntry('in', {
+      method: 'error',
+      params: {
+        error: {
+          message: 'blocked',
+          misalignment: {
+            errorType: 'policy',
+            detailedExplanation: 'private explanation',
+            steer: { message: 'private continuation' },
+          },
+        },
+      },
+    });
+
+    expect(line).not.toContain('private explanation');
+    expect(line).not.toContain('private continuation');
+    expect(line).toContain('[REDACTED]');
   });
 
   it('should emit serverRequest events', async () => {

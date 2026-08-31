@@ -154,7 +154,7 @@ describe('ThreadsService', () => {
 
   it('should call thread/read with includeTurns', async () => {
     mockCodex.request.mockResolvedValue({
-      thread: { id: 't1', historyMode: 'paginated' },
+      thread: { id: 't1', historyMode: 'paginated', turns: [] },
     });
 
     await service.readThread('t1', true);
@@ -162,6 +162,39 @@ describe('ThreadsService', () => {
     expect(mockCodex.request).toHaveBeenCalledWith('thread/read', {
       threadId: 't1',
       includeTurns: true,
+    });
+  });
+
+  it('removes misalignment steering from a full thread read', async () => {
+    mockCodex.request.mockResolvedValue({
+      thread: {
+        id: 't1',
+        historyMode: 'paginated',
+        turns: [
+          {
+            id: 'turn-1',
+            items: [],
+            status: 'failed',
+            error: {
+              message: 'blocked',
+              codexErrorInfo: 'misalignmentPolicyViolation',
+              additionalDetails: null,
+              misalignment: {
+                errorType: 'policy',
+                detailedExplanation: 'display this',
+                steer: { message: 'do not send this' },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const response = await service.readThread('t1', true);
+
+    expect(response.thread.turns[0]?.error?.misalignment).toEqual({
+      errorType: 'policy',
+      detailedExplanation: 'display this',
     });
   });
 

@@ -4,10 +4,28 @@
  */
 import { create } from 'zustand';
 import { getSocket } from '../socket';
-import type { TimelineEntry, TurnItem, TurnPlanState } from '../types/timeline';
+import type {
+  TimelineEntry,
+  TurnFailure,
+  TurnItem,
+  TurnPlanState,
+} from '../types/timeline';
 import type { ApprovalRequest, ResolvableApprovalDecision, UserInputRequest } from '../types/approval';
-import type { ThreadDto, TurnDto, FileUpdateChangeDto } from '../generated/api';
+import type {
+  PersistedTurnErrorDto,
+  ThreadDto,
+  TurnDto,
+} from '../generated/api';
 import type { ThreadTokenUsage, ThreadStatusType } from '../types/codex-notifications';
+import {
+  normalizeThreadItem,
+  type ThreadItemNormalization,
+} from '../lib/thread-item-normalizer';
+import {
+  mergeTurnFailure,
+  normalizeLiveTurnFailure,
+  normalizePersistedTurnFailure,
+} from '../lib/turn-failure';
 
 const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
 const MIN_MAX_IDLE_SUBSCRIPTIONS = 5;
@@ -86,85 +104,13 @@ interface ThreadRuntimeInput {
 }
 
 
-/** Converts a persisted turn item to a TurnItem for rendering. */
-function parseTurnItem(item: Record<string, unknown>): TurnItem | null {
-  const type = item.type as string;
-  const id = item.id as string;
-
-  switch (type) {
-    case 'userMessage':
-      return null;
-    case 'reasoning':
-      return {
-        type: 'reasoning',
-        itemId: id,
-        content: ((item.summary as string[]) ?? []).join('\n'),
-        completed: true,
-      };
-    case 'agentMessage':
-      return {
-        type: 'agentMessage',
-        itemId: id,
-        content: (item.text as string) ?? '',
-        completed: true,
-      };
-    case 'mcpToolCall':
-      return {
-        type: 'mcpToolCall',
-        itemId: id,
-        content: item.result ? JSON.stringify(item.result, null, 2).slice(0, 500) : '',
-        completed: true,
-        toolServer: (item.server as string) ?? '',
-        toolName: (item.tool as string) ?? '',
-        toolArgs: item.arguments ? JSON.stringify(item.arguments, null, 2) : '',
-      };
-    case 'commandExecution':
-      return {
-        type: 'commandExecution',
-        itemId: id,
-        content: (item.aggregatedOutput as string) ?? (item.text as string) ?? '',
-        completed: true,
-        command: item.command as string | undefined,
-        exitCode: item.exitCode as number | undefined,
-      };
-    case 'fileChange': {
-      const changes = item.changes as FileUpdateChangeDto[] | undefined;
-      return {
-        type: 'fileChange',
-        itemId: id,
-        content: (item.text as string) ?? '',
-        completed: true,
-        filePath: changes?.[0]?.path,
-        fileDiff: changes?.[0]?.diff ?? '',
-      };
-    }
-    case 'contextCompaction':
-      return {
-        type: 'contextCompaction',
-        itemId: id,
-        content: '',
-        completed: true,
-      };
-    case 'enteredReviewMode':
-    case 'exitedReviewMode':
-      // `review` names what was reviewed (e.g. "current changes"); it is the
-      // only useful text these markers carry.
-      return {
-        type,
-        itemId: id,
-        content: (item.review as string) ?? '',
-        completed: true,
-      };
-    default:
-      return null;
-  }
-}
-
-/** Extracts persisted plan text into a plan panel fallback. */
-function parsePersistedPlan(items: Array<Record<string, unknown>>): TurnPlanState | undefined {
+/** Extracts persisted plan text from shared normalizer outcomes. */
+function normalizedPlan(
+  items: ThreadItemNormalization[],
+): TurnPlanState | undefined {
   const planText = items
-    .filter((item) => item.type === 'plan')
-    .map((item) => (typeof item.text === 'string' ? item.text.trim() : ''))
+    .filter((item): item is Extract<ThreadItemNormalization, { kind: 'plan' }> => item.kind === 'plan')
+    .map((item) => item.text.trim())
     .filter(Boolean)
     .join('\n\n');
 
@@ -178,30 +124,29 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
 
   for (const turn of turns) {
-    const items = (turn.items ?? []) as Array<Record<string, unknown>>;
+    const normalized = (turn.items ?? []).map((item, index) =>
+      normalizeThreadItem(item, true, `${turn.id}:${index}`),
+    );
 
-    const userMsg = items.find((it) => it.type === 'userMessage');
+    const userMsg = normalized.find(
+      (item): item is Extract<ThreadItemNormalization, { kind: 'userMessage' }> =>
+        item.kind === 'userMessage',
+    );
     if (userMsg) {
-      const content = userMsg.content as Array<{ type: string; text?: string; path?: string; url?: string }> | undefined;
-      const textParts = content?.filter((c) => c.type === 'text').map((c) => c.text ?? '') ?? [];
-      const text = textParts.join('\n') || ((userMsg.text as string) ?? '');
-      const images: string[] = [];
-      for (const block of content ?? []) {
-        if (block.type === 'localImage' && block.path) images.push(block.path);
-        else if (block.type === 'image' && block.url) images.push(block.url);
-      }
       entries.push({
         kind: 'user',
-        content: text,
+        content: userMsg.message.text,
         turnId: turn.id,
-        ...(images.length > 0 && { images }),
+        ...(userMsg.message.images.length > 0 && {
+          images: userMsg.message.images,
+        }),
       });
     }
 
-    const plan = parsePersistedPlan(items);
-    const turnItems = items
-      .map(parseTurnItem)
-      .filter((it): it is TurnItem => it !== null);
+    const plan = normalizedPlan(normalized);
+    const turnItems = normalized.flatMap((item) =>
+      item.kind === 'render' || item.kind === 'unknown' ? [item.item] : [],
+    );
 
     // A summary turn may look empty here purely because app-server withheld
     // its reasoning and plan items, so it still needs an entry to hang the
@@ -217,8 +162,16 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
         turnId: turn.id,
         plan,
         items: turnItems,
-        completed: turn.status === 'completed',
+        completed: turn.status !== 'inProgress',
         ...(itemsView && { itemsView }),
+      });
+    }
+
+    if (turn.status === 'failed' && turn.error) {
+      entries.push({
+        kind: 'turnFailure',
+        turnId: turn.id,
+        failure: normalizeLiveTurnFailure(turn.id, turn.error),
       });
     }
   }
@@ -495,6 +448,43 @@ function updateRuntimeTurnItem(
   });
 }
 
+/** Inserts or enriches a structured failure next to the turn it belongs to. */
+function upsertRuntimeTurnFailure(
+  runtime: ThreadRuntimeState,
+  failure: TurnFailure,
+): ThreadRuntimeState {
+  const existingIndex = runtime.timeline.findIndex(
+    (entry) =>
+      entry.kind === 'turnFailure' && entry.turnId === failure.turnId,
+  );
+  if (existingIndex >= 0) {
+    const existing = runtime.timeline[existingIndex];
+    if (existing.kind !== 'turnFailure') return runtime;
+    const timeline = [...runtime.timeline];
+    timeline[existingIndex] = {
+      ...existing,
+      failure: mergeTurnFailure(existing.failure, failure),
+    };
+    return { ...runtime, timeline };
+  }
+
+  const entry: TimelineEntry = {
+    kind: 'turnFailure',
+    turnId: failure.turnId,
+    failure,
+  };
+  const turnIndex = runtime.timeline.findIndex(
+    (candidate) =>
+      candidate.kind === 'turn' && candidate.turnId === failure.turnId,
+  );
+  if (turnIndex < 0) {
+    return { ...runtime, timeline: [...runtime.timeline, entry] };
+  }
+  const timeline = [...runtime.timeline];
+  timeline.splice(turnIndex + 1, 0, entry);
+  return { ...runtime, timeline };
+}
+
 function updateRuntimeDiff(runtime: ThreadRuntimeState, turnId: string, diff: string): ThreadRuntimeState {
   const timeline = runtime.timeline.map((entry) =>
     entry.kind === 'turn' && entry.turnId === turnId ? { ...entry, diff } : entry,
@@ -572,6 +562,7 @@ interface TimelineState {
   addUserMessage: (text: string, images?: string[]) => void;
   addSystemError: (message: string) => void;
   addSystemMessage: (message: string, severity?: 'info' | 'warning' | 'error') => void;
+  upsertTurnFailure: (failure: TurnFailure) => void;
 
   toggleReasoning: (itemId: string) => void;
   updateCurrentTurn: (
@@ -621,7 +612,10 @@ interface TimelineState {
   markThreadDeletedRemotely: (threadId: string, message: string) => void;
   hydrateTokenUsageForThread: (threadId: string, turns: Array<{ turnId: string; usage: ThreadTokenUsage }>) => void;
   hydrateTurnDiffsForThread: (threadId: string, turns: Array<{ turnId: string; diff: string }>) => void;
-  hydrateTurnErrorsForThread: (threadId: string, errors: Array<{ turnId: string; message: string }>) => void;
+  hydrateTurnErrorsForThread: (
+    threadId: string,
+    errors: PersistedTurnErrorDto[],
+  ) => void;
   updateCurrentTurnForThread: (
     threadId: string,
     turnId: string,
@@ -656,6 +650,10 @@ interface TimelineState {
   clearActiveTurnForThread: (threadId: string) => void;
   addSystemMessageForThread: (threadId: string, message: string, severity?: 'info' | 'warning' | 'error', turnId?: string) => void;
   addSystemErrorForThread: (threadId: string, message: string) => void;
+  upsertTurnFailureForThread: (
+    threadId: string,
+    failure: TurnFailure,
+  ) => void;
   setThreadTitleForThread: (threadId: string, title: string | null) => void;
   resolveApprovalByRequestIdForThread: (threadId: string, requestId: string | number) => void;
 }
@@ -900,6 +898,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addSystemMessage: (message, severity = 'info') => {
       const threadId = selectedThread();
       if (threadId) get().addSystemMessageForThread(threadId, message, severity);
+    },
+
+    upsertTurnFailure: (failure) => {
+      const threadId = selectedThread();
+      if (threadId) get().upsertTurnFailureForThread(threadId, failure);
     },
 
     toggleReasoning: (itemId) => {
@@ -1155,39 +1158,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     hydrateTurnErrorsForThread: (threadId, errors) => {
       if (errors.length === 0) return;
       applyThreadUpdate(threadId, (runtime) => {
-        // Build a map of turnId → error entry, deduplicating against existing timeline
-        // Dedup by turnId + content to avoid skipping same error message from different turns
-        const existingErrorKeys = new Set(
-          runtime.timeline
-            .filter((e): e is Extract<typeof e, { kind: 'system' }> => e.kind === 'system' && e.severity === 'error')
-            .map((e) => `${e.turnId ?? ''}:${e.content}`),
-        );
-        const pendingByTurn = new Map<string, { kind: 'system'; content: string; severity: 'error'; turnId: string }>();
-        for (const err of errors) {
-          const content = `Error: ${err.message}`;
-          if (!existingErrorKeys.has(`${err.turnId}:${content}`)) {
-            pendingByTurn.set(err.turnId, { kind: 'system', content, severity: 'error', turnId: err.turnId });
-          }
+        let next = runtime;
+        for (const error of errors) {
+          next = upsertRuntimeTurnFailure(
+            next,
+            normalizePersistedTurnFailure(error),
+          );
         }
-        if (pendingByTurn.size === 0) return runtime;
-
-        // Insert each error entry right after its corresponding turn
-        const timeline = [];
-        for (const entry of runtime.timeline) {
-          timeline.push(entry);
-          if (entry.kind === 'turn') {
-            const errorEntry = pendingByTurn.get(entry.turnId);
-            if (errorEntry) {
-              timeline.push(errorEntry);
-              pendingByTurn.delete(entry.turnId);
-            }
-          }
-        }
-        // Append any remaining errors whose turn wasn't found in the timeline
-        for (const entry of pendingByTurn.values()) {
-          timeline.push(entry);
-        }
-        return { ...runtime, timeline };
+        return next;
       });
     },
 
@@ -1208,9 +1186,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           // rebuilt this turn. A persisted snapshot is older than anything
           // that streamed in, so it may only fill gaps — never overwrite.
           if (entry.itemsView !== 'summary') return entry;
-          const parsed = items
-            .map(parseTurnItem)
-            .filter((item): item is TurnItem => item !== null);
+          const normalized = items.map((item, index) =>
+            normalizeThreadItem(item, true, `${turnId}:${index}`),
+          );
+          const parsed = normalized.flatMap((item) =>
+            item.kind === 'render' || item.kind === 'unknown'
+              ? [item.item]
+              : [],
+          );
           const liveItemIds = new Set(entry.items.map((item) => item.itemId));
           const restored = parsed.filter(
             (item) => !liveItemIds.has(item.itemId),
@@ -1220,7 +1203,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
             // Live items keep their position and their streamed state; the
             // snapshot only contributes what the summary view had withheld.
             items: [...restored, ...entry.items],
-            plan: entry.plan ?? parsePersistedPlan(items),
+            plan: entry.plan ?? normalizedPlan(normalized),
             // Marking it full is what stops the top-up from firing again.
             itemsView: 'full' as const,
           };
@@ -1382,6 +1365,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ],
         loading: false,
       }));
+    },
+
+    upsertTurnFailureForThread: (threadId, failure) => {
+      applyThreadUpdate(threadId, (runtime) =>
+        upsertRuntimeTurnFailure(runtime, failure),
+      );
     },
 
     setThreadTitleForThread: (threadId, title) => {

@@ -13,6 +13,23 @@ import { join } from 'node:path';
  */
 const bigintReplacer = (_key: string, value: unknown): unknown =>
   typeof value === 'bigint' ? Number(value) : value;
+
+/** Omits continuation steering and explanation text from the local wire log. */
+const auditLogReplacer = (key: string, value: unknown): unknown => {
+  if (key === 'steer' || key === 'detailedExplanation') return '[REDACTED]';
+  return bigintReplacer(key, value);
+};
+
+/** Serializes one local audit entry after removing non-loggable error detail. */
+export function serializeCodexAuditEntry(
+  dir: 'in' | 'out',
+  msg: unknown,
+): string {
+  return JSON.stringify(
+    { ts: new Date().toISOString(), dir, msg },
+    auditLogReplacer,
+  );
+}
 import type {
   InitializeParams,
   InitializeResponse,
@@ -203,10 +220,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
    */
   private writeJsonl(dir: 'in' | 'out', msg: unknown): void {
     if (this.closed) return;
-    const line = JSON.stringify(
-      { ts: new Date().toISOString(), dir, msg },
-      bigintReplacer,
-    );
+    const line = serializeCodexAuditEntry(dir, msg);
     this.jsonlStream.write(line + '\n');
   }
 
@@ -252,9 +266,9 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
         this.writeJsonl('in', message);
         this.handleMessage(message);
       } catch {
-        this.logger.warn(
-          `Failed to parse JSON-RPC message: ${trimmed.slice(0, 200)}`,
-        );
+        // Do not include the raw line: malformed error notifications can still
+        // contain explanation or continuation text that must never reach logs.
+        this.logger.warn('Failed to parse JSON-RPC message');
       }
     }
   }

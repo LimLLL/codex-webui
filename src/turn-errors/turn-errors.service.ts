@@ -1,8 +1,8 @@
 /** Persists final turn errors from Codex app-server notifications for hydration after refresh. */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
-import type { ServerNotification } from '../codex/codex-schema';
+import type { ServerNotification, v2 } from '../codex/codex-schema';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { selectProvenanceRows } from '../conversation-branches/provenance';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
@@ -11,6 +11,10 @@ import type {
   ThreadTurnErrorsResponseDto,
   PersistedTurnErrorDto,
 } from './dto/turn-error.dto';
+import {
+  toPersistableTurnError,
+  type PersistableTurnError,
+} from './turn-error-projection';
 
 @Injectable()
 export class TurnErrorsService implements OnModuleInit {
@@ -69,10 +73,10 @@ export class TurnErrorsService implements OnModuleInit {
     const turnId = params.turnId as string | undefined;
     if (!threadId || !turnId) return;
 
-    const error = params.error as { message?: string } | undefined;
-    const message = error?.message ?? 'Unknown error';
+    const error = params.error as v2.TurnError | undefined;
+    if (!error) return;
 
-    this.upsert(threadId, turnId, message);
+    this.upsert(threadId, turnId, toPersistableTurnError(error));
   }
 
   /** Handles `turn/completed` notifications with status='failed'. */
@@ -82,26 +86,43 @@ export class TurnErrorsService implements OnModuleInit {
       | {
           id?: string;
           status?: string;
-          error?: { message?: string } | null;
+          error?: v2.TurnError | null;
         }
       | undefined;
 
     if (!threadId || !turn?.id) return;
-    if (turn.status !== 'failed' || !turn.error?.message) return;
+    if (turn.status !== 'failed' || !turn.error) return;
 
-    this.upsert(threadId, turn.id, turn.error.message);
+    this.upsert(threadId, turn.id, toPersistableTurnError(turn.error));
   }
 
-  /** Upserts a turn error — last error for a given turn wins. */
-  private upsert(threadId: string, turnId: string, message: string): void {
+  /**
+   * Upserts one terminal error without letting a sparse later event erase detail.
+   *
+   * app-server commonly emits `error` before `turn/completed`. The first can
+   * carry rich misalignment detail while the terminal summary is sparse, so
+   * nullable fields use SQL COALESCE against the existing row.
+   */
+  private upsert(
+    threadId: string,
+    turnId: string,
+    error: PersistableTurnError,
+  ): void {
     try {
       const now = Date.now();
       this.db
         .insert(turnErrors)
-        .values({ threadId, turnId, message, createdAt: now })
+        .values({ threadId, turnId, ...error, createdAt: now })
         .onConflictDoUpdate({
           target: [turnErrors.threadId, turnErrors.turnId],
-          set: { message, createdAt: now },
+          set: {
+            message: error.message,
+            errorCategory: sql`coalesce(excluded.error_category, ${turnErrors.errorCategory})`,
+            additionalDetails: sql`coalesce(excluded.additional_details, ${turnErrors.additionalDetails})`,
+            misalignmentErrorType: sql`coalesce(excluded.misalignment_error_type, ${turnErrors.misalignmentErrorType})`,
+            misalignmentExplanation: sql`coalesce(excluded.misalignment_explanation, ${turnErrors.misalignmentExplanation})`,
+            createdAt: now,
+          },
         })
         .run();
     } catch (err) {
@@ -115,6 +136,10 @@ export class TurnErrorsService implements OnModuleInit {
     return {
       turnId: row.turnId,
       message: row.message,
+      errorCategory: row.errorCategory,
+      additionalDetails: row.additionalDetails,
+      misalignmentErrorType: row.misalignmentErrorType,
+      misalignmentExplanation: row.misalignmentExplanation,
       createdAt: row.createdAt,
     };
   }

@@ -10,7 +10,7 @@ import type { TurnItem } from '@/types/timeline';
 import { cn } from '@/lib/utils';
 
 interface Props {
-  items: TurnItem[];
+  items: Array<Extract<TurnItem, { type: 'mcpToolCall' }>>;
   children: ReactNode;
 }
 

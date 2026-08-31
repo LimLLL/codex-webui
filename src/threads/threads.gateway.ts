@@ -21,6 +21,7 @@ import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
+import { projectNotificationForClient } from '../turn-errors/turn-error-projection';
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 
 /** A server request held back while its thread was inside a delete. */
@@ -143,14 +144,15 @@ export class ThreadsGateway
 
     const params = notification.params as Record<string, unknown> | undefined;
     const threadId = params?.['threadId'] as string | undefined;
+    const projected = projectNotificationForClient(notification);
 
     if (threadId) {
       this.server
         .to(`thread:${threadId}`)
-        .emit('codex.notification', notification);
+        .emit('codex.notification', projected);
     } else {
       // Broadcast non-thread-scoped notifications to all connected clients
-      this.server.emit('codex.notification', notification);
+      this.server.emit('codex.notification', projected);
     }
   }
 

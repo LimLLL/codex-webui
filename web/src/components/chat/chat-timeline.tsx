@@ -43,6 +43,7 @@ import type { TimelineEntry } from '@/types/timeline';
 import { MessageVersionSwitcher } from './message-version-switcher';
 import { TurnBlock } from './turn-block';
 import { UserMessageBubble } from './user-message-bubble';
+import { TurnFailureCard } from './turn-failure-card';
 
 /** Stable empty set, so "nothing is being deleted" is referentially constant. */
 const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set<string>();
@@ -454,6 +455,10 @@ function TimelineEntryRow({
         </span>
       </div>
     );
+  }
+
+  if (entry.kind === 'turnFailure') {
+    return <TurnFailureCard failure={entry.failure} />;
   }
 
   return <TurnBlock entry={entry} />;

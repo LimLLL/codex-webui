@@ -11,7 +11,15 @@ import { useTranslation } from 'react-i18next';
 import type { TurnItem } from '@/types/timeline';
 
 interface Props {
-  item: TurnItem;
+  item: Extract<
+    TurnItem,
+    {
+      type:
+        | 'contextCompaction'
+        | 'enteredReviewMode'
+        | 'exitedReviewMode';
+    }
+  >;
 }
 
 export function TurnMarkerItem({ item }: Props) {
@@ -44,7 +52,7 @@ export function TurnMarkerItem({ item }: Props) {
  * @returns Icon component plus a display label, or an empty label to skip render
  */
 function describeMarker(
-  item: TurnItem,
+  item: Props['item'],
   t: (key: string) => string,
 ): { icon: typeof Shrink; label: string } {
   switch (item.type) {
@@ -66,7 +74,5 @@ function describeMarker(
       };
     case 'exitedReviewMode':
       return { icon: ScanText, label: t('Review finished') };
-    default:
-      return { icon: Shrink, label: '' };
   }
 }

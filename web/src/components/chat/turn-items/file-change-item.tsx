@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils';
 import { GitDiffPanel } from './git-diff-panel';
 
 interface Props {
-  item: TurnItem;
+  item: Extract<TurnItem, { type: 'fileChange' }>;
   /** Optional approval request associated with this file change. */
   approval?: ApprovalRequest;
 }

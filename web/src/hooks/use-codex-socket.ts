@@ -96,6 +96,14 @@ export function useCodexSocket(enabled = true) {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().addSystemErrorForThread(threadId, message);
       },
+      upsertTurnFailure: (failure) => {
+        const threadId = ctx.threadId;
+        if (threadId) {
+          useTimelineStore
+            .getState()
+            .upsertTurnFailureForThread(threadId, failure);
+        }
+      },
       setTokenUsage: (turnId, usage) => {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().setTokenUsageForThread(threadId, turnId, usage);

@@ -128,6 +128,13 @@ Mobile/Tablet (< lg):
 - 单个 `mcpToolCall` 不被包裹在 group 中，直接渲染为 `ToolCallItem`。
 - `commandExecution` 和 `fileChange` 不参与分组（有审批卡片、用户更关注执行细节）。
 
+## Protocol item 与失败渲染
+
+- `TurnBlock` 对内部 `TurnItem` union 做穷尽 switch，无 default fallback；未来 raw variant 的 fallback 已在 normalizer 中变成 `unknownActivity`，所以 UI 只显示协议类型与 started/completed，不序列化未知 payload。
+- hook prompt、function output、dynamic tool、collaboration tool 各自使用内容卡；sub-agent、image view、sleep 是轻量 lifecycle marker；web search 显示 query/action/result count 与少量已理解 preview；image generation 只预览 http(s) 或 image data URL，并显示 prompt/status/saved path/failure。
+- function output 的 encrypted content 只显示“不可预览”，ciphertext 不进入内部 timeline model。image path 仅作文本显示，不生成本地文件链接。
+- `TurnFailureCard` 属于 turn 级别而不是 item。message-only 旧记录显示普通失败卡；仅当 type/explanation 至少一个存在时才出现 misalignment 区块。它没有确认、continue 或 steer 控件。
+
 ## Diff 视图
 
 `@git-diff-view/react` + `@git-diff-view/shiki` 提供 GitHub 风格 diff 渲染：

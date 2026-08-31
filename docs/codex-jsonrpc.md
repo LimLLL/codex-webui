@@ -70,6 +70,7 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 - `dir: "out"` = 发往 app-server
 - `dir: "in"` = 从 app-server 接收
 - 可直接用 Python `json.loads()` 逐行解析
+- misalignment 的 `detailedExplanation` 与 continuation `steer` 在写入前替换为 `[REDACTED]`；解析失败日志也不回显原始行，避免这两类 live-only 内容绕过结构化日志脱敏。
 
 ## 初始化握手
 

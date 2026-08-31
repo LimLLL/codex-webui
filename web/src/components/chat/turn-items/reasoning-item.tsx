@@ -5,7 +5,7 @@ import { useTimelineStore } from '@/stores/timeline-store';
 import type { TurnItem } from '@/types/timeline';
 
 interface Props {
-  item: TurnItem;
+  item: Extract<TurnItem, { type: 'reasoning' }>;
 }
 
 export function ReasoningItem({ item }: Props) {

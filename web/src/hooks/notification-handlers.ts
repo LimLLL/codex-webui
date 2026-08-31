@@ -14,7 +14,7 @@ import {
   threadCommandsReadGoalQueryKey,
   threadsListThreadsQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
-import type { FileUpdateChangeDto, RateLimitSnapshotDto } from '@/generated/api';
+import type { RateLimitSnapshotDto } from '@/generated/api';
 import {
   invalidateBranchTreesSoon,
   invalidateThreadListSoon,
@@ -28,6 +28,11 @@ import type { ThreadTokenUsage, ThreadStatusType } from '@/types/codex-notificat
 import type { McpServerStartupState } from '@/types/mcp';
 import type { TurnItem, TurnPlanState, TurnPlanStepStatus } from '@/types/timeline';
 import type { ApprovalRequest } from '@/types/approval';
+import {
+  mergeTurnItem,
+  normalizeThreadItem,
+} from '@/lib/thread-item-normalizer';
+import { normalizeLiveTurnFailure } from '@/lib/turn-failure';
 import i18n from '@/i18n';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +81,9 @@ export interface NotificationContext {
   addApproval: (approval: ApprovalRequest) => void;
   addSystemMessage: (message: string, severity?: 'info' | 'warning' | 'error', turnId?: string) => void;
   addSystemError: (message: string) => void;
+  upsertTurnFailure: (
+    failure: ReturnType<typeof normalizeLiveTurnFailure>,
+  ) => void;
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatus: (status: ThreadStatusType | null) => void;
   setActiveTurnId: (turnId: string | null) => void;
@@ -103,9 +111,6 @@ function hasThreadScope(params: Params, ctx: NotificationContext): boolean {
 
 const recentErrors = new Map<string, number>();
 const DEDUP_WINDOW_MS = 5_000;
-/** Tracks final error system entries to avoid duplicates from error + turn/completed. */
-const finalErrorEntries = new Set<string>();
-const MAX_FINAL_ERROR_ENTRIES = 500;
 
 function isDuplicateRetryError(key: string): boolean {
   const now = Date.now();
@@ -117,19 +122,6 @@ function isDuplicateRetryError(key: string): boolean {
   }
   return false;
 }
-
-/** Returns true only on first call per unique error — deduplicates error + turn/completed. */
-function shouldRecordFinalError(threadId: string | undefined, turnId: string | undefined, message: string): boolean {
-  const key = `${threadId ?? ''}:${turnId ?? ''}:${message}`;
-  if (finalErrorEntries.has(key)) return false;
-  if (finalErrorEntries.size >= MAX_FINAL_ERROR_ENTRIES) {
-    const first = finalErrorEntries.values().next().value;
-    if (first !== undefined) finalErrorEntries.delete(first);
-  }
-  finalErrorEntries.add(key);
-  return true;
-}
-
 
 let invalidateMcpTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -172,7 +164,9 @@ const handleReasoningSummaryTextDelta: Handler = (params, ctx) => {
   ctx.updateTurnItem(turnId, itemId, (existing) => ({
     type: 'reasoning',
     itemId,
-    content: (existing?.content ?? '') + (delta ?? ''),
+    content:
+      (existing?.type === 'reasoning' ? existing.content : '') +
+      (delta ?? ''),
     completed: false,
   }));
   ctx.expandReasoning(itemId);
@@ -184,7 +178,9 @@ const handleAgentMessageDelta: Handler = (params, ctx) => {
   ctx.updateTurnItem(turnId, itemId, (existing) => ({
     type: 'agentMessage',
     itemId,
-    content: (existing?.content ?? '') + (delta ?? ''),
+    content:
+      (existing?.type === 'agentMessage' ? existing.content : '') +
+      (delta ?? ''),
     completed: false,
   }));
 };
@@ -193,8 +189,12 @@ const handleCommandExecutionOutputDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
   ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing ?? { type: 'commandExecution' as const, itemId }),
-    content: (existing?.content ?? '') + (delta ?? ''),
+    ...(existing?.type === 'commandExecution'
+      ? existing
+      : { type: 'commandExecution' as const, itemId, content: '' }),
+    content:
+      (existing?.type === 'commandExecution' ? existing.content : '') +
+      (delta ?? ''),
     completed: false,
   }));
 };
@@ -203,8 +203,12 @@ const handleFileChangeOutputDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
   ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing ?? { type: 'fileChange' as const, itemId }),
-    content: (existing?.content ?? '') + (delta ?? ''),
+    ...(existing?.type === 'fileChange'
+      ? existing
+      : { type: 'fileChange' as const, itemId, content: '' }),
+    content:
+      (existing?.type === 'fileChange' ? existing.content : '') +
+      (delta ?? ''),
     completed: false,
   }));
 };
@@ -221,56 +225,13 @@ const handleItemStarted: Handler = (params, ctx) => {
   if (!turnId || !hasThreadScope(params, ctx)) return;
   const item = params.item as Record<string, unknown> | undefined;
   if (!item) return;
-  const id = item.id as string;
-
-  if (item.type === 'mcpToolCall') {
-    ctx.updateTurnItem(turnId, id, () => ({
-      type: 'mcpToolCall',
-      itemId: id,
-      content: '',
-      completed: false,
-      toolServer: (item.server as string) ?? '',
-      toolName: (item.tool as string) ?? '',
-      toolArgs: item.arguments ? JSON.stringify(item.arguments, null, 2) : '',
-    }));
-  }
-  if (item.type === 'fileChange') {
-    const changes = item.changes as FileUpdateChangeDto[] | undefined;
-    ctx.updateTurnItem(turnId, id, () => ({
-      type: 'fileChange',
-      itemId: id,
-      content: '',
-      completed: false,
-      filePath: changes?.[0]?.path ?? '',
-      fileDiff: changes?.[0]?.diff ?? '',
-    }));
-  }
-  if (item.type === 'commandExecution') {
-    ctx.updateTurnItem(turnId, id, () => ({
-      type: 'commandExecution',
-      itemId: id,
-      content: '',
-      completed: false,
-      command: (item.command as string) ?? '',
-    }));
-  }
-  // Compaction can start on its own (auto-compact) as well as from /compact,
-  // so the timeline has to show it regardless of who triggered it.
-  if (item.type === 'contextCompaction') {
-    ctx.updateTurnItem(turnId, id, () => ({
-      type: 'contextCompaction',
-      itemId: id,
-      content: '',
-      completed: false,
-    }));
-  }
-  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
-    ctx.updateTurnItem(turnId, id, () => ({
-      type: item.type as 'enteredReviewMode' | 'exitedReviewMode',
-      itemId: id,
-      content: (item.review as string) ?? '',
-      completed: false,
-    }));
+  const itemId =
+    (params.itemId as string | undefined) ??
+    (item.id as string | undefined) ??
+    '';
+  const normalized = normalizeThreadItem(item, false, itemId);
+  if (normalized.kind === 'render' || normalized.kind === 'unknown') {
+    ctx.updateTurnItem(turnId, normalized.item.itemId, () => normalized.item);
   }
 };
 
@@ -279,86 +240,25 @@ const handleItemCompleted: Handler = (params, ctx) => {
   if (!turnId || !hasThreadScope(params, ctx)) return;
   const item = params.item as Record<string, unknown> | undefined;
   if (!item) return;
-  const completedItemId = (params.itemId as string) ?? (item.id as string);
-
-  if (item.type === 'agentMessage') {
-    ctx.updateTurnItem(turnId, completedItemId, () => ({
-      type: 'agentMessage',
-      itemId: completedItemId,
-      content: (item.text as string) ?? '',
-      completed: true,
-    }));
-  }
-  if (item.type === 'reasoning') {
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? { type: 'reasoning' as const, itemId: completedItemId, content: '' }),
-      completed: true,
-    }));
-    ctx.collapseReasoning(completedItemId);
-  }
-  if (item.type === 'commandExecution') {
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? { type: 'commandExecution' as const, itemId: completedItemId, content: '' }),
-      content: (item.aggregatedOutput as string) || existing?.content || '',
-      command: (item.command as string) || existing?.command,
-      exitCode: (item.exitCode as number) ?? existing?.exitCode,
-      completed: true,
-    }));
-  }
-  if (item.type === 'mcpToolCall') {
-    const result = item.result as Record<string, unknown> | null;
-    const resultText = result?.content
-      ? JSON.stringify(result.content, null, 2).slice(0, 500)
-      : ((item.error as string) ?? '');
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? {
-        type: 'mcpToolCall' as const,
-        itemId: completedItemId,
-        toolServer: (item.server as string) ?? '',
-        toolName: (item.tool as string) ?? '',
-        toolArgs: '',
-      }),
-      content: resultText,
-      completed: true,
-    }));
-  }
-  if (item.type === 'fileChange') {
-    const changes = item.changes as FileUpdateChangeDto[] | undefined;
-    const firstChange = changes?.[0];
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? { type: 'fileChange' as const, itemId: completedItemId }),
-      content: existing?.content ?? '',
-      completed: true,
-      filePath: existing?.filePath ?? firstChange?.path ?? '',
-      fileDiff: firstChange?.diff || existing?.fileDiff || '',
-    }));
-  }
-  if (item.type === 'contextCompaction') {
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? {
-        type: 'contextCompaction' as const,
-        itemId: completedItemId,
-        content: '',
-      }),
-      completed: true,
-    }));
-  }
-  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
-    ctx.updateTurnItem(turnId, completedItemId, (existing) => ({
-      ...(existing ?? {
-        type: item.type as 'enteredReviewMode' | 'exitedReviewMode',
-        itemId: completedItemId,
-      }),
-      content: (item.review as string) || existing?.content || '',
-      completed: true,
-    }));
+  const completedItemId =
+    (params.itemId as string | undefined) ??
+    (item.id as string | undefined) ??
+    '';
+  const normalized = normalizeThreadItem(item, true, completedItemId);
+  if (normalized.kind === 'render' || normalized.kind === 'unknown') {
+    ctx.updateTurnItem(turnId, normalized.item.itemId, (existing) =>
+      mergeTurnItem(existing, normalized.item),
+    );
+    if (normalized.item.type === 'reasoning') {
+      ctx.collapseReasoning(normalized.item.itemId);
+    }
   }
 };
 
 /** turn/completed payload is { threadId, turn: { id, status, error } }. */
 const handleTurnCompleted: Handler = (params, ctx) => {
   const turn = params.turn as
-    | { id?: string; status?: string; error?: { message?: string } | null }
+    | { id?: string; status?: string; error?: Record<string, unknown> | null }
     | undefined;
   const turnId = turn?.id;
   if (!turnId) return;
@@ -373,12 +273,8 @@ const handleTurnCompleted: Handler = (params, ctx) => {
   ctx.setLoading(false);
   ctx.clearActiveTurn();
 
-  if (
-    turn?.status === 'failed' &&
-    turn.error?.message &&
-    shouldRecordFinalError(params.threadId as string | undefined, turnId, turn.error.message)
-  ) {
-    ctx.addSystemMessage(`Error: ${turn.error.message}`, 'error', turnId);
+  if (turn.status === 'failed' && turn.error) {
+    ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, turn.error));
   }
 
   void ctx.queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
@@ -429,11 +325,12 @@ const handleThreadGoalChanged: Handler = (params, ctx) => {
 // ---------------------------------------------------------------------------
 
 const handleError: Handler = (params, ctx) => {
-  const error = params.error as { message?: string; additionalDetails?: string } | undefined;
+  const error = params.error as Record<string, unknown> | undefined;
   const willRetry = params.willRetry as boolean;
   const turnId = params.turnId as string | undefined;
   const threadId = params.threadId as string | undefined;
-  const message = error?.message ?? 'Unknown error';
+  const message =
+    typeof error?.message === 'string' ? error.message : 'Unknown error';
 
   if (willRetry) {
     const dedupKey = `${threadId}:${turnId}:${message}`;
@@ -443,10 +340,8 @@ const handleError: Handler = (params, ctx) => {
   } else {
     if (ctx.threadId === threadId) {
       showSnackbar(message, 'error', 5000);
-      if (shouldRecordFinalError(threadId, turnId, message)) {
-        ctx.addSystemMessage(`Error: ${message}`, 'error', turnId);
-      }
       if (turnId) {
+        ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, error));
         ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
       }
       ctx.setLoading(false);
@@ -514,7 +409,9 @@ const handleMcpToolCallProgress: Handler = (params, ctx) => {
   };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
   ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing ?? {
+    ...(existing?.type === 'mcpToolCall'
+      ? existing
+      : {
       type: 'mcpToolCall' as const,
       itemId,
       content: '',
@@ -522,7 +419,7 @@ const handleMcpToolCallProgress: Handler = (params, ctx) => {
       toolServer: '',
       toolName: '',
       toolArgs: '',
-    }),
+        }),
     toolProgress: message ?? '',
   }));
 };

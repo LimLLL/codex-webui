@@ -220,8 +220,117 @@ describe('on-demand turn item top-up', () => {
     const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
     const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
     expect(
-      turnEntry.kind === 'turn' && turnEntry.items[0]?.content,
+      turnEntry.kind === 'turn' &&
+        turnEntry.items[0]?.type === 'agentMessage' &&
+        turnEntry.items[0].content,
     ).toBe('reply');
+  });
+});
+
+describe('structured turn failures', () => {
+  it('hydrates a legacy message-only row as an ordinary failure', () => {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hello')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    useTimelineStore.getState().hydrateTurnErrorsForThread('t1', [
+      {
+        turnId: 'turn-1',
+        message: 'legacy failure',
+        errorCategory: null,
+        additionalDetails: null,
+        misalignmentErrorType: null,
+        misalignmentExplanation: null,
+        createdAt: 1,
+      },
+    ]);
+
+    const failure = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turnFailure');
+    expect(failure).toMatchObject({
+      kind: 'turnFailure',
+      turnId: 'turn-1',
+      failure: {
+        message: 'legacy failure',
+        misalignmentErrorType: null,
+        misalignmentExplanation: null,
+      },
+    });
+  });
+
+  it('does not let a sparse later failure erase hydrated detail', () => {
+    useTimelineStore.getState().hydrateTurnErrorsForThread('t1', [
+      {
+        turnId: 'turn-1',
+        message: 'rich failure',
+        errorCategory: 'misalignmentPolicyViolation',
+        additionalDetails: 'more detail',
+        misalignmentErrorType: 'policy',
+        misalignmentExplanation: 'explanation',
+        createdAt: 1,
+      },
+    ]);
+    useTimelineStore.getState().upsertTurnFailureForThread('t1', {
+      turnId: 'turn-1',
+      message: 'terminal summary',
+      errorCategory: null,
+      additionalDetails: null,
+      misalignmentErrorType: null,
+      misalignmentExplanation: null,
+    });
+
+    const failure = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turnFailure');
+    expect(failure).toMatchObject({
+      failure: {
+        message: 'terminal summary',
+        errorCategory: 'misalignmentPolicyViolation',
+        additionalDetails: 'more detail',
+        misalignmentErrorType: 'policy',
+        misalignmentExplanation: 'explanation',
+      },
+    });
+  });
+});
+
+describe('late sub-agent activity', () => {
+  it('attaches to a parent turn that is already complete', () => {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hello')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    useTimelineStore
+      .getState()
+      .updateTurnItemForThread('t1', 'turn-1', 'activity-1', () => ({
+        type: 'subAgentActivity',
+        itemId: 'activity-1',
+        completed: true,
+        activityKind: 'completed',
+        agentThreadId: 'child',
+        agentPath: '/root/child',
+      }));
+
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn).toMatchObject({
+      completed: true,
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'subAgentActivity',
+          itemId: 'activity-1',
+        }),
+      ]),
+    });
   });
 });
 

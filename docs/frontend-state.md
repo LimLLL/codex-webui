@@ -44,6 +44,7 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 ```ts
 | { kind: 'user'; content: string; images?: string[]; turnId?: string }
 | { kind: 'system'; content: string }
+| { kind: 'turnFailure'; turnId; failure } // terminal error + optional persisted detail
 | { kind: 'turn'; turnId; items; completed; diff? }  // diff = turn-level unified diff
 ```
 
@@ -51,20 +52,9 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 
 ### TurnItem 类型
 
-```ts
-{
-  type: 'reasoning' | 'agentMessage' | 'mcpToolCall' | 'commandExecution' | 'fileChange';
-  itemId: string;
-  content: string;
-  completed: boolean;
-  toolName?: string;    // mcpToolCall only
-  toolServer?: string;  // mcpToolCall only
-  toolArgs?: string;    // mcpToolCall only
-  filePath?: string;    // fileChange only
-  command?: string;     // commandExecution only
-  exitCode?: number;    // commandExecution only
-}
-```
+`TurnItem` 是 discriminated union，不再用一组跨类型 optional 字段表达。内部覆盖当前 17 个可渲染分支：既有 reasoning/message/MCP/command/file/review/compaction，加上 hook prompt、standalone function output、dynamic tool、collaboration、sub-agent activity、web search、image view、sleep、image generation，以及 `unknownActivity` 安全 fallback。
+
+`lib/thread-item-normalizer.ts` 是 live `item/{started,completed}` 与 persisted history/top-up 的唯一纯归一化入口。结果显式区分 render、unknown、userMessage、plan、invalid；未来协议类型被转换成只含 `protocolType`、`itemId`、`completed` 的 `unknownActivity`，原 payload 不进入页面。renderer 对内部 union 穷尽 switch，无 catch-all，因此新增内部分支却没 UI 会在编译期失败。结构化 function output 的 encrypted branch 只保留“已加密”标记，不保留 ciphertext。
 
 ### Actions
 
@@ -87,6 +77,7 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 | `expandReasoning` | socket hook | 流式 reasoning 时自动展开 |
 | `collapseReasoning` | socket hook | reasoning 完成时自动折叠 |
 | `setLoading` | socket hook | turn/completed 时设 false |
+| `upsertTurnFailure` | socket / persistence hydration | 按 turnId 插入或合并结构化失败；稀疏终止通知不会清掉更早的丰富字段 |
 
 ### 订阅清理
 
@@ -118,9 +109,10 @@ Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，
 打开线程只返回最近一页 turns，用 `turnsToTimeline()` 转换为 TimelineEntry 数组；更早的历史由 `historyCursor` 按需拉取并 `prependHistoryForThread` 前插（按 turnId 去重，游标页含锚点行，重试会重叠）:
 
 - `userMessage` → `{ kind: 'user', turnId: turn.id }`
-- `reasoning` → TurnItem (content = summary.join)
-- `agentMessage` → TurnItem (content = text)
-- `mcpToolCall` → TurnItem (with toolServer/toolName/toolArgs)
+- 每个 raw item 与 live 通知共用 `normalizeThreadItem()`；所有已知 variant 在刷新前后保持同一内部形状
+- `userMessage` / `plan` 走 dedicated outcome，分别进入 user entry / plan panel
+- 未知 variant → 可见 `unknownActivity`，只显示类型与 lifecycle
+- failed turn → `turnFailure`；随后本地 `/turn-errors` hydration 合并保留的 category、additional details 与 misalignment explanation
 
 ## files-store
 

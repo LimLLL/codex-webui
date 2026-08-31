@@ -154,7 +154,7 @@
 - [x] DatabaseModule（非全局）+ DRIZZLE_DB provider + drizzle-kit 标准迁移（启动时自动执行）。
 - [x] DB 路径：`WEBUI_DB_PATH` > `CODEX_HOME/codex-webui.sqlite` > `~/.codex/codex-webui.sqlite`。WAL + busy_timeout=5000。
 - [x] TokenUsageService 后端拦截 `thread/tokenUsage/updated` 通知 → upsert。`GET /api/threads/:threadId/token-usage` 前端 hydrate。
-- [x] TurnErrorsService 后端拦截 final `error` / failed `turn/completed` 通知 → upsert。`GET /api/threads/:threadId/turn-errors` 前端 hydrate，按 turnId 插入对应 turn 后方。
+- [x] TurnErrorsService 后端拦截 final `error` / failed `turn/completed` 通知 → upsert message/category/additional details/misalignment type+explanation；nullable 字段用保富合并，后到的稀疏 terminal event 不清空详情。`GET /api/threads/:threadId/turn-errors` 前端 hydrate 结构化失败卡，continuation steer 不入库/浏览器/日志。
 - [x] ConversationBranchesService 持久化消息级分支 groups/versions/edges；token usage、turn diff、turn errors 读取时按 root→current provenance 继承，并由 edge 上的 `inheritedTurnIds` 限定边界（否则分支会读到父在分叉点之后产生的数据）。
 - [ ] 可选扩展：持久化 thread 级累积 token usage 等实时数据，减少对通知丢失的依赖。
 
@@ -223,6 +223,7 @@
 
 ### Bug Fixes
 
+- [x] Issue #6 ThreadItem 可见性与 misalignment：OpenAPI/SDK 补齐 19 个 item union 与错误详情；live/history 共用纯 normalizer，九个此前丢失的 variants 均有专用 renderer，未来 variant 降级为只含类型/lifecycle 的可见 fallback；misalignment explanation 本地持久化并在刷新后恢复，无 continuation UI。
 - [x] Codex 0.151.0 空 paginated thread 拒绝语义修正：同一状态在三个 history 方法上有三种 code + 文案，按 method + code + pinned wording 分别分类 `thread/items/list` / `thread/turns/list` / `thread/read(includeTurns)`；单 turn items 返回 `[]` 并 warning，不再用 full-detail turn pages 做不可达兼容 fallback。
 - [x] 0.151.0 fork metadata-only + provenance 原子切片：普通 fork 与消息分支均传 `excludeTurns:true`，用 `itemsView:notLoaded` 完整发现/校验 child turn IDs，provenance edge 提交前才允许补偿删除、提交后绝不删 child。普通 fork 现在写 topology-only local edge，修复 token usage 靠 server replay 重复落 child 行、turn diff / turn error 从来不继承的既有缺陷。
 - [x] `writeStdin` 审批身份与归属：共享 parser 保留 protocol `kind` / `approvalId`，approval store 改按 JSON-RPC requestId 索引，同 item 多回调不覆盖；按 callback turn 渲染 Terminal Input Approval，不修改更早 command 的 lifecycle。

@@ -90,7 +90,7 @@
 | POST   | `/api/threads/:threadId/turns/:turnId/interrupt` | ThreadsController         | 中断进行中的 turn                                                                                                    |
 | GET    | `/api/threads/:threadId/token-usage`             | TokenUsageController      | 按分支 provenance 读取 token usage                                                                                   |
 | GET    | `/api/threads/:threadId/turn-diffs`              | TurnDiffController        | 按分支 provenance 读取持久化 turn diff                                                                               |
-| GET    | `/api/threads/:threadId/turn-errors`             | TurnErrorsController      | 读取持久化 turn 错误，页面刷新后恢复失败提示                                                                         |
+| GET    | `/api/threads/:threadId/turn-errors`             | TurnErrorsController      | 按 provenance 读取持久化 turn 错误；除 message 外返回 nullable category/additionalDetails/misalignment type+explanation，页面刷新后恢复结构化失败提示。continuation steer 不入库也不出现在响应中 |
 
 ### Chat
 

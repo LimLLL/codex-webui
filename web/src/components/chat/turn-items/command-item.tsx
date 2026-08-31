@@ -9,7 +9,7 @@ import type { TurnItem } from '@/types/timeline';
 import { cn } from '@/lib/utils';
 
 interface Props {
-  item: TurnItem;
+  item: Extract<TurnItem, { type: 'commandExecution' }>;
 }
 
 /** Threshold (in chars) above which the command is collapsed by default. */

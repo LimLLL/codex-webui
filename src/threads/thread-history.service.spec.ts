@@ -90,6 +90,37 @@ describe('ThreadHistoryService', () => {
     });
   });
 
+  it('removes misalignment steering from paged history', async () => {
+    mockCodex.request.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'turn-1',
+          items: [],
+          status: 'failed',
+          error: {
+            message: 'blocked',
+            codexErrorInfo: 'misalignmentPolicyViolation',
+            additionalDetails: null,
+            misalignment: {
+              errorType: 'policy',
+              detailedExplanation: 'display this',
+              steer: { message: 'do not send this' },
+            },
+          },
+        },
+      ],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+
+    const page = await service.listTurns({ threadId: 't1' });
+
+    expect(page.data[0]?.error?.misalignment).toEqual({
+      errorType: 'policy',
+      detailedExplanation: 'display this',
+    });
+  });
+
   it('returns unknown count when a graph node cannot be counted', async () => {
     mockCodex.request.mockRejectedValue(new Error('gone'));
 

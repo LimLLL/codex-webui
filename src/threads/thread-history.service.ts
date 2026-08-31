@@ -7,12 +7,16 @@ import {
   isUnmaterializedTurnsListError,
 } from './thread-errors';
 import { assertPaginatedThread } from './thread-history-mode';
+import {
+  projectTurnForClient,
+  type ClientTurn,
+} from '../turn-errors/turn-error-projection';
 
 export type TurnItemsView = 'notLoaded' | 'summary' | 'full';
 export type SortDirection = 'asc' | 'desc';
 
 export interface TurnsPage {
-  data: v2.Turn[];
+  data: ClientTurn[];
   nextCursor: string | null;
   backwardsCursor: string | null;
 }
@@ -399,7 +403,7 @@ export class ThreadHistoryService {
     const record = this.asRecord(value);
     const data = Array.isArray(record.data) ? record.data : [];
     return {
-      data: data as v2.Turn[],
+      data: data.map((turn) => projectTurnForClient(turn as v2.Turn)),
       nextCursor: this.nullableString(record.nextCursor),
       backwardsCursor: this.nullableString(record.backwardsCursor),
     };

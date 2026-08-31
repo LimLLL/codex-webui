@@ -2,7 +2,7 @@
 
 ## 概述
 
-后端 ThreadsGateway (Socket.IO, namespace `/ws`) 接收 Codex app-server 的通知，按 threadId 路由到订阅了该 thread 的前端客户端。后端保持透明代理，不做归一化；所有通知分发和处理在前端 dispatcher 完成。
+后端 ThreadsGateway (Socket.IO, namespace `/ws`) 接收 Codex app-server 的通知，按 threadId 路由到订阅了该 thread 的前端客户端。通常保持透明；唯一内容投影是 `error` / failed `turn/completed` 的 misalignment detail：保留分类与解释、删除 continuation `steer`，再交给前端 dispatcher。
 
 ## 事件流向
 
@@ -39,13 +39,13 @@ codex app-server (stdout JSONL)
 
 | 事件 | Payload | 作用 |
 |------|---------|------|
-| `codex.notification` | 原始 Codex notification | 所有通知统一事件名 |
+| `codex.notification` | Codex notification（turn error 已去 steer） | 所有通知统一事件名 |
 | `codex.serverRequest` | `{ id, method, params }` | 需要前端回复的请求 |
 | `fs.changed` | `{ event, path }` | 文件变更通知 (add/change/unlink/addDir/unlinkDir) |
 | `terminal.output` | `{ terminalId, data }` | PTY 输出 |
 | `terminal.exit` | `{ terminalId, exitCode }` | PTY 进程退出 |
 
-`thread/settings/updated`、`thread/goal/updated`、`thread/goal/cleared` 以及 inline review 产生的 `turn/*` / `item/*` notification 走同一个 `codex.notification` 通道，按 `params.threadId` 投递到对应 room。后端不额外归一化这些事件。
+`thread/settings/updated`、`thread/goal/updated`、`thread/goal/cleared` 以及 inline review 产生的 `turn/*` / `item/*` notification 走同一个 `codex.notification` 通道，按 `params.threadId` 投递到对应 room。除上述错误投影外，后端不改写事件。
 
 ## Notification Dispatcher 架构
 
@@ -59,16 +59,15 @@ codex app-server (stdout JSONL)
 | `item/agentMessage/delta` | 追加 agent 回答文本（打字机效果）|
 | `item/commandExecution/outputDelta` | 追加命令输出 |
 | `item/fileChange/outputDelta` | 追加文件变更 patch 内容 |
-| `item/started` (mcpToolCall/fileChange/commandExecution) | 创建占位 item |
-| `item/completed` (各类型) | 校准最终内容 |
+| `item/started` / `item/completed` | 共用纯 `normalizeThreadItem`；覆盖全部 19 个 protocol item（user/plan 为 dedicated outcome），未知类型产生安全可见 fallback |
 | `turn/diff/updated` | 更新 turn 级别聚合 diff |
-| `turn/completed` | 标记 turn 完成, 停止 loading, 失效 thread list |
+| `turn/completed` | 标记 turn 完成；failed 时 upsert 结构化 TurnFailure；停止 loading，失效 thread list |
 
 ### Tier 1 — 高价值通知
 
 | Method | 处理逻辑 |
 |--------|----------|
-| `error` | willRetry=true → warning toast（去重）; false → error toast + 系统条目 + 停止 loading |
+| `error` | willRetry=true → warning toast（去重）；false → error toast + 结构化 TurnFailure upsert + 停止 loading。后续稀疏 terminal event 不会抹掉详情 |
 | `thread/tokenUsage/updated` | 存储 per-turn 用量，更新 latest（驱动 ChatInput 圆环 + turn footer）|
 | `serverRequest/resolved` | 按 requestId 校准 approval 状态为 resolved，支持乱序到达 |
 | `configWarning` | warning toast（summary + details）|

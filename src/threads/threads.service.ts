@@ -42,6 +42,10 @@ import {
   ThreadsOverviewService,
   type ThreadOverviewParams,
 } from './threads-overview.service';
+import {
+  projectThreadReadForClient,
+  type ClientThreadReadResponse,
+} from '../turn-errors/turn-error-projection';
 
 /** Maximum ancestors walked when a fork chain is not locally tracked. */
 const MAX_FORK_CHAIN_WALK = 32;
@@ -153,7 +157,7 @@ export class ThreadsService {
   async readThread(
     threadId: string,
     includeTurns = false,
-  ): Promise<v2.ThreadReadResponse> {
+  ): Promise<ClientThreadReadResponse> {
     let response: v2.ThreadReadResponse;
     try {
       response = await this.codex.request<v2.ThreadReadResponse>(
@@ -172,7 +176,7 @@ export class ThreadsService {
       response = { thread: { ...metadata.thread, turns: [] } };
     }
     assertPaginatedThread(response.thread, 'thread/read');
-    return response;
+    return projectThreadReadForClient(response);
   }
 
   /**

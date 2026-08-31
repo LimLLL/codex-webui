@@ -14,6 +14,20 @@ import { ToolCallItem } from './turn-items/tool-call-item';
 import { CommandItem } from './turn-items/command-item';
 import { FileChangeItem } from './turn-items/file-change-item';
 import { TurnMarkerItem } from './turn-items/turn-marker-item';
+import {
+  CollabAgentToolCallItem,
+  DynamicToolCallItem,
+  FunctionCallOutputItem,
+  HookPromptItem,
+} from './turn-items/tool-activity-items';
+import {
+  ImageGenerationItem,
+  ImageViewItem,
+  SleepItem,
+  SubAgentActivityItem,
+  UnknownActivityItem,
+  WebSearchItem,
+} from './turn-items/rich-activity-items';
 import { useTurnItemsTopUp } from '@/hooks/use-turn-items-topup';
 import { DiffViewer } from './turn-items/diff-viewer';
 import { ToolCallGroup } from './turn-items/tool-call-group';
@@ -27,12 +41,15 @@ import { useTimelineStore } from '@/stores/timeline-store';
 
 type GroupedEntry =
   | { kind: 'single'; item: TurnItem }
-  | { kind: 'toolGroup'; items: TurnItem[] };
+  | {
+      kind: 'toolGroup';
+      items: Array<Extract<TurnItem, { type: 'mcpToolCall' }>>;
+    };
 
 /** Groups consecutive mcpToolCall items so they can be rendered in a collapsible block. */
 function groupConsecutiveToolCalls(items: TurnItem[]): GroupedEntry[] {
   const result: GroupedEntry[] = [];
-  let buffer: TurnItem[] = [];
+  let buffer: Array<Extract<TurnItem, { type: 'mcpToolCall' }>> = [];
 
   const flush = () => {
     if (buffer.length === 0) return;
@@ -59,6 +76,12 @@ function groupConsecutiveToolCalls(items: TurnItem[]): GroupedEntry[] {
 
 interface Props {
   entry: Extract<TimelineEntry, { kind: 'turn' }>;
+}
+
+/** Compile-time exhaustiveness guard for the internal item union. */
+function assertNever(value: never): never {
+  void value;
+  throw new Error('Unhandled normalized turn item');
 }
 
 /**
@@ -147,7 +170,78 @@ function ItemWithRequests({
           {inputCard}
         </>
       );
+    case 'hookPrompt':
+      return (
+        <>
+          <HookPromptItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'functionCallOutput':
+      return (
+        <>
+          <FunctionCallOutputItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'dynamicToolCall':
+      return (
+        <>
+          <DynamicToolCallItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'collabAgentToolCall':
+      return (
+        <>
+          <CollabAgentToolCallItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'subAgentActivity':
+      return (
+        <>
+          <SubAgentActivityItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'webSearch':
+      return (
+        <>
+          <WebSearchItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'imageView':
+      return (
+        <>
+          <ImageViewItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'sleep':
+      return (
+        <>
+          <SleepItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'imageGeneration':
+      return (
+        <>
+          <ImageGenerationItem item={item} />
+          {inputCard}
+        </>
+      );
+    case 'unknownActivity':
+      return (
+        <>
+          <UnknownActivityItem item={item} />
+          {inputCard}
+        </>
+      );
   }
+  return assertNever(item);
 }
 
 export function TurnBlock({ entry }: Props) {
