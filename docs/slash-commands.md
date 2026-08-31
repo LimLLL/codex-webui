@@ -208,6 +208,11 @@ Three constraints keep the top-up from doing damage:
 - **Follow the cursor.** `thread/items/list` stays paged even when filtered to
   one turn, so reading a single page would silently truncate a long turn and —
   since the result is then marked `full` — never retry.
+- **Empty-thread refusal is empty, not a compatibility fallback.** Pinned
+  0.151.0 returns `-32601 thread/items/list is not supported yet` before the
+  first user message. The backend matches method + code + exact wording,
+  records a warning because the sentence is also used for a store without item
+  pagination, and returns `[]`. It never walks full-detail turn pages.
 
 A turn that is genuinely empty in summary view still gets a timeline entry so
 the top-up has somewhere to mount, but renders nothing until it has content;

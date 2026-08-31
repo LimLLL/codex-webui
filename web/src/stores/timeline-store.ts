@@ -431,14 +431,19 @@ function bindPendingUserMessage(
   return next;
 }
 
-/** After hydration, preserve turn entries for pending user-input requests. */
-function ensureUserInputTurnEntries(
+/** After hydration, preserve turn entries for blocking request-only cards. */
+function ensureRequestTurnEntries(
   timeline: TimelineEntry[],
-  requests: Record<string, UserInputRequest>,
+  approvals: Record<string, ApprovalRequest>,
+  userInputs: Record<string, UserInputRequest>,
 ): TimelineEntry[] {
-  return Object.values(requests).reduce(
-    (next, req) => ensureTurnEntry(next, req.turnId),
+  const withApprovals = Object.values(approvals).reduce(
+    (next, approval) => ensureTurnEntry(next, approval.turnId),
     timeline,
+  );
+  return Object.values(userInputs).reduce(
+    (next, request) => ensureTurnEntry(next, request.turnId),
+    withApprovals,
   );
 }
 
@@ -589,7 +594,7 @@ interface TimelineState {
   collapseReasoning: (itemId: string) => void;
   addApproval: (approval: ApprovalRequest) => void;
   addUserInputRequest: (request: UserInputRequest) => void;
-  resolveApproval: (itemId: string, decision: ResolvableApprovalDecision) => void;
+  resolveApproval: (requestId: string | number, decision: ResolvableApprovalDecision) => void;
   resolveUserInputRequest: (requestId: string | number) => void;
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatus: (status: ThreadStatusType | null) => void;
@@ -643,7 +648,7 @@ interface TimelineState {
   setLoadingForThread: (threadId: string, loading: boolean) => void;
   addApprovalForThread: (threadId: string, approval: ApprovalRequest) => void;
   addUserInputRequestForThread: (threadId: string, request: UserInputRequest) => void;
-  resolveApprovalForThread: (threadId: string, itemId: string, decision: ResolvableApprovalDecision) => void;
+  resolveApprovalForThread: (threadId: string, requestId: string | number, decision: ResolvableApprovalDecision) => void;
   resolveUserInputRequestForThread: (threadId: string, requestId: string | number) => void;
   setTokenUsageForThread: (threadId: string, turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatusForThread: (threadId: string, status: ThreadStatusType | null) => void;
@@ -962,9 +967,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addUserInputRequest: (request) =>
       get().addUserInputRequestForThread(request.threadId, request),
 
-    resolveApproval: (itemId, decision) => {
+    resolveApproval: (requestId, decision) => {
       const threadId = selectedThread();
-      if (threadId) get().resolveApprovalForThread(threadId, itemId, decision);
+      if (threadId) get().resolveApprovalForThread(threadId, requestId, decision);
     },
 
     resolveUserInputRequest: (requestId) => {
@@ -1012,8 +1017,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ...runtime,
         threadCwd: cwd ?? runtime.threadCwd,
         loading: false,
-        timeline: ensureUserInputTurnEntries(
+        timeline: ensureRequestTurnEntries(
           turnsToTimeline(turns),
+          runtime.approvals,
           runtime.userInputRequests,
         ),
         activeTurnId: null,
@@ -1058,8 +1064,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           loading: false,
           timeline: pageIsSubsumed
             ? runtime.timeline
-            : ensureUserInputTurnEntries(
+            : ensureRequestTurnEntries(
                 turnsToTimeline(turns),
+                runtime.approvals,
                 runtime.userInputRequests,
               ),
           activeTurnId: null,
@@ -1274,7 +1281,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
         return {
           ...runtime,
-          approvals: { ...runtime.approvals, [approval.itemId]: finalApproval },
+          timeline: ensureTurnEntry(runtime.timeline, approval.turnId),
+          approvals: { ...runtime.approvals, [requestKey]: finalApproval },
           pendingResolvedRequestIds,
         };
       });
@@ -1298,15 +1306,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       });
     },
 
-    resolveApprovalForThread: (threadId, itemId, decision) => {
+    resolveApprovalForThread: (threadId, requestId, decision) => {
+      const requestKey = String(requestId);
       applyThreadUpdate(threadId, (runtime) => {
-        const existing = runtime.approvals[itemId];
+        const existing = runtime.approvals[requestKey];
         if (!existing) return runtime;
         return {
           ...runtime,
           approvals: {
             ...runtime.approvals,
-            [itemId]: { ...existing, status: decision },
+            [requestKey]: { ...existing, status: decision },
           },
         };
       });
@@ -1382,15 +1391,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     resolveApprovalByRequestIdForThread: (threadId, requestId) => {
       const requestKey = String(requestId);
       applyThreadUpdate(threadId, (runtime) => {
-        const approval = Object.values(runtime.approvals).find(
-          (entry) => String(entry.requestId) === requestKey,
-        );
+        const approval = runtime.approvals[requestKey];
         if (approval) {
           return {
             ...runtime,
             approvals: {
               ...runtime.approvals,
-              [approval.itemId]: { ...approval, status: 'resolved' },
+              [requestKey]: { ...approval, status: 'resolved' },
             },
           };
         }

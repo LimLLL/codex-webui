@@ -69,7 +69,7 @@
 | GET    | `/api/threads/:threadId`                         | ThreadsController         | 读取单个 thread。Query: `includeTurns`                                                                               |
 | GET    | `/api/threads/:threadId/branch-state`            | ThreadsController         | 读取 compact guard 状态与持久化树成员。包含本地创建和启动期认领的拓扑，不做每请求 app-server 扫描                    |
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
-| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。用于把 `summary` 视图的 turn 按需补齐 `reasoning`/`plan` |
+| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。未 materialized 的 pinned refusal 记 warning 后归一为 `[]`，不回退到 full turn pages |
 | GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification/成功写入暴露设置，返回 `observed:false` |
 | PATCH  | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 设置 next-turn collaboration mode，不启动 turn；需要已解析出 thread 当前 model，否则 400。**不写 null effort**（会被 app-server 当作清空）；进入 Plan 时记录被顶掉的 effort，退出时还原 |
 | GET    | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 读取 thread 持久化 goal，未设置时 `{ goal:null }`                                                                      |
@@ -81,8 +81,8 @@
 | POST   | `/api/threads/:threadId/archive`                 | ThreadsController         | 归档本地已知整棵分支树                                                                                               |
 | POST   | `/api/threads/:threadId/unarchive`               | ThreadsController         | 取消归档本地已知整棵分支树                                                                                           |
 | POST   | `/api/threads/:threadId/compact`                 | ThreadsController         | 压缩上下文；有本地后代时返回 conflict                                                                                |
-| POST   | `/api/threads/:threadId/branches`                | ThreadsController         | 编辑历史 user message：`thread/fork(beforeTurnId)` 后持久化分支拓扑                                                  |
-| POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | 普通 fork，不写入消息级版本拓扑。Body 可选 `{ carryGoal?: boolean }`，默认 false；`ephemeral:true` 不支持            |
+| POST   | `/api/threads/:threadId/branches`                | ThreadsController         | 编辑历史 user message：metadata-only `thread/fork(beforeTurnId, excludeTurns:true)`，轻量分页校验 turn ID 前缀后持久化分支拓扑 |
+| POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | metadata-only 普通 fork；写 topology-only provenance edge（不创建消息版本组），再由 canonical opener 分页 hydration。Body 可选 `{ carryGoal?: boolean }`，默认 false；`ephemeral:true` 不支持 |
 | PATCH  | `/api/threads/:threadId/name`                    | ThreadsController         | 设置 thread 显示名                                                                                                   |
 | POST   | `/api/threads/:threadId/review`                  | ThreadCommandsController  | 启动 inline `review/start` turn。支持 uncommittedChanges/custom/baseBranch/commit target；不暴露 detached review      |
 | POST   | `/api/threads/:threadId/turns`                   | ThreadsController         | 发送消息。Body: `{ input: UserInput[] }`，支持 text/image/localImage/skill/mention                                   |
@@ -176,8 +176,8 @@
 | POST /threads/:id/archive             | `thread/archive`                                              |
 | POST /threads/:id/unarchive           | `thread/unarchive`                                            |
 | POST /threads/:id/compact             | `thread/compact/start`                                        |
-| POST /threads/:id/branches            | `thread/fork` with experimental `beforeTurnId`                |
-| POST /threads/:id/fork                | `thread/fork` optionally with `deferGoalContinuation`         |
+| POST /threads/:id/branches            | `thread/fork` with experimental `beforeTurnId`, `excludeTurns:true`, then `thread/turns/list(itemsView:notLoaded)` validation |
+| POST /threads/:id/fork                | `thread/fork` with `excludeTurns:true`, optionally `deferGoalContinuation`, then local provenance commit |
 | GET /threads/branch-adoption/status   | local rollout scanner state                                   |
 | GET /threads/:id/delete-preview       | `thread/list` plus local/adopted topology                     |
 | POST /threads/:id/delete              | `turn/interrupt` as needed, then `thread/delete` leaf-to-root |

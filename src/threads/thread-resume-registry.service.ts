@@ -4,7 +4,7 @@ import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ReasoningEffort, v2 } from '../codex/codex-schema';
 import type { ThreadOpenResponseDto } from './dto/threads.dto';
 import {
-  isNotMaterializedError,
+  isUnmaterializedTurnsListError,
   isThreadOwnershipConflictError,
 } from './thread-errors';
 import {
@@ -110,10 +110,7 @@ export class ThreadResumeRegistryService {
    * `readAsResume` merges cached settings with a fresh `thread/read`
    * to return a complete `ThreadResumeResponse`.
    */
-  cacheResponse(
-    threadId: string,
-    response: CachedThreadResponse,
-  ): void {
+  cacheResponse(threadId: string, response: CachedThreadResponse): void {
     this.responseCache.set(threadId, response);
   }
 
@@ -231,9 +228,7 @@ export class ThreadResumeRegistryService {
     };
   }
 
-  private readEmbeddedTurnsPage(
-    response: CachedThreadResponse,
-  ): TurnsPage {
+  private readEmbeddedTurnsPage(response: CachedThreadResponse): TurnsPage {
     const candidate = (response as MetadataFirstResumeResponse)
       .initialTurnsPage;
     return (
@@ -257,7 +252,7 @@ export class ThreadResumeRegistryService {
         itemsView: 'summary',
       });
     } catch (err) {
-      if (!isNotMaterializedError(err)) throw err;
+      if (!isUnmaterializedTurnsListError(err)) throw err;
       this.logger.debug(
         `Thread ${threadId} not materialized; returning an empty turn page`,
       );

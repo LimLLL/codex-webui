@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThreadsService } from './threads.service';
+import { CodexRpcError } from '../codex/codex-errors';
 import { CodexService } from '../codex/codex.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import { ErrorCode } from '../common/error-codes';
 import { ThreadsBranchingService } from './threads-branching.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
@@ -39,7 +41,9 @@ describe('ThreadsService', () => {
     recordMessageBranch: vi.fn(),
     resolveTreeRootThreadId: vi.fn(),
     setActiveMember: vi.fn(),
+    hasForkEdge: vi.fn(),
   };
+  const mockBranchMutations = { recordLocalFork: vi.fn() };
   const mockBranching = {
     createMessageBranch: vi.fn(),
   };
@@ -50,6 +54,7 @@ describe('ThreadsService', () => {
     readThreadMetadata: vi.fn(),
     listTurns: vi.fn(),
     countTurnsForThreads: vi.fn(),
+    listAllTurnIds: vi.fn(),
   };
   const mockOverview = {
     listOverview: vi.fn(),
@@ -62,6 +67,10 @@ describe('ThreadsService', () => {
         { provide: CodexService, useValue: mockCodex },
         { provide: ThreadResumeRegistryService, useValue: mockResumeRegistry },
         { provide: ConversationBranchesService, useValue: mockBranches },
+        {
+          provide: ConversationBranchMutationsService,
+          useValue: mockBranchMutations,
+        },
         { provide: ThreadsBranchingService, useValue: mockBranching },
         {
           provide: ThreadDeletionRegistryService,
@@ -76,11 +85,13 @@ describe('ThreadsService', () => {
     mockCodex.request.mockReset();
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockBranches).forEach((mock) => mock.mockReset());
+    mockBranchMutations.recordLocalFork.mockReset();
     mockBranching.createMessageBranch.mockReset();
     mockDeletionRegistry.assertMutable.mockReset();
     Object.values(mockHistory).forEach((mock) => mock.mockReset());
     mockOverview.listOverview.mockReset();
     mockBranches.hasKnownDescendants.mockReturnValue(false);
+    mockBranches.hasForkEdge.mockReturnValue(false);
     mockBranches.listKnownTreeThreadIds.mockImplementation(
       (threadId: string): string[] => [threadId],
     );
@@ -142,7 +153,9 @@ describe('ThreadsService', () => {
   });
 
   it('should call thread/read with includeTurns', async () => {
-    mockCodex.request.mockResolvedValue({ thread: { id: 't1' } });
+    mockCodex.request.mockResolvedValue({
+      thread: { id: 't1', historyMode: 'paginated' },
+    });
 
     await service.readThread('t1', true);
 
@@ -150,6 +163,46 @@ describe('ThreadsService', () => {
       threadId: 't1',
       includeTurns: true,
     });
+  });
+
+  it('degrades to empty turns when history is not materialized yet', async () => {
+    // Measured on 0.151.0: `thread/read` with turns refuses before the first
+    // user message, naming its backing call rather than the state. A thread
+    // with no turns has none to lose, so the read must still answer.
+    mockCodex.request
+      .mockRejectedValueOnce(
+        new CodexRpcError(
+          { code: -32601, message: 'list_turns is not supported yet' },
+          { method: 'thread/read' },
+        ),
+      )
+      .mockResolvedValueOnce({
+        thread: {
+          id: 't1',
+          historyMode: 'paginated',
+          turns: [{ id: 'stale' }],
+        },
+      });
+
+    await expect(service.readThread('t1', true)).resolves.toEqual({
+      thread: { id: 't1', historyMode: 'paginated', turns: [] },
+    });
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/read', {
+      threadId: 't1',
+      includeTurns: false,
+    });
+  });
+
+  it('propagates a thread-read refusal that is not the empty-history case', async () => {
+    mockCodex.request.mockRejectedValueOnce(
+      new CodexRpcError(
+        { code: -32601, message: 'list_turns is not supported yet' },
+        { method: 'thread/turns/list' },
+      ),
+    );
+
+    await expect(service.readThread('t1', true)).rejects.toThrow();
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
   });
 
   it('should ensure resume via registry', async () => {
@@ -393,8 +446,16 @@ describe('ThreadsService', () => {
   });
 
   it('forks with deferred goal continuation only when requested', async () => {
+    mockHistory.readThreadMetadata.mockResolvedValue({
+      thread: { id: 'source', historyMode: 'paginated' },
+    });
+    mockHistory.listAllTurnIds.mockResolvedValue(['turn-1']);
     mockCodex.request.mockResolvedValue({
-      thread: { id: 'child', historyMode: 'paginated' },
+      thread: {
+        id: 'child',
+        historyMode: 'paginated',
+        forkedFromId: 'source',
+      },
       model: 'gpt-5',
     });
 
@@ -402,9 +463,91 @@ describe('ThreadsService', () => {
 
     expect(mockCodex.request).toHaveBeenCalledWith('thread/fork', {
       threadId: 'source',
+      excludeTurns: true,
       deferGoalContinuation: true,
     });
+    expect(mockBranchMutations.recordLocalFork).toHaveBeenCalledWith({
+      sourceThreadId: 'source',
+      childThreadId: 'child',
+      treeRootThreadId: 'source',
+      inheritedTurnIds: ['turn-1'],
+    });
     expect(mockResumeRegistry.markResumed).toHaveBeenCalledWith('child');
+  });
+
+  it('never deletes when app-server reuses the source ID for a fork', async () => {
+    mockHistory.readThreadMetadata.mockResolvedValue({
+      thread: { id: 'source', historyMode: 'paginated' },
+    });
+    mockCodex.request.mockResolvedValue({
+      thread: { id: 'source', historyMode: 'paginated' },
+    });
+
+    await expect(service.forkThread('source')).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.branchForkUnsupported,
+    });
+
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
+    expect(mockCodex.request).not.toHaveBeenCalledWith(
+      'thread/delete',
+      expect.anything(),
+    );
+    expect(mockBranchMutations.recordLocalFork).not.toHaveBeenCalled();
+  });
+
+  it('deletes an untracked child when ordinary-fork provenance fails', async () => {
+    mockHistory.readThreadMetadata.mockResolvedValue({
+      thread: { id: 'source', historyMode: 'paginated' },
+    });
+    mockHistory.listAllTurnIds.mockResolvedValue(['turn-1']);
+    mockCodex.request
+      .mockResolvedValueOnce({
+        thread: {
+          id: 'child',
+          historyMode: 'paginated',
+          forkedFromId: 'source',
+        },
+      })
+      .mockResolvedValueOnce({});
+    mockBranchMutations.recordLocalFork.mockImplementation(() => {
+      throw new Error('database failed');
+    });
+
+    await expect(service.forkThread('source')).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.branchMetadataFailed,
+    });
+
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/delete', {
+      threadId: 'child',
+    });
+  });
+
+  it('preserves a child once its ordinary-fork edge is durable', async () => {
+    mockHistory.readThreadMetadata.mockResolvedValue({
+      thread: { id: 'source', historyMode: 'paginated' },
+    });
+    mockHistory.listAllTurnIds.mockResolvedValue(['turn-1']);
+    mockCodex.request.mockResolvedValueOnce({
+      thread: {
+        id: 'child',
+        historyMode: 'paginated',
+        forkedFromId: 'source',
+      },
+    });
+    mockBranchMutations.recordLocalFork.mockImplementation(() => {
+      throw new Error('response failed after commit');
+    });
+    mockBranches.hasForkEdge.mockReturnValue(true);
+
+    await expect(service.forkThread('source')).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.branchMetadataFailed,
+    });
+
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
+    expect(mockCodex.request).not.toHaveBeenCalledWith(
+      'thread/delete',
+      expect.anything(),
+    );
   });
 
   it('rejects fork requests that combine goal carry with ephemeral forks', async () => {

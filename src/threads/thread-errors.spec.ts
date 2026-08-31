@@ -1,45 +1,103 @@
 import { CodexRpcError, CodexUnavailableError } from '../codex/codex-errors';
 import {
   isDescendantRejectedError,
+  isEmptyThreadItemsListRefusal,
   isInvalidForkBoundaryError,
-  isNotMaterializedError,
   isThreadServerUnavailableError,
+  isUnmaterializedThreadReadError,
+  isUnmaterializedTurnsListError,
   isUnsupportedForkBoundaryFieldError,
 } from './thread-errors';
 
 /** Builds an RPC error as app-server would return it. */
-function rpc(code: number, message: string, data?: unknown): CodexRpcError {
-  return new CodexRpcError({ code, message, data }, { method: 'thread/read' });
+function rpc(
+  code: number,
+  message: string,
+  method = 'thread/read',
+): CodexRpcError {
+  return new CodexRpcError({ code, message }, { method });
 }
 
 describe('thread-errors', () => {
-  describe('isNotMaterializedError', () => {
-    // Both messages are verbatim from codex-cli 0.149.1 for a thread that was
-    // created but never sent to. The two history modes disagree on both the
-    // wording and the error code, so matching either one alone breaks the
-    // other mode's thread creation.
-    it('recognizes the legacy wording', () => {
+  describe('empty paginated history refusals', () => {
+    it('recognizes the pinned turn-list refusal only on its method and code', () => {
+      const message =
+        'thread abc is not materialized yet; thread/turns/list is unavailable before first user message';
       expect(
-        isNotMaterializedError(
-          rpc(
-            -32600,
-            'thread abc is not materialized yet; includeTurns is unavailable before first user message',
-          ),
+        isUnmaterializedTurnsListError(
+          rpc(-32600, message, 'thread/turns/list'),
         ),
       ).toBe(true);
-    });
-
-    it('recognizes the paginated wording, which names the missing call', () => {
       expect(
-        isNotMaterializedError(rpc(-32601, 'list_turns is not supported yet')),
-      ).toBe(true);
+        isUnmaterializedTurnsListError(
+          rpc(-32601, message, 'thread/turns/list'),
+        ),
+      ).toBe(false);
+      expect(isUnmaterializedTurnsListError(rpc(-32600, message))).toBe(false);
     });
 
-    it('does not classify unrelated failures as unmaterialized', () => {
-      expect(isNotMaterializedError(rpc(-32600, 'thread not found'))).toBe(
+    it('recognizes the pinned item-list refusal only on its method and code', () => {
+      const message = 'thread/items/list is not supported yet';
+      expect(
+        isEmptyThreadItemsListRefusal(
+          rpc(-32601, message, 'thread/items/list'),
+        ),
+      ).toBe(true);
+      expect(
+        isEmptyThreadItemsListRefusal(
+          rpc(-32600, message, 'thread/items/list'),
+        ),
+      ).toBe(false);
+      expect(isEmptyThreadItemsListRefusal(rpc(-32601, message))).toBe(false);
+    });
+
+    it('recognizes the pinned thread-read refusal only on its method and code', () => {
+      // Measured against 0.151.0: `thread/read` still names its backing call
+      // and still answers -32601, unlike the turn-list wording above.
+      const message = 'list_turns is not supported yet';
+      expect(
+        isUnmaterializedThreadReadError(rpc(-32601, message, 'thread/read')),
+      ).toBe(true);
+      expect(
+        isUnmaterializedThreadReadError(rpc(-32600, message, 'thread/read')),
+      ).toBe(false);
+      expect(
+        isUnmaterializedThreadReadError(
+          rpc(-32601, message, 'thread/turns/list'),
+        ),
+      ).toBe(false);
+    });
+
+    it('keeps the three history refusals mutually exclusive', () => {
+      const readRefusal = rpc(
+        -32601,
+        'list_turns is not supported yet',
+        'thread/read',
+      );
+      const itemsRefusal = rpc(
+        -32601,
+        'thread/items/list is not supported yet',
+        'thread/items/list',
+      );
+      expect(isEmptyThreadItemsListRefusal(readRefusal)).toBe(false);
+      expect(isUnmaterializedTurnsListError(readRefusal)).toBe(false);
+      expect(isUnmaterializedThreadReadError(itemsRefusal)).toBe(false);
+    });
+
+    it('does not accept near-match or non-RPC errors', () => {
+      expect(
+        isUnmaterializedTurnsListError(
+          rpc(-32600, 'thread abc is not materialized', 'thread/turns/list'),
+        ),
+      ).toBe(false);
+      expect(
+        isUnmaterializedThreadReadError(
+          rpc(-32601, 'list_turns is not supported', 'thread/read'),
+        ),
+      ).toBe(false);
+      expect(isEmptyThreadItemsListRefusal(new Error('socket hang up'))).toBe(
         false,
       );
-      expect(isNotMaterializedError(new Error('socket hang up'))).toBe(false);
     });
   });
 
@@ -94,15 +152,5 @@ describe('thread-errors', () => {
         false,
       );
     });
-  });
-
-  it('matches against structured data as well as the message', () => {
-    expect(
-      isNotMaterializedError(
-        rpc(-32601, 'request failed', {
-          reason: 'list_turns is not supported',
-        }),
-      ),
-    ).toBe(true);
   });
 });

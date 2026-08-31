@@ -115,7 +115,7 @@ dev 模式 `console.debug`，不静默丢弃。
 
 | Method | 处理逻辑 |
 |--------|----------|
-| `item/commandExecution/requestApproval` | 解析为 ApprovalRequest，渲染审批卡片 |
+| `item/commandExecution/requestApproval` | 按 `kind: command \| writeStdin` 解析为 ApprovalRequest；保留 approvalId，以 JSON-RPC requestId 独立存储并按请求 turn 渲染 |
 | `item/fileChange/requestApproval` | 解析为 ApprovalRequest，渲染审批卡片 |
 | `item/tool/requestUserInput` | 解析为 UserInputRequest（EXPERIMENTAL），渲染 UserInputCard（radio/checkbox/text/password）|
 
@@ -147,5 +147,5 @@ dev 模式 `console.debug`，不静默丢弃。
 - notification-handlers 通过 mutable `ctx.threadId` 按 `params.threadId` 路由到对应 thread runtime
 - 生命周期事件的 thread list 失效使用 300ms debounce 防止风暴
 - 重试 error toast 按 `threadId:turnId:message` 在 5s 窗口内去重
-- `serverRequest/resolved` 可能先于 approval 到达，使用 per-thread pendingResolvedRequestIds 缓冲
+- `serverRequest/resolved` 可能先于 approval 到达，使用 per-thread pendingResolvedRequestIds 缓冲；approval 和 user-input 均按 requestId 定位
 - `subscribedThreadIds` 通过 `general.maxIdleSubscriptions` 做空闲 LRU 清理；active / loading / pending approval / pending user-input / buffered resolved-request thread 不会被清理

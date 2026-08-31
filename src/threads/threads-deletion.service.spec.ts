@@ -1,6 +1,7 @@
 import { CodexRpcError } from '../codex/codex-errors';
 import type { v2 } from '../codex/codex-schema';
 import { CodexService } from '../codex/codex.service';
+import { ErrorCode } from '../common/error-codes';
 import { ConversationBranchAdoptionService } from '../conversation-branches/conversation-branch-adoption.service';
 import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
@@ -425,6 +426,51 @@ describe('ThreadsDeletionService', () => {
     expect(requestLog).toContain('thread/delete');
   });
 
+  it('reports a typed conflict when a running thread has no persisted history', async () => {
+    // A thread can be running before its first user message is persisted, and
+    // 0.151.0 then refuses `thread/read` with turns, naming its backing call
+    // rather than the state. The refusal must resolve to the interrupt conflict
+    // rather than escaping as an unclassified transport error.
+    const active: v2.ThreadStatus = { type: 'active', activeFlags: [] };
+    mockCodex.request.mockImplementation((method: string, params: unknown) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(
+          listResponse(
+            params,
+            (params as { archived: boolean }).archived
+              ? []
+              : [makeThread('root', null, { status: active })],
+          ),
+        );
+      }
+      if (method === 'thread/read') {
+        if ((params as { includeTurns?: boolean }).includeTurns) {
+          return Promise.reject(
+            new CodexRpcError(
+              { code: -32601, message: 'list_turns is not supported yet' },
+              { method: 'thread/read' },
+            ),
+          );
+        }
+        return Promise.resolve({
+          thread: makeThread('root', null, { status: active }),
+        });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+    });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      failure: { code: ErrorCode.threads.deleteInterruptFailed },
+    });
+    expect(requestLog).not.toContain('thread/delete');
+  });
+
   it('returns a conflict when a new pending approval arrives after confirmation', async () => {
     let pendingRead = 0;
     mockPendingApprovals.listPending.mockImplementation(() => {
@@ -571,6 +617,7 @@ function makeThread(
     createdAt: 1,
     updatedAt: 1,
     recencyAt: 1,
+    historyMode: 'paginated',
     status: { type: 'idle' },
     path: null,
     cwd: '/tmp',

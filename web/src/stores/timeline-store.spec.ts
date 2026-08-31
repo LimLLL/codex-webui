@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TurnDto } from '../generated/api';
+import type { ApprovalRequest } from '../types/approval';
 
 const emit = vi.fn();
 
@@ -258,6 +259,70 @@ describe('markThreadDeletedRemotely', () => {
       content: 'Deleted from another device',
       severity: 'error',
     });
+  });
+});
+
+describe('approval request identity', () => {
+  const approval = (
+    requestId: string,
+    overrides: Partial<ApprovalRequest> = {},
+  ): ApprovalRequest => ({
+    requestId,
+    kind: 'command',
+    threadId: 't1',
+    turnId: 'turn-current',
+    itemId: 'shared-command-item',
+    status: 'pending',
+    ...overrides,
+  });
+
+  it('keeps multiple callbacks for one item and resolves only one request', () => {
+    const store = useTimelineStore.getState();
+    store.addApprovalForThread('t1', approval('command-request'));
+    store.addApprovalForThread(
+      't1',
+      approval('stdin-request', { kind: 'writeStdin' }),
+    );
+    store.resolveApprovalForThread('t1', 'stdin-request', 'accepted');
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(Object.keys(runtime.approvals)).toEqual([
+      'command-request',
+      'stdin-request',
+    ]);
+    expect(runtime.approvals['command-request'].status).toBe('pending');
+    expect(runtime.approvals['stdin-request'].status).toBe('accepted');
+    expect(runtime.timeline).toContainEqual(
+      expect.objectContaining({ kind: 'turn', turnId: 'turn-current' }),
+    );
+  });
+
+  it('applies a response that arrives before its approval request', () => {
+    const store = useTimelineStore.getState();
+    store.resolveApprovalByRequestIdForThread('t1', 'late-request');
+    store.addApprovalForThread('t1', approval('late-request'));
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.approvals['late-request'].status).toBe('resolved');
+    expect(runtime.pendingResolvedRequestIds.has('late-request')).toBe(false);
+  });
+
+  it('preserves the approval callback turn across timeline hydration', () => {
+    const store = useTimelineStore.getState();
+    store.addApprovalForThread(
+      't1',
+      approval('stdin-request', {
+        kind: 'writeStdin',
+        turnId: 'callback-turn',
+        itemId: 'older-command-item',
+      }),
+    );
+    store.hydrateTimelineForThread('t1', [answeredTurn('other-turn', 'hi')]);
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.timeline).toContainEqual(
+      expect.objectContaining({ kind: 'turn', turnId: 'callback-turn' }),
+    );
   });
 });
 

@@ -2,6 +2,7 @@ import { CodexService } from '../codex/codex.service';
 import { ErrorCode } from '../common/error-codes';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadHistoryService } from './thread-history.service';
 import { ThreadsBranchingService } from './threads-branching.service';
 
 describe('ThreadsBranchingService', () => {
@@ -14,19 +15,24 @@ describe('ThreadsBranchingService', () => {
     forget: vi.fn(),
   };
   const mockBranches = {
+    hasForkEdge: vi.fn(),
     recordMessageBranch: vi.fn(),
     resolveTreeRootThreadId: vi.fn(),
   };
+  const mockHistory = { listAllTurnIds: vi.fn() };
 
   beforeEach(() => {
     service = new ThreadsBranchingService(
       mockCodex as unknown as CodexService,
       mockResumeRegistry as unknown as ThreadResumeRegistryService,
       mockBranches as unknown as ConversationBranchesService,
+      mockHistory as unknown as ThreadHistoryService,
     );
     mockCodex.request.mockReset();
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockBranches).forEach((mock) => mock.mockReset());
+    mockHistory.listAllTurnIds.mockReset();
+    mockBranches.hasForkEdge.mockReturnValue(false);
     mockBranches.resolveTreeRootThreadId.mockImplementation(
       (threadId: string): string => threadId,
     );
@@ -37,6 +43,7 @@ describe('ThreadsBranchingService', () => {
       .mockResolvedValueOnce({
         thread: {
           id: 'source',
+          historyMode: 'paginated',
           status: { type: 'idle' },
           turns: [
             completedUserTurn('turn-a', 'first'),
@@ -47,9 +54,12 @@ describe('ThreadsBranchingService', () => {
       .mockResolvedValueOnce({
         thread: {
           id: 'child',
-          turns: [completedUserTurn('turn-a', 'first')],
+          historyMode: 'paginated',
+          forkedFromId: 'source',
+          turns: [],
         },
       });
+    mockHistory.listAllTurnIds.mockResolvedValue(['turn-a']);
     mockBranches.resolveTreeRootThreadId.mockReturnValue('root');
     mockBranches.recordMessageBranch.mockReturnValue({
       tree: {
@@ -91,6 +101,7 @@ describe('ThreadsBranchingService', () => {
     expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/fork', {
       threadId: 'source',
       beforeTurnId: 'turn-b',
+      excludeTurns: true,
     });
     expect(mockBranches.recordMessageBranch).toHaveBeenCalledWith({
       sourceThreadId: 'source',
@@ -110,6 +121,7 @@ describe('ThreadsBranchingService', () => {
       .mockResolvedValueOnce({
         thread: {
           id: 'source',
+          historyMode: 'paginated',
           status: { type: 'idle' },
           turns: [
             completedUserTurn('turn-a', 'first'),
@@ -121,13 +133,13 @@ describe('ThreadsBranchingService', () => {
       .mockResolvedValueOnce({
         thread: {
           id: 'child',
-          turns: [
-            completedUserTurn('turn-a', 'first'),
-            completedUserTurn('turn-b', 'second'),
-          ],
+          historyMode: 'paginated',
+          forkedFromId: 'source',
+          turns: [],
         },
       })
       .mockResolvedValueOnce({});
+    mockHistory.listAllTurnIds.mockResolvedValue(['turn-a', 'turn-b']);
 
     await expect(
       service.createMessageBranch('source', { editedTurnId: 'turn-b' }),
@@ -146,14 +158,21 @@ describe('ThreadsBranchingService', () => {
       .mockResolvedValueOnce({
         thread: {
           id: 'source',
+          historyMode: 'paginated',
           status: { type: 'idle' },
           turns: [completedUserTurn('turn-a', 'first')],
         },
       })
       .mockResolvedValueOnce({
-        thread: { id: 'child', turns: [] },
+        thread: {
+          id: 'child',
+          historyMode: 'paginated',
+          forkedFromId: 'source',
+          turns: [],
+        },
       })
       .mockResolvedValueOnce({});
+    mockHistory.listAllTurnIds.mockResolvedValue([]);
     mockBranches.recordMessageBranch.mockImplementation(() => {
       throw new Error('db failed');
     });
@@ -169,10 +188,48 @@ describe('ThreadsBranchingService', () => {
     });
   });
 
+  it('preserves a message-branch child once its edge is durable', async () => {
+    mockCodex.request
+      .mockResolvedValueOnce({
+        thread: {
+          id: 'source',
+          historyMode: 'paginated',
+          status: { type: 'idle' },
+          turns: [completedUserTurn('turn-a', 'first')],
+        },
+      })
+      .mockResolvedValueOnce({
+        thread: {
+          id: 'child',
+          historyMode: 'paginated',
+          forkedFromId: 'source',
+          turns: [],
+        },
+      });
+    mockHistory.listAllTurnIds.mockResolvedValue([]);
+    mockBranches.recordMessageBranch.mockImplementation(() => {
+      throw new Error('projection failed after commit');
+    });
+    mockBranches.hasForkEdge.mockReturnValue(true);
+
+    await expect(
+      service.createMessageBranch('source', { editedTurnId: 'turn-a' }),
+    ).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.branchMetadataFailed,
+    });
+
+    expect(mockCodex.request).toHaveBeenCalledTimes(2);
+    expect(mockCodex.request).not.toHaveBeenCalledWith(
+      'thread/delete',
+      expect.anything(),
+    );
+  });
+
   it('blocks branch creation while the source thread is active', async () => {
     mockCodex.request.mockResolvedValueOnce({
       thread: {
         id: 'source',
+        historyMode: 'paginated',
         status: { type: 'active', activeFlags: [] },
         turns: [completedUserTurn('turn-a', 'first')],
       },

@@ -7,6 +7,7 @@ import type { v2 } from '../codex/codex-schema';
 import { BusinessException } from '../common/business.exception';
 import { ErrorCode } from '../common/error-codes';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import type {
   BranchStateDto,
   BranchTreeDto,
@@ -25,7 +26,7 @@ import {
 } from './threads-branching.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
-import { isNotMaterializedError } from './thread-errors';
+import { isUnmaterializedThreadReadError } from './thread-errors';
 import { previewFromUserInput } from './thread-input-preview';
 import {
   ThreadHistoryService,
@@ -33,11 +34,14 @@ import {
   type TurnItemsView,
 } from './thread-history.service';
 import {
+  assertPaginatedThread,
+  isPaginatedThread,
+  REQUIRED_HISTORY_MODE,
+} from './thread-history-mode';
+import {
   ThreadsOverviewService,
   type ThreadOverviewParams,
 } from './threads-overview.service';
-
-const REQUIRED_HISTORY_MODE = 'paginated';
 
 /** Maximum ancestors walked when a fork chain is not locally tracked. */
 const MAX_FORK_CHAIN_WALK = 32;
@@ -46,10 +50,9 @@ type ExperimentalThreadStartParams = v2.ThreadStartParams & {
   historyMode: typeof REQUIRED_HISTORY_MODE;
 };
 
-type ThreadWithHistoryMode = v2.Thread & { historyMode?: string };
-
 type ThreadForkParamsWithGoalCarry = v2.ThreadForkParams & {
   deferGoalContinuation?: boolean;
+  excludeTurns: true;
 };
 
 @Injectable()
@@ -60,6 +63,7 @@ export class ThreadsService {
     private readonly codex: CodexService,
     private readonly resumeRegistry: ThreadResumeRegistryService,
     private readonly branches: ConversationBranchesService,
+    private readonly branchMutations: ConversationBranchMutationsService,
     private readonly branching: ThreadsBranchingService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
     private readonly history: ThreadHistoryService,
@@ -83,7 +87,7 @@ export class ThreadsService {
       'thread/start',
       requestParams,
     );
-    if (!this.isPaginatedThread(response.thread)) {
+    if (!isPaginatedThread(response.thread)) {
       const cleanupError = await this.deleteUntrackedThread(response.thread.id);
       const message = cleanupError
         ? `thread/start did not return paginated history; cleanup of ${response.thread.id} also failed: ${cleanupError.message}`
@@ -137,9 +141,10 @@ export class ThreadsService {
   /**
    * Reads a single thread by ID.
    *
-   * If `includeTurns` is requested but the thread is not yet materialized
-   * (no user messages), falls back to reading without turns — an
-   * unmaterialized thread has no turns anyway.
+   * If `includeTurns` is requested before the thread's first user message,
+   * app-server refuses to reconstruct history rather than returning an empty
+   * list. Retrying without turns is the only way to answer at all, and an
+   * unmaterialized thread has no turns to lose.
    *
    * @param threadId - The thread identifier
    * @param includeTurns - Whether to include turn history
@@ -149,22 +154,25 @@ export class ThreadsService {
     threadId: string,
     includeTurns = false,
   ): Promise<v2.ThreadReadResponse> {
+    let response: v2.ThreadReadResponse;
     try {
-      return await this.codex.request<v2.ThreadReadResponse>('thread/read', {
-        threadId,
-        includeTurns,
-      });
+      response = await this.codex.request<v2.ThreadReadResponse>(
+        'thread/read',
+        {
+          threadId,
+          includeTurns,
+        },
+      );
     } catch (err) {
-      // Thread not materialized — retry without turns if that was requested.
-      if (includeTurns && isNotMaterializedError(err)) {
-        const response = await this.codex.request<v2.ThreadReadResponse>(
-          'thread/read',
-          { threadId, includeTurns: false },
-        );
-        return { thread: { ...response.thread, turns: [] } };
-      }
-      throw err;
+      if (!includeTurns || !isUnmaterializedThreadReadError(err)) throw err;
+      const metadata = await this.codex.request<v2.ThreadReadResponse>(
+        'thread/read',
+        { threadId, includeTurns: false },
+      );
+      response = { thread: { ...metadata.thread, turns: [] } };
     }
+    assertPaginatedThread(response.thread, 'thread/read');
+    return response;
   }
 
   /**
@@ -365,7 +373,7 @@ export class ThreadsService {
   }
 
   /**
-   * Forks a thread into a new live thread with extended history persistence.
+   * Forks a thread and records its inherited history as local provenance.
    *
    * @param threadId - The source thread identifier
    * @returns The forked thread and resolved settings
@@ -381,8 +389,21 @@ export class ThreadsService {
         'deferGoalContinuation cannot be combined with ephemeral forks',
       );
     }
+    const source = await this.history.readThreadMetadata(threadId);
+    if (source.thread.id !== threadId) {
+      throw new BusinessException(
+        ErrorCode.threads.branchForkUnsupported,
+        HttpStatus.BAD_GATEWAY,
+        'thread/read returned a different source conversation id',
+        { threadId, returnedThreadId: source.thread.id },
+      );
+    }
+    const treeRootThreadId = this.branches.resolveTreeRootThreadId(
+      source.thread.id,
+    );
     const params: ThreadForkParamsWithGoalCarry = {
       threadId,
+      excludeTurns: true,
       ...(options.ephemeral !== undefined && { ephemeral: options.ephemeral }),
       ...(options.carryGoal && { deferGoalContinuation: true }),
     };
@@ -390,8 +411,67 @@ export class ThreadsService {
       'thread/fork',
       params,
     );
-    this.resumeRegistry.markResumed(response.thread.id);
-    this.resumeRegistry.cacheResponse(response.thread.id, response);
+    const childThreadId = response.thread.id;
+    if (childThreadId === threadId) {
+      throw new BusinessException(
+        ErrorCode.threads.branchForkUnsupported,
+        HttpStatus.BAD_GATEWAY,
+        'thread/fork returned the source conversation id',
+        { threadId },
+      );
+    }
+
+    let inheritedTurnIds: string[];
+    try {
+      const forkedFromId = response.thread.forkedFromId;
+      if (forkedFromId && forkedFromId !== threadId) {
+        throw new Error(
+          `thread/fork returned parent ${forkedFromId} instead of ${threadId}`,
+        );
+      }
+      assertPaginatedThread(response.thread, 'thread/fork');
+      inheritedTurnIds = await this.history.listAllTurnIds(childThreadId);
+    } catch (err) {
+      const cleanupError = await this.deleteUntrackedThread(childThreadId);
+      if (!cleanupError) throw err;
+      throw BusinessException.internal(
+        ErrorCode.threads.branchMetadataFailed,
+        `Fork validation failed and cleanup of ${childThreadId} also failed: ${cleanupError.message}`,
+        { threadId, childThreadId },
+      );
+    }
+
+    try {
+      this.branchMutations.recordLocalFork({
+        sourceThreadId: threadId,
+        childThreadId,
+        treeRootThreadId,
+        inheritedTurnIds,
+      });
+    } catch (err) {
+      // A durable edge is the commit boundary. Never compensate after it, even
+      // if a later local projection unexpectedly fails.
+      if (this.branches.hasForkEdge(childThreadId)) {
+        throw BusinessException.internal(
+          ErrorCode.threads.branchMetadataFailed,
+          'Fork provenance was persisted but the response could not be completed; the child conversation was preserved',
+          { threadId, childThreadId },
+        );
+      }
+      const cleanupError = await this.deleteUntrackedThread(childThreadId);
+      const cleanupSuffix = cleanupError
+        ? ` Cleanup of ${childThreadId} also failed: ${cleanupError.message}`
+        : '';
+      throw BusinessException.internal(
+        ErrorCode.threads.branchMetadataFailed,
+        `Failed to persist fork provenance: ${
+          err instanceof Error ? err.message : String(err)
+        }.${cleanupSuffix}`,
+        { threadId, childThreadId },
+      );
+    }
+    this.resumeRegistry.markResumed(childThreadId);
+    this.resumeRegistry.cacheResponse(childThreadId, response);
     return response;
   }
 
@@ -495,12 +575,6 @@ export class ThreadsService {
       }
     }
     return current.id;
-  }
-
-  private isPaginatedThread(thread: v2.Thread): boolean {
-    return (
-      (thread as ThreadWithHistoryMode).historyMode === REQUIRED_HISTORY_MODE
-    );
   }
 
   /**

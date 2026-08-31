@@ -145,6 +145,29 @@ describe('ConversationBranchesService', () => {
     expect(provenance.inheritedTurnIds?.has('turn-1')).toBe(false);
   });
 
+  it('records an ordinary fork as topology-only provenance', () => {
+    mutations.recordLocalFork({
+      sourceThreadId: 'root',
+      childThreadId: 'ordinary-child',
+      treeRootThreadId: 'root',
+      inheritedTurnIds: ['turn-1', 'turn-2'],
+    });
+
+    expect(service.hasForkEdge('ordinary-child')).toBe(true);
+    expect(service.readBranchTree('ordinary-child')).toMatchObject({
+      treeRootThreadId: 'root',
+      tracked: true,
+      members: [
+        { threadId: 'root', parentThreadId: null },
+        { threadId: 'ordinary-child', parentThreadId: 'root' },
+      ],
+      groups: [],
+    });
+    const provenance = service.resolveProvenance('ordinary-child');
+    expect(provenance.threadIds).toEqual(['root', 'ordinary-child']);
+    expect([...provenance.inheritedTurnIds!]).toEqual(['turn-1', 'turn-2']);
+  });
+
   it('bounds provenance correctly three forks deep', () => {
     // root ─fork before t2→ b1 ─fork before t3→ b2 ─fork before t4→ b3
     // Each fork response carries the complete inherited prefix, so one hop's

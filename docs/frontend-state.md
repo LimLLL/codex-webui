@@ -25,7 +25,7 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 | `timeline` | `TimelineEntry[]` | 当前 thread 的消息时间线 |
 | `loading` | `boolean` | 是否有 turn 进行中 |
 | `expandedReasoning` | `Set<string>` | 展开的 reasoning item ID 集合 |
-| `approvals` | `Record<string, ApprovalRequest>` | 按 itemId 索引的审批请求 |
+| `approvals` | `Record<string, ApprovalRequest>` | 按 JSON-RPC requestId 索引的审批请求；同一 command item 的 command/writeStdin 回调不会互相覆盖 |
 | `userInputRequests` | `Record<string, UserInputRequest>` | 按 requestId 索引的用户输入请求（EXPERIMENTAL） |
 | `tokenUsageByTurn` | `Record<string, ThreadTokenUsage>` | 按 turnId 索引的 token 用量 |
 | `threadStatus` | `ThreadStatusType \| null` | thread 活跃状态（idle/active/systemError） |
@@ -109,6 +109,9 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 - **重开不丢分页**：若返回页的 turn 全部已在本地时间线中，则保留现有时间线与 `historyCursor`，不做替换 —— 否则离开再回来会把已加载的更早历史悄悄丢掉。若返回页含未知 turn，说明会话在别处推进过，以服务端为准整体替换。
 - **迟到响应保护**：成功与失败回调都先检查运行时是否仍存在。store 的 setter 是 create-if-absent 的，删除进行中若有 in-flight 响应落地，不加保护会把已删会话的外壳重新建出来。
 - **后台恢复不写指针**：刷新/重连恢复会遍历所有已加载线程，若允许它们写活跃分支指针，每棵树会指向恢复顺序中的最后一个成员，正是该指针要解决的问题。这两条路径显式传 `recordActive: false`。
+- **fork 也只导航**：0.151.0 的 fork 响应刻意请求 metadata-only。侧边栏不再从响应里的 `thread.turns` 或并行 auxiliary reads 自行 hydration；后端提交 provenance 后才返回，随后路由的 canonical opener 统一分页历史并读取继承后的 token usage / turn diff / turn error。
+
+Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，即使最近一页历史没有该 turn。`writeStdin` 回调的 item 可属于更早的 turn，因此卡片按回调 turn 渲染为 unattached request，而不是倒挂回原 command 或改变其 lifecycle。
 
 ### 历史恢复 (turnsToTimeline)
 

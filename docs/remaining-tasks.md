@@ -223,7 +223,10 @@
 
 ### Bug Fixes
 
-- [x] 新建线程导航 500 错误：`thread/read(includeTurns: true)` 对未 materialized 线程报错。`ThreadResumeRegistryService.readAsResume` 和 `ThreadsService.readThread` 添加 fallback（检测 "not materialized" 错误 → 重试 `includeTurns: false`），共享 predicate `isNotMaterializedError`（`thread-errors.ts`）。
+- [x] Codex 0.151.0 空 paginated thread 拒绝语义修正：同一状态在三个 history 方法上有三种 code + 文案，按 method + code + pinned wording 分别分类 `thread/items/list` / `thread/turns/list` / `thread/read(includeTurns)`；单 turn items 返回 `[]` 并 warning，不再用 full-detail turn pages 做不可达兼容 fallback。
+- [x] 0.151.0 fork metadata-only + provenance 原子切片：普通 fork 与消息分支均传 `excludeTurns:true`，用 `itemsView:notLoaded` 完整发现/校验 child turn IDs，provenance edge 提交前才允许补偿删除、提交后绝不删 child。普通 fork 现在写 topology-only local edge，修复 token usage 靠 server replay 重复落 child 行、turn diff / turn error 从来不继承的既有缺陷。
+- [x] `writeStdin` 审批身份与归属：共享 parser 保留 protocol `kind` / `approvalId`，approval store 改按 JSON-RPC requestId 索引，同 item 多回调不覆盖；按 callback turn 渲染 Terminal Input Approval，不修改更早 command 的 lifecycle。
+- [x] 新建线程导航 500 错误：`thread/read(includeTurns:true)` 在首条消息前仍以 `-32601 list_turns is not supported yet` 拒绝——0.151.0 只改了 turn-paging 的文案，`thread/read` 沿用旧措辞。该 predicate 保留（按 method 收窄），REST 读取降级为空 turns，消息分支得到可分类错误，删除路径的 running-thread 守卫仍返回结构化 conflict 而非裸 RPC 错误。
 - [x] JSON-RPC 错误结构化：`CodexRpcError` 保留 code/data/method/requestId，线程错误 predicate 不再依赖扁平化 Error message。
 - [x] `readAsResume` 契约不完整：返回的 `ThreadResumeResponse` 缺少 `model`、`approvalPolicy` 等解析后设置。添加 `responseCache` 缓存首次 resume/start 的完整响应，`readAsResume` 合并缓存设置 + 新鲜 thread 数据。
 - [x] Thread 列表为空：`thread/list` 未传 `modelProviders`，app-server 默认只返回当前配置 provider 的线程。修复：传 `modelProviders: []`（空数组=所有 provider）。

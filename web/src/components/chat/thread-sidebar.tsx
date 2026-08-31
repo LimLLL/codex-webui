@@ -20,14 +20,17 @@ import {
   threadsStartThreadMutation,
   threadsUnarchiveThreadMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
-import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors } from '@/generated/api/sdk.gen';
 import type { ThreadDto } from '@/generated/api';
 import type { ThreadOverviewRowDto } from '@/generated/api/types.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useLayoutStore } from '@/stores/layout-store';
 import { cn } from '@/lib/utils';
 import { getApiErrorMessage } from '@/lib/api-error';
-import { invalidateThreadListSoon } from '@/lib/query-invalidation';
+import {
+  invalidateBranchTreeMembersSoon,
+  invalidateBranchTreesSoon,
+  invalidateThreadListSoon,
+} from '@/lib/query-invalidation';
 import { BranchGraphDialog } from '@/components/branches/branch-graph-dialog';
 import { DeleteConversationDialog } from '@/components/branches/delete-conversation-dialog';
 import {
@@ -72,10 +75,6 @@ export function ThreadSidebar() {
   const setActiveThread = useTimelineStore((s) => s.setActiveThread);
   const clearThread = useTimelineStore((s) => s.clearThread);
   const setThreadTitle = useTimelineStore((s) => s.setThreadTitle);
-  const hydrateTimelineForThread = useTimelineStore((s) => s.hydrateTimelineForThread);
-  const hydrateTokenUsageForThread = useTimelineStore((s) => s.hydrateTokenUsageForThread);
-  const hydrateTurnDiffsForThread = useTimelineStore((s) => s.hydrateTurnDiffsForThread);
-  const hydrateTurnErrorsForThread = useTimelineStore((s) => s.hydrateTurnErrorsForThread);
   const addSystemError = useTimelineStore((s) => s.addSystemError);
   const queryClient = useQueryClient();
 
@@ -303,20 +302,17 @@ export function ThreadSidebar() {
 
   const forkThread = useMutation({
     ...threadsForkThreadMutation(),
-    onSuccess: (res) => {
+    onSuccess: (res, vars) => {
       const tid = res.thread.id;
-      setActiveThread(tid, res.cwd, threadLabel(res.thread));
-      hydrateTimelineForThread(tid, res.thread.turns, res.cwd);
-      void tokenUsageReadThreadTokenUsage({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTokenUsageForThread(tid, data.turns))
-        .catch(() => undefined);
-      void turnDiffReadThreadTurnDiffs({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTurnDiffsForThread(tid, data.turns))
-        .catch(() => undefined);
-      void turnErrorsReadThreadTurnErrors({ path: { threadId: tid } })
-        .then(({ data }) => data && hydrateTurnErrorsForThread(tid, data.errors))
-        .catch(() => undefined);
       invalidateThreads();
+      invalidateBranchTreesSoon(queryClient);
+      invalidateBranchTreeMembersSoon(queryClient, [
+        vars.path.threadId,
+        tid,
+      ]);
+      // The fork response is metadata-only. Navigation hands hydration to the
+      // canonical opener, which pages history and reads inherited auxiliary
+      // data only after the backend has committed the provenance edge.
       void navigate({ to: '/t/$threadId', params: { threadId: tid } });
     },
   });

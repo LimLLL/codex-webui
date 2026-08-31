@@ -1,5 +1,5 @@
 /**
- * Renders an approval request card for command execution or file change.
+ * Renders a command, terminal-input, or file-change approval request card.
  * Buttons are dynamically rendered from server-provided availableDecisions.
  * Proposed exec/network amendments are shown when the server includes them.
  */
@@ -57,7 +57,7 @@ export function ApprovalItem({ approval }: Props) {
       path: { requestId: String(approval.requestId) },
       body: { result: { decision: toRpcDecision(decision) } },
     })
-      .then(() => resolveApproval(approval.itemId, decision))
+      .then(() => resolveApproval(approval.requestId, decision))
       .catch(() => undefined);
   };
 
@@ -68,7 +68,7 @@ export function ApprovalItem({ approval }: Props) {
       path: { requestId: String(approval.requestId) },
       body: { result: { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: patterns } } } },
     })
-      .then(() => resolveApproval(approval.itemId, 'accepted'))
+      .then(() => resolveApproval(approval.requestId, 'accepted'))
       .catch(() => undefined);
   };
 
@@ -79,7 +79,7 @@ export function ApprovalItem({ approval }: Props) {
       path: { requestId: String(approval.requestId) },
       body: { result: { decision: { applyNetworkPolicyAmendment: { network_policy_amendment: amendment } } } },
     })
-      .then(() => resolveApproval(approval.itemId, 'accepted'))
+      .then(() => resolveApproval(approval.requestId, 'accepted'))
       .catch(() => undefined);
   };
 
@@ -89,13 +89,16 @@ export function ApprovalItem({ approval }: Props) {
   const isCancelled = approval.status === 'cancelled';
   const isResolved = approval.status === 'resolved';
 
-  const Icon = approval.kind === 'commandExecution' ? Terminal : FileCode;
-  const label = approval.kind === 'commandExecution'
-    ? t('Command Approval')
-    : t('File Change Approval');
+  const Icon = approval.kind === 'fileChange' ? FileCode : Terminal;
+  const label =
+    approval.kind === 'command'
+      ? t('Command Approval')
+      : approval.kind === 'writeStdin'
+        ? t('Terminal Input Approval')
+        : t('File Change Approval');
 
-  // Legacy approvals may omit availableDecisions — fallback to accept/decline only.
-  // Session-level (acceptForSession/cancel) and amendments require explicit server permission.
+  // `availableDecisions` is optional. Without it, expose only accept/decline;
+  // session-level decisions and amendments require explicit server permission.
   const hasExplicitList = Array.isArray(avail);
   const showAccept = !hasExplicitList || hasSimpleDecision(avail, 'accept');
   const showAcceptForSession = hasSimpleDecision(avail, 'acceptForSession');

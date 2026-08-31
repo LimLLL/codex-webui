@@ -15,7 +15,7 @@ codex app-server (server request, 有 id)
   → PendingApprovalsService.recordServerRequest() 写入 pending_server_requests
   → 若 thread 正在删除则仍记为 pending、但不广播（暂存内存，守卫释放时按需重放）；否则 Socket.IO emit 'codex.serverRequest' to thread room
   → 前端 useCodexSocket 监听
-  → runtime parsers 校验 availableDecisions/amendments（lib/approval-parsers.ts）
+  → 共享 runtime parser 校验 kind / approvalId / identities / availableDecisions / amendments（lib/approval-parsers.ts）
   → addApprovalForThread() 写入对应 thread runtime
   → 非当前 thread 时弹 snackbar + jump-to-thread
   → ApprovalItem / FileChangeItem 组件渲染审批卡片
@@ -31,7 +31,7 @@ codex app-server (server request, 有 id)
 
 | Server Request Method                   | 审批类型                 | 关键参数                                                                                               |
 | --------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `item/commandExecution/requestApproval` | 命令执行                 | command, cwd, reason, availableDecisions, proposedExecpolicyAmendment, proposedNetworkPolicyAmendments |
+| `item/commandExecution/requestApproval` | 命令执行 / 终端输入      | kind (`command`/`writeStdin`), approvalId, command, cwd, reason, availableDecisions, proposedExecpolicyAmendment, proposedNetworkPolicyAmendments |
 | `item/fileChange/requestApproval`       | 文件变更                 | reason, grantRoot                                                                                      |
 | `item/tool/requestUserInput`            | 用户输入（EXPERIMENTAL） | questions: [{id, header, question, isOther, isSecret, options}]                                        |
 
@@ -59,7 +59,7 @@ codex app-server (server request, 有 id)
 
 ### 安全策略
 
-- **Legacy 兼容**：旧版 app-server 不发送 `availableDecisions` 时，仅显示 accept/decline（deny-by-default）
+- **可选 decisions**：未提供 `availableDecisions` 时，仅显示 accept/decline（deny-by-default）
 - **Session 级授权**：`acceptForSession`/`cancel` 需要服务端显式提供
 - **Amendments 不可自由构造**：exec/network policy 修正内容来自服务端 `proposed*` 字段，用户只能选择接受
 
@@ -69,9 +69,9 @@ codex app-server (server request, 有 id)
 | ------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `types/approval.ts`                               | ApprovalRequest, UserInputRequest, UserInputQuestion, UserInputOption 类型       |
 | `lib/user-input-parsers.ts`                       | 防御性解析 requestUserInput payload（userInputFromSocket, userInputFromPending） |
-| `stores/timeline-store.ts`                        | approvals 按 itemId 索引，userInputRequests 按 requestId 索引                    |
+| `stores/timeline-store.ts`                        | approvals 与 userInputRequests 均按 requestId 索引，并为 request 所属 turn 保留时间线入口 |
 | `hooks/use-codex-socket.ts`                       | 监听 `codex.serverRequest`，分发 approval / userInput / snackbar                 |
-| `components/chat/turn-items/approval-item.tsx`    | 命令执行审批卡片，动态按钮 + proposed amendments 展示                            |
+| `components/chat/turn-items/approval-item.tsx`    | 命令执行 / Terminal Input 审批卡片，动态按钮 + proposed amendments 展示          |
 | `components/chat/turn-items/user-input-card.tsx`  | 用户输入卡片：radio/checkbox/text/password + submit                              |
 | `components/chat/turn-items/file-change-item.tsx` | 文件变更审批（内联按钮，支持全部 4 种决策）                                      |
 | `components/chat/turn-block.tsx`                  | ItemWithRequests：在对应 item 下方渲染审批/输入卡片；unattached 请求独立渲染     |
@@ -111,8 +111,10 @@ app-server → item/tool/requestUserInput (questions[])
 
 ## 注意事项
 
-- 审批状态以 `itemId` 为 key 存储，因为一个 item 对应一个审批请求
-- **用户输入请求以 `requestId` 为 key 存储**，防止同 item 多请求覆盖；渲染时按 itemId 从 values 查找
+- **所有阻塞请求都以 JSON-RPC `requestId` 为 key 存储。** 同一个 command item 可先收到 `kind: command`，之后再收到一个或多个 `kind: writeStdin` 回调；按 itemId 存储会互相覆盖。
+- `approvalId` 是 app-server 提供的审批身份并原样保留用于显示/诊断；实际响应仍必须使用 JSON-RPC `requestId`。
+- `writeStdin` 的 `itemId` 指向原 command item，但 `turnId` 是当前回调所在 turn，两者可以不同。渲染按 request 的 turn 归属：同 turn 的卡片附着到 item；item 不在当前 turn 时作为 unattached Terminal Input Approval 卡片显示，不修改原 command 的完成状态。
+- live socket 与 SQLite 恢复共用同一个 approval parser，避免刷新前后把 `writeStdin` 解释成不同类型。
 - 切换 thread 时清空 approvals/userInputRequests 状态
 - server request 的 `id` 必须原样回传，app-server 靠它关联响应
 - `serverRequest/resolved` 通知 → 按 requestId 匹配 approvals 或 userInputRequests → 标记 resolved

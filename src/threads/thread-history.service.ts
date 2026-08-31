@@ -1,8 +1,12 @@
 /** Experimental paged thread-history access isolated from stable Codex types. */
 import { Injectable, Logger } from '@nestjs/common';
 import type { v2 } from '../codex/codex-schema';
-import { isCodexRpcError } from '../codex/codex-errors';
 import { CodexService } from '../codex/codex.service';
+import {
+  isEmptyThreadItemsListRefusal,
+  isUnmaterializedTurnsListError,
+} from './thread-errors';
+import { assertPaginatedThread } from './thread-history-mode';
 
 export type TurnItemsView = 'notLoaded' | 'summary' | 'full';
 export type SortDirection = 'asc' | 'desc';
@@ -59,6 +63,18 @@ const TURN_ITEMS_PAGE_SIZE = 500;
 const TURN_ITEMS_MAX_PAGES = 20;
 
 const TURN_COUNT_PAGE_SIZE = 200;
+
+/** Turn-ID discovery pages metadata only, so it can afford a wide page. */
+const TURN_ID_PAGE_SIZE = 200;
+
+/**
+ * Backstop for turn-ID discovery.
+ *
+ * Set well above the counting cap because this walk gates fork provenance and
+ * must never trade completeness for termination — hitting it is a hard failure,
+ * not a truncated result.
+ */
+const TURN_ID_MAX_PAGES = 200;
 const TURN_COUNT_CONCURRENCY = 4;
 /**
  * Upper bound on pages walked per thread.
@@ -99,6 +115,7 @@ export class ThreadHistoryService {
       'thread/resume',
       request,
     );
+    assertPaginatedThread(response.thread, 'thread/resume');
     // An absent page is not an empty page. `excludeTurns` empties `thread.turns`
     // unconditionally, so if the server ever stops honouring `initialTurnsPage`
     // — it is experimental and the generated schema cannot vouch for it —
@@ -129,11 +146,16 @@ export class ThreadHistoryService {
   }
 
   /** Reads one metadata-only thread snapshot without acquiring writer ownership. */
-  readThreadMetadata(threadId: string): Promise<v2.ThreadReadResponse> {
-    return this.codex.request<v2.ThreadReadResponse>('thread/read', {
-      threadId,
-      includeTurns: false,
-    });
+  async readThreadMetadata(threadId: string): Promise<v2.ThreadReadResponse> {
+    const response = await this.codex.request<v2.ThreadReadResponse>(
+      'thread/read',
+      {
+        threadId,
+        includeTurns: false,
+      },
+    );
+    assertPaginatedThread(response.thread, 'thread/read');
+    return response;
   }
 
   /** Pages turn history without resuming the thread. */
@@ -159,7 +181,8 @@ export class ThreadHistoryService {
    * @param threadId - Thread that owns the turn
    * @param turnId - Turn whose items should be returned
    * @returns Items belonging to that turn, oldest first
-   * @throws BusinessException when app-server's store cannot page items
+   * @throws Unexpected app-server failures other than the pinned empty-thread
+   *   refusal
    */
   async listTurnItems(
     threadId: string,
@@ -168,17 +191,13 @@ export class ThreadHistoryService {
     try {
       return await this.listTurnItemsDirect(threadId, turnId);
     } catch (err) {
-      if (
-        !isCodexRpcError(err) ||
-        err.code !== -32601 ||
-        err.method !== 'thread/items/list'
-      ) {
-        throw err;
-      }
-      this.logger.debug(
-        `thread/items/list is unavailable; falling back to full turn pages for thread=${threadId} turn=${turnId}`,
+      if (!isEmptyThreadItemsListRefusal(err)) throw err;
+      this.logger.warn(
+        `Normalizing thread/items/list refusal to empty for thread=${threadId} turn=${turnId}. ` +
+          'Pinned app-server uses this response for an unmaterialized thread, ' +
+          'but the same response can also mean the store lacks item pagination.',
       );
-      return this.listTurnItemsFromTurns(threadId, turnId);
+      return [];
     }
   }
 
@@ -223,28 +242,78 @@ export class ThreadHistoryService {
     return entries.filter((entry) => !entry.turnId || entry.turnId === turnId);
   }
 
-  /** Compatibility path for app-server builds that expose turns paging first. */
-  private async listTurnItemsFromTurns(
-    threadId: string,
-    turnId: string,
-  ): Promise<ThreadItemEntry[]> {
+  /**
+   * Discovers every persisted turn ID without loading any turn items.
+   *
+   * Fork validation must compare the complete persisted prefix before writing
+   * provenance. Cursor loops and duplicate IDs fail closed because committing
+   * a partial or ambiguous prefix would corrupt inherited auxiliary-data reads.
+   *
+   * @param threadId - Paginated thread whose persisted turn IDs are required
+   * @returns Turn IDs in chronological order, or an empty list before the
+   *   thread's first user message
+   */
+  async listAllTurnIds(threadId: string): Promise<string[]> {
+    const descendingIds: string[] = [];
+    const seenIds = new Set<string>();
+    const seenCursors = new Set<string>();
     let cursor: string | null | undefined;
-    for (let page = 0; page < TURN_COUNT_MAX_PAGES; page += 1) {
-      const turnsPage = await this.listTurns({
-        threadId,
-        cursor,
-        limit: TURN_COUNT_PAGE_SIZE,
-        sortDirection: 'desc',
-        itemsView: 'full',
-      });
-      const turn = turnsPage.data.find((candidate) => candidate.id === turnId);
-      if (turn) {
-        return turn.items.map((item) => ({ turnId, item }));
+
+    for (let page_ = 0; ; page_ += 1) {
+      if (page_ >= TURN_ID_MAX_PAGES) {
+        // Unlike turn counting, an incomplete answer is not an option here:
+        // a truncated prefix would be committed as provenance and silently
+        // narrow every inherited auxiliary-data read.
+        throw new Error(
+          `thread/turns/list exceeded ${TURN_ID_MAX_PAGES} pages for thread ${threadId}`,
+        );
       }
-      cursor = turnsPage.nextCursor;
+      let page: TurnsPage;
+      try {
+        page = await this.listTurns({
+          threadId,
+          cursor,
+          limit: TURN_ID_PAGE_SIZE,
+          sortDirection: 'desc',
+          itemsView: 'notLoaded',
+        });
+      } catch (err) {
+        if (cursor === undefined && isUnmaterializedTurnsListError(err)) {
+          return [];
+        }
+        throw err;
+      }
+
+      for (const turn of page.data) {
+        if (typeof turn.id !== 'string' || !turn.id) {
+          throw new Error(
+            `thread/turns/list returned an invalid turn id for thread ${threadId}`,
+          );
+        }
+        if (seenIds.has(turn.id)) {
+          throw new Error(
+            `thread/turns/list returned duplicate turn ${turn.id} for thread ${threadId}`,
+          );
+        }
+        seenIds.add(turn.id);
+        descendingIds.push(turn.id);
+      }
+
+      const nextCursor = page.nextCursor;
+      if (
+        nextCursor &&
+        (nextCursor === cursor || seenCursors.has(nextCursor))
+      ) {
+        throw new Error(
+          `thread/turns/list cursor did not advance for thread ${threadId}`,
+        );
+      }
+      if (nextCursor) seenCursors.add(nextCursor);
+      cursor = nextCursor;
       if (!cursor) break;
     }
-    throw new Error(`Turn ${turnId} was not found in thread ${threadId}`);
+
+    return descendingIds.reverse();
   }
 
   /**

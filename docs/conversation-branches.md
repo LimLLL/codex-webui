@@ -11,9 +11,12 @@ Each version is a real app-server thread. Switching versions is therefore ordina
 - New `POST /api/threads` requests include experimental `historyMode: "paginated"`. If app-server does not confirm paginated mode, the backend best-effort deletes the new thread and fails the request.
 - Branch creation uses only `thread/fork` with experimental `beforeTurnId`. The in-place `thread/revert` path is intentionally unused: it rewrites history while keeping the thread id, which would give the client two sources of truth that are indistinguishable by id.
 - `beforeTurnId` is preferred over `lastTurnId` because it also accepts interrupted turns. `lastTurnId` rejects them, and interrupted turns are roughly 1 in 13 in practice — all of which would otherwise be uneditable.
-- The fork response is validated against the expected prefix before anything is persisted. A mismatch deletes the child and fails the request rather than recording a branch whose history is not what was asked for.
+- Both ordinary and message-level forks pass `excludeTurns: true`. The 0.151.0 fork response is metadata-only; the backend discovers the child's complete persisted turn-ID prefix through `thread/turns/list` with `itemsView: "notLoaded"` before writing provenance. Message-level forks compare that prefix with the requested boundary exactly.
+- Fork responses must remain paginated and identify the expected parent. A mismatched source, history mode, prefix, duplicate turn ID, or non-advancing cursor fails closed. Once a distinct child id exists but before provenance commits, failure triggers a compensating `thread/delete` of that child.
+- The source-id reuse check precedes every compensating delete, so a malformed response can never delete the source conversation. A durable fork edge is the commit boundary: after it exists, later response-projection/cache failures preserve the child rather than deleting a tracked conversation.
 - The original version is stored as a normal version row. Branch versions are created with `messageTurnId = null` and bound to the next `turn/start` for that child thread.
 - Metadata is written in one transaction after a successful fork and before the client sends the edited message. If persistence fails, the backend attempts `thread/delete` on the child; cleanup failure is reported rather than swallowed.
+- Ordinary forks write a topology-only local edge using the `__end__` boundary sentinel. They do not create a message-version group, but they do immediately participate in tree discovery, deletion planning, and provenance read-through.
 
 ## Grouping Key
 
@@ -60,7 +63,9 @@ Two traps worth recording, both found by measurement:
 
 Token usage, turn diffs, and turn errors are **not copied** on fork. They are resolved at read time by walking the ancestor chain, which works because turn ids survive forking unchanged.
 
-The walk is bounded by `inheritedTurnIds`, captured from the fork response (which returns the complete inherited prefix, so one hop already covers every ancestor). Without that bound a branch would surface per-turn data its parent produced _after_ the fork point — most visibly by making "latest token usage" report the parent's newest turn.
+The walk is bounded by `inheritedTurnIds`, discovered from the child through lightweight turn-ID pages after the metadata-only fork. One hop's stored prefix covers every inherited ancestor turn. Without that bound a branch would surface per-turn data its parent produced _after_ the fork point — most visibly by making "latest token usage" report the parent's newest turn.
+
+Before this correction, ordinary forks wrote no local edge at all. Token usage appeared to survive only because a full-history fork caused app-server to replay usage notifications, which the backend persisted again under the child identity; turn diffs and turn errors had no equivalent replay and therefore silently inherited nothing. Recording one real ordinary-fork edge fixes that pre-existing defect for all three readers and avoids duplicating ancestor rows.
 
 Shared logic lives in `src/conversation-branches/provenance.ts` (`selectProvenanceRows`), with the nearest ancestor winning per turn.
 
@@ -140,30 +145,44 @@ Rendered with `@xyflow/react` over a `d3-hierarchy` tidy-tree layout. Layout is 
 - **Refresh is coalesced.** A delete produces `thread/status/changed`, `thread/deleted`, *and* the mutation's own settle callback. Each used to invalidate independently, so the thread list refetched twice at different times; because the sidebar reorders rows from that data (branch activity is lifted onto the root row), the row visibly moved twice per delete. All three now share the debounced invalidators in `web/src/lib/query-invalidation.ts`.
 - Every delete entry point is disabled until the adoption scanner reports `ready`, with the reason surfaced in the tooltip.
 
-## Empty Threads Report Differently Per Mode
+## Empty Paginated Threads Use Method-Specific Refusals
 
-A thread that was created but never sent to has no turns to read, and the two
-history modes report that state with neither the same wording nor the same code
-(measured on 0.149.1):
+The pinned 0.151.0 app-server reports one pre-message state three different
+ways, once per history method — different codes and different wording, measured
+against the pinned binary:
 
-| Mode      | `thread/read` with `includeTurns`                                                              |
-| --------- | ---------------------------------------------------------------------------------------------- |
-| legacy    | `-32600 ... is not materialized yet; includeTurns is unavailable before first user message`    |
-| paginated | `-32601 list_turns is not supported yet` — names the unimplemented backing call, not the state |
+| Method | Refusal before the first user message | Normalized result |
+| --- | --- | --- |
+| `thread/items/list` | `-32601 thread/items/list is not supported yet` | `[]` for the requested turn |
+| `thread/turns/list` | `-32600 thread <id> is not materialized yet; thread/turns/list is unavailable before first user message` | empty turn page / empty fork prefix |
+| `thread/read` with `includeTurns: true` | `-32601 list_turns is not supported yet` | retry without turns, then empty `turns` |
 
-`isNotMaterializedError` must match both. Because `thread/start` marks the new
-thread as resumed, the client's first `resume` goes through `readAsResume` →
-`thread/read includeTurns` and hits this immediately: missing the paginated
-wording makes every newly created conversation fail with 502.
+The third row is easy to miss. `thread/read` still names its backing Rust call
+rather than the state, and still answers `-32601` — the same shape 0.149.1 used
+for turn paging. Only the *turn-paging* wording changed in 0.151.0, so a
+predicate retired as "obsolete 0.149.1 wording" would silently break reads,
+message branching, and the running-thread guard in the delete path.
 
-This is also why the predicate is not gated on an error code — the codes differ
-per mode.
+Classification is centralized in `thread-errors.ts` and requires the RPC
+method, code, and narrow pinned message together. One shared loose pattern
+across all three would reclassify a genuine "method not found" as empty
+history. The pinned devDependency is the runtime contract; `CODEX_BIN` is an
+advanced escape hatch without a compatibility promise, so no predicate carries
+wording for an unpinned server.
+
+The item sentence is overloaded upstream: it can also mean that the backing
+store genuinely lacks item pagination. Returning `[]` keeps an empty thread
+consistent with a successful item query that does not find the requested turn,
+but always emits a warning so a store/protocol mismatch is not silently hidden.
+There is no fallback to full-detail turn pages: on an empty thread that call
+fails for the same underlying state, and on a materialized paginated thread the
+item call succeeds directly.
 
 ## Protocol Notes
 
 The generated stable app-server type surface omits some experimental runtime fields and methods. Absence from generated types is therefore not evidence that a pinned binary lacks the capability. Locally used experimental history calls are isolated in `ThreadHistoryService`: `thread/resume` with `excludeTurns` + `initialTurnsPage`, and `thread/turns/list` for paged history and graph turn counts. Message branching still isolates `historyMode` and `beforeTurnId` behind local type extensions.
 
-`thread/turns/list` is used only for user-visible history paging and decorative counts. Deletion planning never depends on turn counts. Branch creation still uses `thread/read includeTurns`, and inherited data comes from local provenance.
+`thread/turns/list` is used for user-visible history paging, decorative counts, and lightweight post-fork turn-ID discovery. Fork discovery requests `itemsView: "notLoaded"`; it never rehydrates full item detail. Deletion planning never depends on turn counts. Message branch source inspection still uses `thread/read includeTurns`, and inherited auxiliary data comes from local provenance.
 
 ## Why Editing a Message Forks
 

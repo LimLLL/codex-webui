@@ -14,10 +14,12 @@ import type {
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import {
   isInvalidForkBoundaryError,
-  isNotMaterializedError,
   isThreadServerUnavailableError,
+  isUnmaterializedThreadReadError,
   isUnsupportedForkBoundaryFieldError,
 } from './thread-errors';
+import { ThreadHistoryService } from './thread-history.service';
+import { assertPaginatedThread } from './thread-history-mode';
 import { previewFromUserInput, truncatePreview } from './thread-input-preview';
 
 /**
@@ -33,6 +35,7 @@ type ExperimentalThreadForkBeforeParams = Omit<
   'lastTurnId'
 > & {
   beforeTurnId: string;
+  excludeTurns: true;
 };
 
 type UserMessageItem = Extract<v2.ThreadItem, { type: 'userMessage' }>;
@@ -52,6 +55,7 @@ export class ThreadsBranchingService {
     private readonly codex: CodexService,
     private readonly resumeRegistry: ThreadResumeRegistryService,
     private readonly branches: ConversationBranchesService,
+    private readonly history: ThreadHistoryService,
   ) {}
 
   /**
@@ -68,6 +72,15 @@ export class ThreadsBranchingService {
     const editedTurnId = this.readEditedTurnId(body);
     const branchPreviewText = this.readBranchPreviewText(body);
     const source = await this.readThread(sourceThreadId, true);
+    assertPaginatedThread(source.thread, 'thread/read');
+    if (source.thread.id !== sourceThreadId) {
+      throw new BusinessException(
+        ErrorCode.threads.branchForkUnsupported,
+        HttpStatus.BAD_GATEWAY,
+        'thread/read returned a different source conversation id',
+        { threadId: sourceThreadId, returnedThreadId: source.thread.id },
+      );
+    }
 
     this.assertThreadIsBranchable(source.thread, sourceThreadId);
 
@@ -115,18 +128,42 @@ export class ThreadsBranchingService {
       );
     }
 
-    if (!this.forkPrefixMatches(forkResponse.thread, expectedPrefixTurnIds)) {
-      await this.deleteUntrackedThread(childThreadId);
-      throw new BusinessException(
-        ErrorCode.threads.branchPrefixMismatch,
-        HttpStatus.BAD_GATEWAY,
-        'thread/fork did not return the expected common prefix',
+    try {
+      const forkedFromId = forkResponse.thread.forkedFromId;
+      if (forkedFromId && forkedFromId !== sourceThreadId) {
+        throw new BusinessException(
+          ErrorCode.threads.branchPrefixMismatch,
+          HttpStatus.BAD_GATEWAY,
+          'thread/fork returned a child of a different source conversation',
+          { threadId: sourceThreadId, childThreadId, forkedFromId },
+        );
+      }
+      assertPaginatedThread(forkResponse.thread, 'thread/fork');
+      const actualPrefixTurnIds =
+        await this.history.listAllTurnIds(childThreadId);
+      if (!this.forkPrefixMatches(actualPrefixTurnIds, expectedPrefixTurnIds)) {
+        throw new BusinessException(
+          ErrorCode.threads.branchPrefixMismatch,
+          HttpStatus.BAD_GATEWAY,
+          'thread/fork did not persist the expected common prefix',
+          { threadId: sourceThreadId, childThreadId },
+        );
+      }
+    } catch (err) {
+      const cleanupError = await this.deleteUntrackedThread(childThreadId);
+      if (!cleanupError) throw err;
+      throw BusinessException.internal(
+        ErrorCode.threads.branchMetadataFailed,
+        `Fork validation failed and cleanup of ${childThreadId} also failed: ${cleanupError.message}`,
         { threadId: sourceThreadId, childThreadId },
       );
     }
 
+    let recorded: ReturnType<
+      ConversationBranchesService['recordMessageBranch']
+    >;
     try {
-      const recorded = this.branches.recordMessageBranch({
+      recorded = this.branches.recordMessageBranch({
         sourceThreadId,
         childThreadId,
         treeRootThreadId,
@@ -136,22 +173,40 @@ export class ThreadsBranchingService {
         originalPreviewText,
         branchPreviewText,
       });
-      this.resumeRegistry.markResumed(childThreadId);
-      this.resumeRegistry.cacheResponse(childThreadId, forkResponse);
-      return { fork: forkResponse, ...recorded };
-    } catch {
+    } catch (err) {
+      // `recordMessageBranch` builds its response DTO after committing. A
+      // projection failure must never delete a child whose edge is durable.
+      if (this.branches.hasForkEdge(childThreadId)) {
+        throw BusinessException.internal(
+          ErrorCode.threads.branchMetadataFailed,
+          'Branch metadata was persisted but its response could not be built; the child conversation was preserved',
+          { threadId: sourceThreadId, childThreadId },
+        );
+      }
       const cleanupError = await this.deleteUntrackedThread(childThreadId);
       const cleanupSuffix = cleanupError
         ? ` Cleanup of ${childThreadId} also failed: ${cleanupError.message}`
         : '';
       throw BusinessException.internal(
         ErrorCode.threads.branchMetadataFailed,
-        `Failed to persist branch metadata.${cleanupSuffix}`,
+        `Failed to persist branch metadata: ${
+          err instanceof Error ? err.message : String(err)
+        }.${cleanupSuffix}`,
         { threadId: sourceThreadId, childThreadId },
       );
     }
+    this.resumeRegistry.markResumed(childThreadId);
+    this.resumeRegistry.cacheResponse(childThreadId, forkResponse);
+    return { fork: forkResponse, ...recorded };
   }
 
+  /**
+   * Reads a source thread, tolerating a thread with no persisted history.
+   *
+   * An unmaterialized source cannot be branched, but it must fail the
+   * branchability check with a caller-facing error rather than surfacing a raw
+   * app-server refusal.
+   */
   private async readThread(
     threadId: string,
     includeTurns: boolean,
@@ -162,14 +217,12 @@ export class ThreadsBranchingService {
         includeTurns,
       });
     } catch (err) {
-      if (includeTurns && isNotMaterializedError(err)) {
-        const response = await this.codex.request<v2.ThreadReadResponse>(
-          'thread/read',
-          { threadId, includeTurns: false },
-        );
-        return { thread: { ...response.thread, turns: [] } };
-      }
-      throw err;
+      if (!includeTurns || !isUnmaterializedThreadReadError(err)) throw err;
+      const metadata = await this.codex.request<v2.ThreadReadResponse>(
+        'thread/read',
+        { threadId, includeTurns: false },
+      );
+      return { thread: { ...metadata.thread, turns: [] } };
     }
   }
 
@@ -201,6 +254,7 @@ export class ThreadsBranchingService {
     const params: ExperimentalThreadForkBeforeParams = {
       threadId: sourceThreadId,
       beforeTurnId: editedTurnId,
+      excludeTurns: true,
     };
     return this.codex.request<v2.ThreadForkResponse>('thread/fork', params);
   }
@@ -243,10 +297,9 @@ export class ThreadsBranchingService {
   }
 
   private forkPrefixMatches(
-    forkedThread: v2.Thread,
+    actualIds: string[],
     expectedPrefixTurnIds: string[],
   ): boolean {
-    const actualIds = forkedThread.turns.map((turn) => turn.id);
     return (
       actualIds.length === expectedPrefixTurnIds.length &&
       actualIds.every(

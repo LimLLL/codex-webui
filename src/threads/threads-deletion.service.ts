@@ -18,8 +18,8 @@ import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import {
   isDescendantRejectedError,
-  isNotMaterializedError,
   isThreadNotFoundError,
+  isUnmaterializedThreadReadError,
 } from './thread-errors';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import type {
@@ -399,14 +399,16 @@ export class ThreadsDeletionService {
         },
       );
     } catch (err) {
-      if (!isNotMaterializedError(err)) throw err;
-      response = await this.codex.request<v2.ThreadReadResponse>(
+      if (!isUnmaterializedThreadReadError(err)) throw err;
+      // A thread can be running before its first user message is persisted, and
+      // app-server then refuses to reconstruct turns at all. Re-read metadata so
+      // this still resolves to a typed conflict below rather than escaping as a
+      // raw transport error the caller cannot classify.
+      const metadata = await this.codex.request<v2.ThreadReadResponse>(
         'thread/read',
-        {
-          threadId,
-          includeTurns: false,
-        },
+        { threadId, includeTurns: false },
       );
+      response = { thread: { ...metadata.thread, turns: [] } };
     }
     if (response.thread.status.type !== 'active') return null;
     const inProgress = [...response.thread.turns]

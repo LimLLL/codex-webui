@@ -35,7 +35,7 @@ import {
 import { settingsListSettingsQueryKey } from '@/generated/api/@tanstack/react-query.gen';
 import type { PendingServerRequestDto } from '@/generated/api';
 import type { ApprovalRequest } from '@/types/approval';
-import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
+import { parseApprovalRequest } from '@/lib/approval-parsers';
 import { userInputFromPending } from '@/lib/user-input-parsers';
 import { applyOpenResponse } from '@/hooks/use-thread-open';
 
@@ -44,42 +44,15 @@ const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
 const IDLE_SUBSCRIPTION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 function approvalFromPending(request: PendingServerRequestDto): ApprovalRequest | null {
-  const params = request.params;
-  const turnId = typeof params.turnId === 'string' ? params.turnId : request.turnId;
-  const itemId = typeof params.itemId === 'string' ? params.itemId : request.itemId;
-  if (!turnId || !itemId || request.status !== 'pending') return null;
-
-  if (request.method === 'item/commandExecution/requestApproval') {
-    return {
-      requestId: request.requestId,
-      kind: 'commandExecution',
-      threadId: request.threadId,
-      turnId,
-      itemId,
-      status: 'pending',
-      command: (params.command as string) ?? null,
-      cwd: (params.cwd as string) ?? null,
-      reason: (params.reason as string) ?? null,
-      availableDecisions: parseAvailableDecisions(params.availableDecisions),
-      proposedExecpolicyAmendment: parseStringArray(params.proposedExecpolicyAmendment),
-      proposedNetworkPolicyAmendments: parseNetworkAmendments(params.proposedNetworkPolicyAmendments),
-    };
-  }
-
-  if (request.method === 'item/fileChange/requestApproval') {
-    return {
-      requestId: request.requestId,
-      kind: 'fileChange',
-      threadId: request.threadId,
-      turnId,
-      itemId,
-      status: 'pending',
-      reason: (params.reason as string) ?? null,
-      grantRoot: (params.grantRoot as string) ?? null,
-    };
-  }
-
-  return null;
+  if (request.status !== 'pending') return null;
+  return parseApprovalRequest({
+    requestId: request.requestId,
+    method: request.method,
+    params: request.params,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    itemId: request.itemId,
+  });
 }
 
 function readMaxIdleSubscriptions(

@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
+  BRANCH_END_SENTINEL,
   BRANCH_START_SENTINEL,
   conversationBranchEdges,
   conversationBranchGroups,
@@ -43,6 +44,14 @@ export interface ReapDeletedThreadResult {
   removedEdges: number;
   dissolvedGroups: number;
   resequencedGroups: number;
+}
+
+/** Inputs required to persist a topology-only local fork edge. */
+export interface RecordLocalForkParams {
+  sourceThreadId: string;
+  childThreadId: string;
+  treeRootThreadId: string;
+  inheritedTurnIds: string[];
 }
 
 export class OrphanedLocalTopologyError extends Error {
@@ -85,6 +94,35 @@ export class ConversationBranchMutationsService {
   /** Reads all version rows for scanner conflict checks and delete previews. */
   listVersions(): ConversationBranchVersion[] {
     return this.db.select().from(conversationBranchVersions).all();
+  }
+
+  /**
+   * Records an ordinary fork as a local topology edge without copying data.
+   *
+   * The inherited turn IDs bound provenance reads for token usage, turn diffs,
+   * and turn errors. No message-version group is created because an ordinary
+   * fork does not replace a user message.
+   *
+   * @param params - Confirmed parent, child, root, and persisted child prefix
+   */
+  recordLocalFork(params: RecordLocalForkParams): void {
+    if (params.childThreadId === params.sourceThreadId) {
+      throw new Error('Cannot record a thread as its own fork child');
+    }
+    this.db
+      .insert(conversationBranchEdges)
+      .values({
+        childThreadId: params.childThreadId,
+        parentThreadId: params.sourceThreadId,
+        treeRootThreadId: params.treeRootThreadId,
+        forkBeforeTurnId: BRANCH_END_SENTINEL,
+        commonPrefixTurnId:
+          params.inheritedTurnIds.at(-1) ?? BRANCH_START_SENTINEL,
+        source: 'local',
+        inheritedTurnIds: JSON.stringify(params.inheritedTurnIds),
+        createdAt: Date.now(),
+      })
+      .run();
   }
 
   /**

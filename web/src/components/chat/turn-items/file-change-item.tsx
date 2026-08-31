@@ -66,7 +66,7 @@ export function FileChangeItem({ item, approval }: Props) {
       path: { requestId: String(approval.requestId) },
       body: { result: { decision: toRpcDecision(decision) } },
     })
-      .then(() => resolveApproval(approval.itemId, decision))
+      .then(() => resolveApproval(approval.requestId, decision))
       .catch(() => undefined);
   };
 

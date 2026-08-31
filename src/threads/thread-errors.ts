@@ -1,9 +1,11 @@
 /**
  * Shared error predicates for the threads module.
  *
- * The RPC client now preserves `error.code`/`error.data`, but app-server uses a
- * single JSON-RPC code (-32600) for every rejected request, so the code alone
- * cannot tell "this turn is in progress" from "this field is unknown". Codes
+ * The RPC client preserves `error.code`/`error.data`, but app-server overloads
+ * its JSON-RPC codes: -32600 is the catch-all for rejected requests, and -32601
+ * covers both a genuinely missing method and a thread with no persisted history
+ * yet. A code alone therefore cannot tell "this turn is in progress" from "this
+ * field is unknown" from "this thread is empty". Codes and the calling method
  * gate the predicates; message matching is what discriminates, and keeping it
  * here makes an upstream wording change a one-file fix.
  *
@@ -17,6 +19,9 @@ import {
 
 /** JSON-RPC "Invalid Request"; app-server's catch-all for rejected calls. */
 const INVALID_REQUEST = -32600;
+
+/** JSON-RPC "Method not found"; overloaded by pinned app-server history. */
+const METHOD_NOT_FOUND = -32601;
 
 /** Flattens message and structured data into one string for matching. */
 function errorText(err: unknown): string {
@@ -34,26 +39,55 @@ function isInvalidRequest(err: unknown): boolean {
 }
 
 /**
- * Returns true when a thread has no turns to read yet.
+ * Returns true when turn paging refused a thread before its first user message.
  *
- * The two history modes report this same state differently, and neither the
- * wording nor the code overlaps — measured against 0.149.1 on a thread created
- * but never sent to:
- *
- * - legacy:    `-32600 ... is not materialized yet; includeTurns is
- *              unavailable before first user message`
- * - paginated: `-32601 list_turns is not supported yet` — it names the
- *              unimplemented backing call rather than the state
- *
- * Deliberately not gated on the error code: the codes differ per mode (-32600
- * vs -32601), and this predicate guards resume/read fallbacks where treating a
- * recoverable state as fatal breaks thread creation outright.
+ * Classification deliberately includes method, code, and pinned 0.151.0
+ * wording. The same words on a different RPC must not trigger an empty-history
+ * normalization.
  */
-export function isNotMaterializedError(err: unknown): boolean {
-  const text = errorText(err);
+export function isUnmaterializedTurnsListError(err: unknown): boolean {
   return (
-    /\bnot materialized\b/i.test(text) ||
-    /\blist_turns is not supported\b/i.test(text)
+    isCodexRpcError(err) &&
+    err.method === 'thread/turns/list' &&
+    err.code === INVALID_REQUEST &&
+    /^thread \S+ is not materialized yet; thread\/turns\/list is unavailable before first user message$/.test(
+      err.rpcMessage,
+    )
+  );
+}
+
+/**
+ * Returns true when `thread/read` refused to reconstruct turns for a thread
+ * before its first user message.
+ *
+ * Measured against 0.151.0: `thread/read` still names its backing call rather
+ * than the state, and still answers `-32601`, while `thread/turns/list` reports
+ * the same condition as `-32600` with the state spelled out. The three history
+ * RPCs each word this differently, so each needs its own predicate — a shared
+ * loose pattern would reclassify a genuine "method not found" as empty history.
+ */
+export function isUnmaterializedThreadReadError(err: unknown): boolean {
+  return (
+    isCodexRpcError(err) &&
+    err.method === 'thread/read' &&
+    err.code === METHOD_NOT_FOUND &&
+    err.rpcMessage === 'list_turns is not supported yet'
+  );
+}
+
+/**
+ * Returns true for the pinned item-paging refusal seen on an empty thread.
+ *
+ * App-server also uses this exact response when its store genuinely lacks item
+ * pagination, so callers that normalize it to empty must emit a warning rather
+ * than silently hiding a protocol or store mismatch.
+ */
+export function isEmptyThreadItemsListRefusal(err: unknown): boolean {
+  return (
+    isCodexRpcError(err) &&
+    err.method === 'thread/items/list' &&
+    err.code === METHOD_NOT_FOUND &&
+    err.rpcMessage === 'thread/items/list is not supported yet'
   );
 }
 

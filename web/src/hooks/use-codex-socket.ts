@@ -10,7 +10,7 @@ import { useTimelineStore } from '../stores/timeline-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { handleNotification, type NotificationContext } from './notification-handlers';
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors, threadsResumeThread } from '@/generated/api/sdk.gen';
-import { parseAvailableDecisions, parseStringArray, parseNetworkAmendments } from '@/lib/approval-parsers';
+import { parseApprovalRequest } from '@/lib/approval-parsers';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
 import { applyOpenResponse } from './use-thread-open';
 import i18n from '@/i18n';
@@ -221,49 +221,15 @@ export function useCodexSocket(enabled = true) {
       params: Record<string, unknown>;
     }) => {
       const { id, method, params } = request;
-      if (
-        typeof params.threadId !== 'string' ||
-        typeof params.turnId !== 'string' ||
-        typeof params.itemId !== 'string'
-      ) {
-        return;
-      }
+      if (typeof params.threadId !== 'string') return;
       const reqThreadId = params.threadId;
-      const turnId = params.turnId;
-      const itemId = params.itemId;
       const store = useTimelineStore.getState();
       const title = store.getThreadTitle(reqThreadId);
       let snackbarMessage: string | null = null;
 
-      if (method === 'item/commandExecution/requestApproval') {
-        store.addApprovalForThread(reqThreadId, {
-          requestId: id,
-          kind: 'commandExecution',
-          threadId: reqThreadId,
-          turnId,
-          itemId,
-          status: 'pending',
-          command: (params.command as string) ?? null,
-          cwd: (params.cwd as string) ?? null,
-          reason: (params.reason as string) ?? null,
-          availableDecisions: parseAvailableDecisions(params.availableDecisions),
-          proposedExecpolicyAmendment: parseStringArray(params.proposedExecpolicyAmendment),
-          proposedNetworkPolicyAmendments: parseNetworkAmendments(params.proposedNetworkPolicyAmendments),
-        });
-        snackbarMessage = i18n.t('Approval needed in {{thread}}', { thread: title });
-      }
-
-      if (method === 'item/fileChange/requestApproval') {
-        store.addApprovalForThread(reqThreadId, {
-          requestId: id,
-          kind: 'fileChange',
-          threadId: reqThreadId,
-          turnId,
-          itemId,
-          status: 'pending',
-          reason: (params.reason as string) ?? null,
-          grantRoot: (params.grantRoot as string) ?? null,
-        });
+      const approval = parseApprovalRequest({ requestId: id, method, params });
+      if (approval) {
+        store.addApprovalForThread(reqThreadId, approval);
         snackbarMessage = i18n.t('Approval needed in {{thread}}', { thread: title });
       }
 

@@ -4,7 +4,9 @@
  */
 import { Bot, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useShallow } from 'zustand/react/shallow';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import type { ApprovalRequest } from '@/types/approval';
 import type { TimelineEntry, TurnItem } from '@/types/timeline';
 import { ReasoningItem } from './turn-items/reasoning-item';
 import { AgentMessageItem } from './turn-items/agent-message-item';
@@ -59,13 +61,26 @@ interface Props {
   entry: Extract<TimelineEntry, { kind: 'turn' }>;
 }
 
-/** Renders a single turn item with its blocking request cards (approval / user input). */
-function ItemWithRequests({ item }: { item: TurnItem }) {
-  const approval = useTimelineStore((s) => s.approvals[item.itemId]);
+/**
+ * Renders a single turn item with its same-turn blocking request cards.
+ *
+ * Approvals arrive already grouped by item because they are keyed by request
+ * id: resolving them per item would rescan the whole map on every item render
+ * and re-render every item whenever any approval anywhere changed.
+ */
+function ItemWithRequests({
+  item,
+  turnId,
+  approvals,
+}: {
+  item: TurnItem;
+  turnId: string;
+  approvals: ApprovalRequest[];
+}) {
   // userInputRequests keyed by requestId — find matching entry by itemId.
   const userInputRequest = useTimelineStore((s) => {
     const match = Object.values(s.userInputRequests).filter(
-      (req) => req.itemId === item.itemId,
+      (req) => req.turnId === turnId && req.itemId === item.itemId,
     );
     return match.find((req) => req.status === 'pending') ?? match[0] ?? null;
   });
@@ -100,14 +115,26 @@ function ItemWithRequests({ item }: { item: TurnItem }) {
       return (
         <>
           <CommandItem item={item} />
-          {approval && <ApprovalItem approval={approval} />}
+          {approvals
+            .filter((approval) => approval.kind !== 'fileChange')
+            .map((approval) => (
+              <ApprovalItem
+                key={String(approval.requestId)}
+                approval={approval}
+              />
+            ))}
           {inputCard}
         </>
       );
     case 'fileChange':
       return (
         <>
-          <FileChangeItem item={item} approval={approval} />
+          <FileChangeItem
+            item={item}
+            approval={approvals.find(
+              (approval) => approval.kind === 'fileChange',
+            )}
+          />
           {inputCard}
         </>
       );
@@ -126,6 +153,16 @@ function ItemWithRequests({ item }: { item: TurnItem }) {
 export function TurnBlock({ entry }: Props) {
   const { t } = useTranslation();
   const userInputRequests = useTimelineStore((s) => s.userInputRequests);
+  // Select this turn's approvals, not the whole map: approvals are keyed by
+  // request id, so subscribing to the map would rerender every mounted turn
+  // whenever any approval anywhere changed.
+  const approvals = useTimelineStore(
+    useShallow((s) =>
+      Object.values(s.approvals).filter(
+        (approval) => approval.turnId === entry.turnId,
+      ),
+    ),
+  );
   // History opens in the cheap `summary` view, which withholds reasoning and
   // plan items; a rendered turn fetches its own full items once.
   useTurnItemsTopUp({
@@ -139,6 +176,23 @@ export function TurnBlock({ entry }: Props) {
   const unattachedInputs = Object.values(userInputRequests).filter(
     (req) => req.turnId === entry.turnId && !itemIds.has(req.itemId),
   );
+  // Group this turn's approvals once. One request id can share an itemId with
+  // another (zsh-exec-bridge subcommands, stdin callbacks), so an item maps to
+  // a list rather than a single card.
+  const approvalsByItemId = new Map<string, ApprovalRequest[]>();
+  // A writeStdin approval belongs to the current callback turn even though its
+  // itemId names the command item from an earlier turn. Render it here without
+  // changing the parent command's lifecycle or moving the card backward.
+  const unattachedApprovals: ApprovalRequest[] = [];
+  for (const approval of approvals) {
+    if (!itemIds.has(approval.itemId)) {
+      unattachedApprovals.push(approval);
+      continue;
+    }
+    const existing = approvalsByItemId.get(approval.itemId);
+    if (existing) existing.push(approval);
+    else approvalsByItemId.set(approval.itemId, [approval]);
+  }
 
   // A summary turn holds an entry purely so the top-up above can be mounted,
   // and a turn whose only item was the user message stays empty even after it.
@@ -148,6 +202,7 @@ export function TurnBlock({ entry }: Props) {
     entry.items.length > 0 ||
     Boolean(entry.plan) ||
     entry.diff !== undefined ||
+    unattachedApprovals.length > 0 ||
     unattachedInputs.length > 0;
   if (!hasContent) return null;
 
@@ -164,16 +219,35 @@ export function TurnBlock({ entry }: Props) {
 
         {groupConsecutiveToolCalls(entry.items).map((group) => {
           if (group.kind === 'single') {
-            return <ItemWithRequests key={group.item.itemId} item={group.item} />;
+            return (
+              <ItemWithRequests
+                key={group.item.itemId}
+                item={group.item}
+                turnId={entry.turnId}
+                approvals={approvalsByItemId.get(group.item.itemId) ?? []}
+              />
+            );
           }
           return (
             <ToolCallGroup key={group.items[0].itemId} items={group.items}>
               {group.items.map((item) => (
-                <ItemWithRequests key={item.itemId} item={item} />
+                <ItemWithRequests
+                  key={item.itemId}
+                  item={item}
+                  turnId={entry.turnId}
+                  approvals={approvalsByItemId.get(item.itemId) ?? []}
+                />
               ))}
             </ToolCallGroup>
           );
         })}
+
+        {unattachedApprovals.map((approval) => (
+          <ApprovalItem
+            key={String(approval.requestId)}
+            approval={approval}
+          />
+        ))}
 
         {unattachedInputs.map((req) => (
           <UserInputCard key={String(req.requestId)} request={req} />

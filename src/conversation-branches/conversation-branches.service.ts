@@ -79,6 +79,17 @@ export class ConversationBranchesService {
     return group?.treeRootThreadId ?? threadId;
   }
 
+  /** Returns whether a durable fork edge exists for the child thread. */
+  hasForkEdge(childThreadId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ childThreadId: conversationBranchEdges.childThreadId })
+        .from(conversationBranchEdges)
+        .where(eq(conversationBranchEdges.childThreadId, childThreadId))
+        .get(),
+    );
+  }
+
   /** Returns the known local thread ids for the branch tree containing `threadId`. */
   listKnownTreeThreadIds(threadId: string): string[] {
     const rootThreadId = this.resolveTreeRootThreadId(threadId);

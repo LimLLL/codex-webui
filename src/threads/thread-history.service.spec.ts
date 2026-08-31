@@ -17,7 +17,9 @@ describe('ThreadHistoryService', () => {
     // surface no longer being honoured. Coercing it to `{ data: [] }` would
     // render every conversation blank instead of reporting the regression.
     mockCodex.request
-      .mockResolvedValueOnce({ thread: { id: 't1', turns: [] } })
+      .mockResolvedValueOnce({
+        thread: { id: 't1', turns: [], historyMode: 'paginated' },
+      })
       .mockResolvedValueOnce({
         data: [{ id: 'turn-1' }],
         nextCursor: null,
@@ -42,7 +44,7 @@ describe('ThreadHistoryService', () => {
     // The other half of the distinction: a conversation really can have no
     // turns yet, and that must not trigger a fallback round trip.
     mockCodex.request.mockResolvedValueOnce({
-      thread: { id: 't1', turns: [] },
+      thread: { id: 't1', turns: [], historyMode: 'paginated' },
       initialTurnsPage: { data: [], nextCursor: null, backwardsCursor: null },
     });
 
@@ -96,39 +98,97 @@ describe('ThreadHistoryService', () => {
     ]);
   });
 
-  it('falls back to full turn pages when thread/items/list is unsupported', async () => {
+  it('normalizes the pinned empty-thread item refusal without a fallback call', async () => {
+    mockCodex.request.mockRejectedValueOnce(
+      new CodexRpcError(
+        { code: -32601, message: 'thread/items/list is not supported yet' },
+        { method: 'thread/items/list' },
+      ),
+    );
+
+    await expect(service.listTurnItems('t1', 'turn-1')).resolves.toEqual([]);
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not normalize the same item wording from another method', async () => {
+    const error = new CodexRpcError(
+      { code: -32601, message: 'thread/items/list is not supported yet' },
+      { method: 'thread/turns/list' },
+    );
+    mockCodex.request.mockRejectedValueOnce(error);
+
+    await expect(service.listTurnItems('t1', 'turn-1')).rejects.toBe(error);
+  });
+
+  it('discovers all turn IDs in chronological order without loading items', async () => {
     mockCodex.request
-      .mockRejectedValueOnce(
-        new CodexRpcError(
-          { code: -32601, message: 'thread/items/list is not supported yet' },
-          { method: 'thread/items/list' },
-        ),
-      )
       .mockResolvedValueOnce({
-        data: [
-          {
-            id: 'turn-1',
-            items: [{ type: 'plan', id: 'item-1', text: 'Plan' }],
-          },
-        ],
+        data: [{ id: 'turn-3' }, { id: 'turn-2' }],
+        nextCursor: 'older',
+        backwardsCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'turn-1' }],
         nextCursor: null,
         backwardsCursor: null,
       });
 
-    await expect(service.listTurnItems('t1', 'turn-1')).resolves.toEqual([
-      {
-        turnId: 'turn-1',
-        item: { type: 'plan', id: 'item-1', text: 'Plan' },
-      },
+    await expect(service.listAllTurnIds('t1')).resolves.toEqual([
+      'turn-1',
+      'turn-2',
+      'turn-3',
     ]);
-    expect(mockCodex.request).toHaveBeenNthCalledWith(
-      2,
-      'thread/turns/list',
-      expect.objectContaining({
-        threadId: 't1',
-        itemsView: 'full',
-        sortDirection: 'desc',
-      }),
+    expect(mockCodex.request).toHaveBeenNthCalledWith(1, 'thread/turns/list', {
+      threadId: 't1',
+      cursor: undefined,
+      limit: 200,
+      sortDirection: 'desc',
+      itemsView: 'notLoaded',
+    });
+  });
+
+  it('treats the pinned pre-message turn-list refusal as no IDs', async () => {
+    mockCodex.request.mockRejectedValueOnce(
+      new CodexRpcError(
+        {
+          code: -32600,
+          message:
+            'thread t1 is not materialized yet; thread/turns/list is unavailable before first user message',
+        },
+        { method: 'thread/turns/list' },
+      ),
     );
+
+    await expect(service.listAllTurnIds('t1')).resolves.toEqual([]);
+  });
+
+  it('fails closed when turn paging repeats a cursor', async () => {
+    mockCodex.request
+      .mockResolvedValueOnce({ data: [{ id: 'two' }], nextCursor: 'same' })
+      .mockResolvedValueOnce({ data: [{ id: 'one' }], nextCursor: 'same' });
+
+    await expect(service.listAllTurnIds('t1')).rejects.toThrow(
+      'cursor did not advance',
+    );
+  });
+
+  it('fails closed when fresh turn cursors exceed the page cap', async () => {
+    // The cursor and ids advance every page, so neither the repeat guard nor
+    // the duplicate guard fires — only the cap terminates this. Truncating
+    // instead would commit a short prefix as fork provenance.
+    let page = 0;
+    mockCodex.request.mockImplementation(() => {
+      page += 1;
+      return Promise.resolve({
+        data: [{ id: `turn-${page}` }],
+        nextCursor: `cursor-${page}`,
+        backwardsCursor: null,
+      });
+    });
+
+    await expect(service.listAllTurnIds('t1')).rejects.toThrow(
+      'exceeded 200 pages',
+    );
+    expect(mockCodex.request).toHaveBeenCalledTimes(200);
   });
 });
