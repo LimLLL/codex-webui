@@ -9,6 +9,22 @@ export class PersistedTurnErrorDto {
   @ApiProperty()
   message!: string;
 
+  /** Stable app-server error classification, when one accompanied the failure. */
+  @ApiProperty({ type: String, nullable: true })
+  errorCategory!: string | null;
+
+  /** Additional user-facing diagnostic detail supplied by the app-server. */
+  @ApiProperty({ type: String, nullable: true })
+  additionalDetails!: string | null;
+
+  /** Misalignment-policy classification retained for refresh recovery. */
+  @ApiProperty({ type: String, nullable: true })
+  misalignmentErrorType!: string | null;
+
+  /** Misalignment-policy explanation retained for refresh recovery. */
+  @ApiProperty({ type: String, nullable: true })
+  misalignmentExplanation!: string | null;
+
   @ApiProperty()
   createdAt!: number;
 }

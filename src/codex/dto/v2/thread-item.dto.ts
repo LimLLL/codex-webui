@@ -17,6 +17,7 @@ import {
   NULLABLE_STRING_SCHEMA,
   PATCH_APPLY_STATUS_VALUES,
   REASONING_EFFORT_VALUES,
+  SUB_AGENT_ACTIVITY_KIND_VALUES,
   jsonValueSchema,
   nullableStringEnumSchema,
   oneOfSchema,
@@ -30,10 +31,14 @@ import {
   McpToolCallResultDto,
   MemoryCitationDto,
   commandActionSchema,
-  dynamicToolCallOutputContentItemSchema,
   userInputSchema,
   webSearchActionSchema,
 } from './support.dto';
+import {
+  ImageGenerationUsageLimitExceededFailureDto,
+  dynamicToolCallOutputContentItemSchema,
+  functionCallOutputBodySchema,
+} from './thread-item-support.dto';
 
 /** v2 ThreadItem branch for persisted user messages. */
 export class UserMessageThreadItemDto {
@@ -81,6 +86,24 @@ export class AgentMessageThreadItemDto {
     oneOf: [{ $ref: getSchemaPath(MemoryCitationDto) }],
   })
   memoryCitation!: MemoryCitationDto | null;
+}
+
+/** v2 ThreadItem branch for standalone function-call outputs. */
+export class FunctionCallOutputThreadItemDto {
+  @ApiProperty({ enum: ['functionCallOutput'] })
+  type!: 'functionCallOutput';
+
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  namespace!: string | null;
+
+  @ApiProperty(functionCallOutputBodySchema())
+  output!: unknown;
 }
 
 /** v2 ThreadItem branch for plan text. */
@@ -208,6 +231,9 @@ export class DynamicToolCallThreadItemDto {
   @ApiProperty()
   id!: string;
 
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  namespace!: string | null;
+
   @ApiProperty()
   tool!: string;
 
@@ -267,6 +293,24 @@ export class CollabAgentToolCallThreadItemDto {
   agentsStates!: Record<string, CollabAgentStateDto>;
 }
 
+/** v2 ThreadItem branch for Multi-Agent V2 lifecycle activity. */
+export class SubAgentActivityThreadItemDto {
+  @ApiProperty({ enum: ['subAgentActivity'] })
+  type!: 'subAgentActivity';
+
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty({ enum: SUB_AGENT_ACTIVITY_KIND_VALUES })
+  kind!: (typeof SUB_AGENT_ACTIVITY_KIND_VALUES)[number];
+
+  @ApiProperty()
+  agentThreadId!: string;
+
+  @ApiProperty()
+  agentPath!: string;
+}
+
 /** v2 ThreadItem branch for web searches. */
 export class WebSearchThreadItemDto {
   @ApiProperty({ enum: ['webSearch'] })
@@ -280,6 +324,13 @@ export class WebSearchThreadItemDto {
 
   @ApiProperty(webSearchActionSchema(true))
   action!: unknown;
+
+  @ApiProperty({
+    nullable: true,
+    type: 'array',
+    items: jsonValueSchema(false) as Record<string, unknown>,
+  })
+  results!: unknown[] | null;
 }
 
 /** v2 ThreadItem branch for image views. */
@@ -292,6 +343,18 @@ export class ImageViewThreadItemDto {
 
   @ApiProperty()
   path!: string;
+}
+
+/** v2 ThreadItem branch for interruptible sleep activity. */
+export class SleepThreadItemDto {
+  @ApiProperty({ enum: ['sleep'] })
+  type!: 'sleep';
+
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  durationMs!: number;
 }
 
 /** v2 ThreadItem branch for image generation. */
@@ -310,6 +373,17 @@ export class ImageGenerationThreadItemDto {
 
   @ApiProperty()
   result!: string;
+
+  @ApiPropertyOptional({ nullable: true, type: Boolean })
+  transparentBackground?: boolean | null;
+
+  @ApiProperty({
+    nullable: true,
+    oneOf: [
+      { $ref: getSchemaPath(ImageGenerationUsageLimitExceededFailureDto) },
+    ],
+  })
+  failure!: ImageGenerationUsageLimitExceededFailureDto | null;
 
   @ApiPropertyOptional()
   savedPath?: string;
@@ -352,6 +426,7 @@ export const THREAD_ITEM_DTOS = [
   UserMessageThreadItemDto,
   HookPromptThreadItemDto,
   AgentMessageThreadItemDto,
+  FunctionCallOutputThreadItemDto,
   PlanThreadItemDto,
   ReasoningThreadItemDto,
   CommandExecutionThreadItemDto,
@@ -359,8 +434,10 @@ export const THREAD_ITEM_DTOS = [
   McpToolCallThreadItemDto,
   DynamicToolCallThreadItemDto,
   CollabAgentToolCallThreadItemDto,
+  SubAgentActivityThreadItemDto,
   WebSearchThreadItemDto,
   ImageViewThreadItemDto,
+  SleepThreadItemDto,
   ImageGenerationThreadItemDto,
   EnteredReviewModeThreadItemDto,
   ExitedReviewModeThreadItemDto,

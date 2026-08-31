@@ -86,12 +86,17 @@ export const DYNAMIC_TOOL_CALL_STATUS_VALUES = [
   'completed',
   'failed',
 ] as const;
+export const IMAGE_DETAIL_VALUES = ['auto', 'low', 'high', 'original'] as const;
 export const COLLAB_AGENT_TOOL_VALUES = [
   'spawnAgent',
   'sendInput',
   'resumeAgent',
   'wait',
   'closeAgent',
+  'sendMessage',
+  'followupTask',
+  'interruptAgent',
+  'listAgents',
 ] as const;
 export const COLLAB_AGENT_TOOL_CALL_STATUS_VALUES = [
   'inProgress',
@@ -107,11 +112,21 @@ export const COLLAB_AGENT_STATUS_VALUES = [
   'shutdown',
   'notFound',
 ] as const;
+export const SUB_AGENT_ACTIVITY_KIND_VALUES = [
+  'started',
+  'interacted',
+  'interrupted',
+  'completed',
+] as const;
 export const NON_STEERABLE_TURN_KIND_VALUES = ['review', 'compact'] as const;
 export const CODEX_ERROR_INFO_STRING_VALUES = [
   'contextWindowExceeded',
+  'sessionBudgetExceeded',
   'usageLimitExceeded',
+  'rateLimitExceeded',
   'serverOverloaded',
+  'cyberPolicy',
+  'misalignmentPolicyViolation',
   'internalServerError',
   'unauthorized',
   'badRequest',

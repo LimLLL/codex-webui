@@ -7,6 +7,7 @@ export * from './session.dto';
 export * from './support.dto';
 export * from './thread.dto';
 export * from './thread-item.dto';
+export * from './thread-item-support.dto';
 export * from './thread-status.dto';
 export * from './turn.dto';
 
@@ -38,13 +39,14 @@ import {
 import { SUPPORT_EXTRA_MODELS } from './support.dto';
 import { GitInfoDto, ThreadDto } from './thread.dto';
 import { THREAD_ITEM_DTOS } from './thread-item.dto';
+import { THREAD_ITEM_SUPPORT_DTOS } from './thread-item-support.dto';
 import {
   ThreadStatusActiveDto,
   ThreadStatusIdleDto,
   ThreadStatusNotLoadedDto,
   ThreadStatusSystemErrorDto,
 } from './thread-status.dto';
-import { TurnDto, TurnErrorDto } from './turn.dto';
+import { MisalignmentDetailsDto, TurnDto, TurnErrorDto } from './turn.dto';
 import {
   ModelListResponseDto,
   ThreadForkResponseDto,
@@ -77,7 +79,9 @@ export const CODEX_V2_EXTRA_MODELS = [
   ThreadStatusSystemErrorDto,
   ThreadStatusActiveDto,
   ...SUPPORT_EXTRA_MODELS,
+  ...THREAD_ITEM_SUPPORT_DTOS,
   ...THREAD_ITEM_DTOS,
+  MisalignmentDetailsDto,
   TurnErrorDto,
   TurnDto,
   GitInfoDto,

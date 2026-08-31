@@ -748,16 +748,6 @@ export type CommandActionUnknownDto = {
     command: string;
 };
 
-export type DynamicToolCallOutputInputTextDto = {
-    type: 'inputText';
-    text: string;
-};
-
-export type DynamicToolCallOutputInputImageDto = {
-    type: 'inputImage';
-    imageUrl: string;
-};
-
 export type CollabAgentStateDto = {
     status: 'pendingInit' | 'running' | 'interrupted' | 'completed' | 'errored' | 'shutdown' | 'notFound';
     message: string | null;
@@ -812,6 +802,48 @@ export type CodexActiveTurnNotSteerableDto = {
     activeTurnNotSteerable: CodexActiveTurnNotSteerablePayloadDto;
 };
 
+export type FunctionCallOutputInputTextDto = {
+    type: 'input_text';
+    text: string;
+};
+
+export type FunctionCallOutputInputImageDto = {
+    type: 'input_image';
+    image_url: string;
+    detail?: 'auto' | 'low' | 'high' | 'original';
+};
+
+export type FunctionCallOutputInputAudioDto = {
+    type: 'input_audio';
+    audio_url: string;
+};
+
+export type FunctionCallOutputEncryptedContentDto = {
+    type: 'encrypted_content';
+    encrypted_content: string;
+};
+
+export type DynamicToolCallOutputInputTextDto = {
+    type: 'inputText';
+    text: string;
+};
+
+export type DynamicToolCallOutputInputImageDto = {
+    type: 'inputImage';
+    imageUrl: string;
+};
+
+export type DynamicToolCallOutputInputAudioDto = {
+    type: 'inputAudio';
+    audioUrl: string;
+};
+
+export type ImageGenerationUsageLimitExceededFailureDto = {
+    type: 'usageLimitExceeded';
+    limitId: string;
+    resetsAt: number | null;
+};
+
 export type UserMessageThreadItemDto = {
     type: 'userMessage';
     id: string;
@@ -830,6 +862,14 @@ export type AgentMessageThreadItemDto = {
     text: string;
     phase: 'commentary' | 'final_answer' | null;
     memoryCitation: MemoryCitationDto | null;
+};
+
+export type FunctionCallOutputThreadItemDto = {
+    type: 'functionCallOutput';
+    id: string;
+    name: string;
+    namespace: string | null;
+    output: string | Array<FunctionCallOutputInputTextDto | FunctionCallOutputInputImageDto | FunctionCallOutputInputAudioDto | FunctionCallOutputEncryptedContentDto>;
 };
 
 export type PlanThreadItemDto = {
@@ -883,12 +923,13 @@ export type McpToolCallThreadItemDto = {
 export type DynamicToolCallThreadItemDto = {
     type: 'dynamicToolCall';
     id: string;
+    namespace: string | null;
     tool: string;
     arguments: number | string | boolean | Array<unknown> | {
         [key: string]: unknown;
     };
     status: 'inProgress' | 'completed' | 'failed';
-    contentItems: Array<DynamicToolCallOutputInputTextDto | DynamicToolCallOutputInputImageDto> | null;
+    contentItems: Array<DynamicToolCallOutputInputTextDto | DynamicToolCallOutputInputImageDto | DynamicToolCallOutputInputAudioDto> | null;
     success: boolean | null;
     durationMs: number | null;
 };
@@ -896,7 +937,7 @@ export type DynamicToolCallThreadItemDto = {
 export type CollabAgentToolCallThreadItemDto = {
     type: 'collabAgentToolCall';
     id: string;
-    tool: 'spawnAgent' | 'sendInput' | 'resumeAgent' | 'wait' | 'closeAgent';
+    tool: 'spawnAgent' | 'sendInput' | 'resumeAgent' | 'wait' | 'closeAgent' | 'sendMessage' | 'followupTask' | 'interruptAgent' | 'listAgents';
     status: 'inProgress' | 'completed' | 'failed';
     senderThreadId: string;
     receiverThreadIds: Array<string>;
@@ -908,11 +949,22 @@ export type CollabAgentToolCallThreadItemDto = {
     };
 };
 
+export type SubAgentActivityThreadItemDto = {
+    type: 'subAgentActivity';
+    id: string;
+    kind: 'started' | 'interacted' | 'interrupted' | 'completed';
+    agentThreadId: string;
+    agentPath: string;
+};
+
 export type WebSearchThreadItemDto = {
     type: 'webSearch';
     id: string;
     query: string;
     action: WebSearchActionSearchDto | WebSearchActionOpenPageDto | WebSearchActionFindInPageDto | WebSearchActionOtherDto | null;
+    results: Array<number | string | boolean | Array<unknown> | {
+        [key: string]: unknown;
+    }> | null;
 };
 
 export type ImageViewThreadItemDto = {
@@ -921,12 +973,20 @@ export type ImageViewThreadItemDto = {
     path: string;
 };
 
+export type SleepThreadItemDto = {
+    type: 'sleep';
+    id: string;
+    durationMs: number;
+};
+
 export type ImageGenerationThreadItemDto = {
     type: 'imageGeneration';
     id: string;
     status: string;
     revisedPrompt: string | null;
     result: string;
+    transparentBackground?: boolean | null;
+    failure: ImageGenerationUsageLimitExceededFailureDto | null;
     savedPath?: string;
 };
 
@@ -947,15 +1007,21 @@ export type ContextCompactionThreadItemDto = {
     id: string;
 };
 
+export type MisalignmentDetailsDto = {
+    errorType: string | null;
+    detailedExplanation: string | null;
+};
+
 export type TurnErrorDto = {
     message: string;
-    codexErrorInfo: 'contextWindowExceeded' | 'usageLimitExceeded' | 'serverOverloaded' | 'internalServerError' | 'unauthorized' | 'badRequest' | 'threadRollbackFailed' | 'sandboxError' | 'other' | CodexHttpConnectionFailedDto | CodexResponseStreamConnectionFailedDto | CodexResponseStreamDisconnectedDto | CodexResponseTooManyFailedAttemptsDto | CodexActiveTurnNotSteerableDto | null;
+    codexErrorInfo: 'contextWindowExceeded' | 'sessionBudgetExceeded' | 'usageLimitExceeded' | 'rateLimitExceeded' | 'serverOverloaded' | 'cyberPolicy' | 'misalignmentPolicyViolation' | 'internalServerError' | 'unauthorized' | 'badRequest' | 'threadRollbackFailed' | 'sandboxError' | 'other' | CodexHttpConnectionFailedDto | CodexResponseStreamConnectionFailedDto | CodexResponseStreamDisconnectedDto | CodexResponseTooManyFailedAttemptsDto | CodexActiveTurnNotSteerableDto | null;
     additionalDetails: string | null;
+    misalignment: MisalignmentDetailsDto | null;
 };
 
 export type TurnDto = {
     id: string;
-    items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
+    items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | FunctionCallOutputThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | SubAgentActivityThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | SleepThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
     itemsView: 'notLoaded' | 'summary' | 'full';
     status: 'completed' | 'interrupted' | 'failed' | 'inProgress';
     error: TurnErrorDto | null;
@@ -1212,7 +1278,7 @@ export type ThreadTurnItemsResponseDto = {
     /**
      * Items belonging to the turn, oldest first.
      */
-    items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
+    items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | FunctionCallOutputThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | SubAgentActivityThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | SleepThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
 };
 
 export type ThreadTurnCountsRequestDto = {
@@ -1647,6 +1713,10 @@ export type ThreadTurnDiffsResponseDto = {
 export type PersistedTurnErrorDto = {
     turnId: string;
     message: string;
+    errorCategory: string | null;
+    additionalDetails: string | null;
+    misalignmentErrorType: string | null;
+    misalignmentExplanation: string | null;
     createdAt: number;
 };
 

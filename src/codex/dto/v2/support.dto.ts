@@ -224,24 +224,6 @@ export class CommandActionUnknownDto {
   command!: string;
 }
 
-/** Dynamic tool output item branch for text. */
-export class DynamicToolCallOutputInputTextDto {
-  @ApiProperty({ enum: ['inputText'] })
-  type!: 'inputText';
-
-  @ApiProperty()
-  text!: string;
-}
-
-/** Dynamic tool output item branch for images. */
-export class DynamicToolCallOutputInputImageDto {
-  @ApiProperty({ enum: ['inputImage'] })
-  type!: 'inputImage';
-
-  @ApiProperty()
-  imageUrl!: string;
-}
-
 /** Collab agent state keyed by thread id. */
 export class CollabAgentStateDto {
   @ApiProperty({ enum: COLLAB_AGENT_STATUS_VALUES })
@@ -371,19 +353,6 @@ export function commandActionSchema(nullable = false): SwaggerSchema {
   );
 }
 
-/** OpenAPI schema for dynamic tool output items. */
-export function dynamicToolCallOutputContentItemSchema(
-  nullable = false,
-): SwaggerSchema {
-  return oneOfSchema(
-    [
-      { $ref: getSchemaPath(DynamicToolCallOutputInputTextDto) },
-      { $ref: getSchemaPath(DynamicToolCallOutputInputImageDto) },
-    ],
-    nullable,
-  );
-}
-
 /** OpenAPI schema for v2 WebSearchAction. */
 export function webSearchActionSchema(nullable = false): SwaggerSchema {
   return oneOfSchema(
@@ -433,8 +402,6 @@ export const SUPPORT_EXTRA_MODELS = [
   CommandActionListFilesDto,
   CommandActionSearchDto,
   CommandActionUnknownDto,
-  DynamicToolCallOutputInputTextDto,
-  DynamicToolCallOutputInputImageDto,
   CollabAgentStateDto,
   WebSearchActionSearchDto,
   WebSearchActionOpenPageDto,

@@ -8,6 +8,15 @@ import {
 import { codexErrorInfoSchema } from './support.dto';
 import { threadItemSchema } from './thread-item.dto';
 
+/** Public display details for a misalignment block; steering is excluded. */
+export class MisalignmentDetailsDto {
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  errorType!: string | null;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  detailedExplanation!: string | null;
+}
+
 /** Failure details attached to a failed Codex turn. */
 export class TurnErrorDto {
   @ApiProperty()
@@ -18,6 +27,9 @@ export class TurnErrorDto {
 
   @ApiProperty(NULLABLE_STRING_SCHEMA)
   additionalDetails!: string | null;
+
+  @ApiProperty({ nullable: true, type: () => MisalignmentDetailsDto })
+  misalignment!: MisalignmentDetailsDto | null;
 }
 
 /** v2 Turn mirror used for OpenAPI schema generation. */
