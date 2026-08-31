@@ -99,7 +99,7 @@
 - [x] 文件轮转：size 10m, limit.count 5（~50MB），dev 模式同时输出 stdout。
 - [x] Pino redact 脱敏：Authorization、cookie、token、apiKey、password。
 - [x] `GET /api/logs`：分页结构化日志，level/source 过滤。
-- [x] `GET /api/logs/export`：sanitized 诊断 bundle（日志 + 系统信息 + 运行状态）。
+- [x] `GET /api/logs/export`：sanitized 诊断 bundle（日志 + 系统信息 + 运行状态）。系统信息含 `webuiVersion`（读自 package.json）与 `codexVersion`，供 issue 模板引用。
 - [x] 前端 Diagnostics 面板：header Activity 图标入口（带 Tooltip），level/source 过滤，分页，复制/下载导出。
 - [x] codex-jsonrpc.jsonl 保留为 local-only 调试日志，不通过 /api/logs 暴露。
 

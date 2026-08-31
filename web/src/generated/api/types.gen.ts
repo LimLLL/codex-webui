@@ -1674,6 +1674,7 @@ export type LogsResponseDto = {
 };
 
 export type LogsSystemInfoDto = {
+    webuiVersion: string;
     nodeVersion: string;
     platform: string;
     arch: string;

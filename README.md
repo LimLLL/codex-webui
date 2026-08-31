@@ -291,6 +291,18 @@ codex.example.com {
 
 反向代理下 OnlyOffice 需要知道公开 URL 才能回调保存。代理正确传递 `X-Forwarded-Proto` / `X-Forwarded-Host` 即可自动检测；也可在 Settings → General 显式设置 `general.publicBaseUrl`。
 
+## 贡献
+
+欢迎提 issue 和 PR。开发环境搭建、代码规范、测试要求和提交流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
+报 bug 前请先确认问题出在 WebUI 而不是 Codex CLI 本身；[Bug 模板](./.github/ISSUE_TEMPLATE/bug_report.yml)会引导你从 Diagnostics 页面导出诊断信息。
+
+**安全问题请勿公开提交**，走私密上报渠道，见 [SECURITY.md](./SECURITY.md)。
+
 ## License
 
-[AGPL-3.0](./LICENSE)
+Copyright (C) 2026 LimLLL
+
+本项目采用 [GNU Affero General Public License v3.0 或更新版本](./LICENSE)（`AGPL-3.0-or-later`）。
+
+注意 AGPL 的网络条款：修改本项目并通过网络对外提供服务时，需要向使用者提供修改后的完整源码。

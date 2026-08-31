@@ -1,0 +1,147 @@
+name: 🐛 Bug 报告 / Bug report
+description: 报告 Codex WebUI 的缺陷 / Report a defect in Codex WebUI
+title: '[Bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请先确认问题出在 **Codex WebUI**，而不是 **Codex CLI 本身**。
+        如果同样的操作直接用 `codex` 命令行也能复现，请到 [openai/codex](https://github.com/openai/codex/issues) 反馈。
+
+        Thanks for reporting! Please first confirm the bug is in **Codex WebUI**, not in **Codex CLI** itself.
+        If the same behaviour reproduces with the plain `codex` CLI, report it at [openai/codex](https://github.com/openai/codex/issues) instead.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 预检 / Pre-flight checks
+      options:
+        - label: 我搜索过现有 issue，确认没有重复 / I searched existing issues and found no duplicate
+          required: true
+        - label: 我确认问题出在 WebUI，而不是 Codex CLI 本身 / I confirmed the bug is in the WebUI, not the Codex CLI
+          required: true
+        - label: 我会检查粘贴和上传的内容，确保不含 API Key、账号邮箱、私有路径等敏感信息 / I will scrub API keys, account emails and private paths from anything I paste or attach
+          required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式 / Deployment
+      options:
+        - Docker — GHCR 镜像 / GHCR image (ghcr.io/limlll/codex-webui)
+        - Docker — 本地构建镜像 / locally built image
+        - 本地开发 / Local dev (pnpm start:dev + vite)
+        - 本地生产构建 / Local production build (pnpm build + pnpm start:prod)
+        - 其它 / Other（请在补充信息里说明 / describe below）
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: WebUI 版本 / WebUI version
+      description: |
+        在 Diagnostics 页面点 **Copy export**，查看 `system.webuiVersion`；也可以直接填镜像 tag 或 git commit SHA。
+        Use **Copy export** on the Diagnostics page and read `system.webuiVersion`, or give the image tag / git commit SHA.
+      placeholder: '0.1.0 · codex-0.149.1 · dev-527b365'
+    validations:
+      required: true
+
+  - type: input
+    id: codex-version
+    attributes:
+      label: Codex CLI 版本 / Codex CLI version
+      description: |
+        运行 `codex --version`；Docker 部署可在 Diagnostics 页面点 **Copy export**，查看 `system.codexVersion`。
+        Run `codex --version`; for Docker, use **Copy export** on the Diagnostics page and read `system.codexVersion`.
+      placeholder: '0.149.1'
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境 / Environment
+      description: 服务端操作系统 + 浏览器及版本 / Server OS + browser and version
+      placeholder: 'Ubuntu 24.04 · Chrome 141 · iOS Safari 18'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: proxy
+    attributes:
+      label: 反向代理 / Reverse proxy
+      options:
+        - 无，直连端口 / None, direct port access
+        - 域名根路径反代 / Proxied at domain root
+        - 子路径反代 / Proxied under a subpath (X-Forwarded-Prefix)
+        - 不确定 / Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 受影响区域 / Affected area
+      description: 可多选 / Multiple choices allowed
+      multiple: true
+      options:
+        - 对话与线程 / Chat & threads
+        - 消息分支与分支图 / Message branches & branch graph
+        - 审批流程 / Approvals
+        - 文件管理与预览 / File browser & viewers
+        - 终端 / Terminal
+        - 集成：插件 / MCP / Apps — Integrations
+        - 设置与账号 / Settings & account
+        - 认证与登录 / Auth & login
+        - 部署：Docker / 反向代理 — Deployment
+        - 其它 / Other
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 请写成可以照做的步骤，包括操作路径和输入 / Numbered steps someone else can follow, including navigation and input
+      placeholder: |
+        1. 打开线程 X / Open thread X
+        2. 在输入框输入 `/plan` / Type `/plan` in the composer
+        3. 点击发送 / Click send
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果 / Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果 / Actual behaviour
+      description: 包含错误提示原文、浏览器控制台报错 / Include exact error text and browser console errors
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断信息 / Diagnostics bundle
+      description: |
+        打开 WebUI 的 **Diagnostics** 页面 → 点 **Download export** 下载 JSON，把文件拖进本输入框作为附件。
+
+        ⚠️ 导出内容包含最近 100 条日志、账号信息和文件路径。**上传前请自行打开检查并删掉敏感字段**。
+        不想上传整包的话，只粘贴 `system` 和 `runtime` 两段也可以。
+
+        Open the **Diagnostics** page → **Download export**, then drag the JSON file into this box.
+
+        ⚠️ The bundle contains the last 100 log entries, account info and filesystem paths — open it and scrub
+        anything sensitive before uploading. If you prefer, paste only the `system` and `runtime` sections.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充信息 / Additional context
+      description: 截图、录屏、相关配置、你已经试过的排查手段 / Screenshots, recordings, relevant config, what you already tried

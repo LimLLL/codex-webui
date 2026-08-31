@@ -1,10 +1,10 @@
 {
   "name": "codex-webui",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "",
   "author": "",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "ensure:codex-schema": "test -f src/codex/codex-schema/index.ts || pnpm codex:schema",
     "build": "pnpm ensure:codex-schema && nest build",

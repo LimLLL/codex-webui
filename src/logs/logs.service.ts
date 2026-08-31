@@ -44,6 +44,7 @@ export interface LogsResponse {
 export interface LogsExportResponse {
   exportedAt: string;
   system: {
+    webuiVersion: string;
     nodeVersion: string;
     platform: string;
     arch: string;
@@ -57,6 +58,7 @@ export interface LogsExportResponse {
 @Injectable()
 export class LogsService {
   private readonly logger = new Logger(LogsService.name);
+  private cachedWebuiVersion: string | null = null;
 
   constructor(
     private readonly statusService: CodexStatusService,
@@ -95,15 +97,18 @@ export class LogsService {
 
   /** Builds a sanitized diagnostic bundle suitable for issue reports. */
   async exportDiagnostics(): Promise<LogsExportResponse> {
-    const [{ data: logs }, runtimeStatus, codexVersion] = await Promise.all([
-      this.listLogs({ offset: 0, limit: EXPORT_LIMIT }),
-      this.statusService.getStatus(),
-      this.getCodexVersion(),
-    ]);
+    const [{ data: logs }, runtimeStatus, codexVersion, webuiVersion] =
+      await Promise.all([
+        this.listLogs({ offset: 0, limit: EXPORT_LIMIT }),
+        this.statusService.getStatus(),
+        this.getCodexVersion(),
+        this.getWebuiVersion(),
+      ]);
 
     return {
       exportedAt: new Date().toISOString(),
       system: {
+        webuiVersion,
         nodeVersion: process.version,
         platform: process.platform,
         arch: process.arch,
@@ -281,6 +286,29 @@ export class LogsService {
   private normalizeFilter(value: string | undefined): string | null {
     const normalized = value?.trim().toLowerCase();
     return normalized ? normalized : null;
+  }
+
+  /**
+   * Reads the WebUI version from the shipped package.json.
+   * Cached after the first read (including failures) since it cannot change
+   * while the process is alive.
+   */
+  private async getWebuiVersion(): Promise<string> {
+    if (this.cachedWebuiVersion) return this.cachedWebuiVersion;
+
+    try {
+      const raw = await readFile(join(process.cwd(), 'package.json'), 'utf8');
+      const parsed = JSON.parse(raw) as { version?: unknown };
+      this.cachedWebuiVersion =
+        typeof parsed.version === 'string' && parsed.version.trim()
+          ? parsed.version.trim()
+          : 'unknown';
+    } catch (err) {
+      this.logger.debug(`Failed to read WebUI version: ${String(err)}`);
+      this.cachedWebuiVersion = 'unknown';
+    }
+
+    return this.cachedWebuiVersion;
   }
 
   private async getCodexVersion(): Promise<string> {

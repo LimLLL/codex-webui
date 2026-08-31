@@ -59,6 +59,9 @@ export class LogsResponseDto {
 /** Basic runtime metadata bundled with exported diagnostics. */
 export class LogsSystemInfoDto {
   @ApiProperty()
+  webuiVersion!: string;
+
+  @ApiProperty()
   nodeVersion!: string;
 
   @ApiProperty()

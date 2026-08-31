@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔌 Codex CLI 本身的问题 / Issues with Codex CLI itself
+    url: https://github.com/openai/codex/issues
+    about: 模型行为、沙箱、审批策略、app-server 协议等问题属于上游 Codex CLI。Model behaviour, sandboxing, approval policy and app-server protocol issues belong upstream.
+  - name: 💬 使用问题与讨论 / Questions & discussions
+    url: https://github.com/LimLLL/codex-webui/discussions
+    about: 不确定是不是 bug、想问怎么配置、想聊想法，都来这里。Not sure it is a bug, need setup help, or want to discuss an idea.
+  - name: 🔐 安全漏洞 / Security vulnerabilities
+    url: https://github.com/LimLLL/codex-webui/security/advisories/new
+    about: 请勿公开提交安全问题，走私下上报渠道。Please do not file security issues publicly — report them privately.

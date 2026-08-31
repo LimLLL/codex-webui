@@ -291,6 +291,18 @@ codex.example.com {
 
 Behind a reverse proxy, OnlyOffice needs the public URL for save callbacks. Either ensure your proxy forwards `X-Forwarded-Proto` / `X-Forwarded-Host` correctly (auto-detected), or set `general.publicBaseUrl` explicitly in Settings → General.
 
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.en.md](./CONTRIBUTING.en.md) for development setup, code conventions, testing requirements and the PR process.
+
+Before filing a bug, please confirm it reproduces in the WebUI rather than in the Codex CLI itself. The [bug template](./.github/ISSUE_TEMPLATE/bug_report.yml) walks you through exporting a diagnostics bundle from the Diagnostics page.
+
+**Please do not report security issues publicly** — use the private channel described in [SECURITY.md](./SECURITY.md).
+
 ## License
 
-[AGPL-3.0](./LICENSE)
+Copyright (C) 2026 LimLLL
+
+Licensed under the [GNU Affero General Public License v3.0 or later](./LICENSE) (`AGPL-3.0-or-later`).
+
+Note the AGPL network clause: if you modify this project and offer it as a network service, you must provide the complete modified source to its users.
