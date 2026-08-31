@@ -13,6 +13,12 @@ import {
   type TurnsPage,
 } from './thread-history.service';
 
+type CachedThreadResponse =
+  | v2.ThreadStartResponse
+  | v2.ThreadForkResponse
+  | v2.ThreadResumeResponse
+  | MetadataFirstResumeResponse;
+
 /** Prevents duplicate app-server resume calls for the same thread generation. */
 @Injectable()
 export class ThreadResumeRegistryService {
@@ -27,10 +33,7 @@ export class ThreadResumeRegistryService {
    * Used by `readAsResume` to return a complete `ThreadResumeResponse`
    * even though `thread/read` doesn't include resolved settings.
    */
-  private readonly responseCache = new Map<
-    string,
-    v2.ThreadResumeResponse | MetadataFirstResumeResponse
-  >();
+  private readonly responseCache = new Map<string, CachedThreadResponse>();
 
   constructor(
     private readonly history: ThreadHistoryService,
@@ -109,7 +112,7 @@ export class ThreadResumeRegistryService {
    */
   cacheResponse(
     threadId: string,
-    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+    response: CachedThreadResponse,
   ): void {
     this.responseCache.set(threadId, response);
   }
@@ -200,7 +203,7 @@ export class ThreadResumeRegistryService {
   }
 
   private toWritableOpen(
-    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+    response: CachedThreadResponse,
   ): ThreadOpenResponseDto {
     const initialTurnsPage = this.readEmbeddedTurnsPage(response);
     return {
@@ -229,7 +232,7 @@ export class ThreadResumeRegistryService {
   }
 
   private readEmbeddedTurnsPage(
-    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+    response: CachedThreadResponse,
   ): TurnsPage {
     const candidate = (response as MetadataFirstResumeResponse)
       .initialTurnsPage;
@@ -263,7 +266,7 @@ export class ThreadResumeRegistryService {
   }
 
   private readNullableString(
-    response: v2.ThreadResumeResponse | MetadataFirstResumeResponse,
+    response: CachedThreadResponse,
     key: 'turnsBackwardsCursor' | 'itemsBackwardsCursor',
   ): string | null {
     const value = (response as Record<string, unknown>)[key];

@@ -249,8 +249,8 @@ The same image can serve both a domain root and a proxy subpath (for example, `h
 
 ```bash
 docker build \
-  --build-arg CODEX_CLI_VERSION=0.149.1 \
-  -t codex-webui:0.149.1 .
+  --build-arg CODEX_CLI_VERSION=0.151.0 \
+  -t codex-webui:0.151.0 .
 ```
 
 Nginx must retain `/codex/` in browser-facing URLs and strip it when proxying to the backend. The trailing slashes on both `location` and `proxy_pass` are required:

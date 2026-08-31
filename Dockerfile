@@ -91,7 +91,7 @@ RUN node --version \
  && mise --version
 
 # Install global npm tools (codex + MCP utilities)
-ARG CODEX_CLI_VERSION=0.149.1
+ARG CODEX_CLI_VERSION=0.151.0
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
 RUN npm install -g \
     @openai/codex@${CODEX_CLI_VERSION} \
@@ -119,7 +119,7 @@ RUN npx --yes node-gyp rebuild --directory=node_modules/node-pty || true \
 # ── Stage 6: Runtime ─────────────────────────────────────────────────
 FROM runtime-base AS runtime
 
-ARG CODEX_CLI_VERSION=0.149.1
+ARG CODEX_CLI_VERSION=0.151.0
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
 
 WORKDIR /app
