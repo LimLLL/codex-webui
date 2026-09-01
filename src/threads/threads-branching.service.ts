@@ -15,10 +15,13 @@ import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import {
   isInvalidForkBoundaryError,
   isThreadServerUnavailableError,
-  isUnmaterializedThreadReadError,
   isUnsupportedForkBoundaryFieldError,
 } from './thread-errors';
-import { ThreadHistoryService } from './thread-history.service';
+import {
+  InProgressTurnHistoryError,
+  ThreadHistoryService,
+  TurnUserMessageNotFoundError,
+} from './thread-history.service';
 import { assertPaginatedThread } from './thread-history-mode';
 import { previewFromUserInput, truncatePreview } from './thread-input-preview';
 
@@ -37,8 +40,6 @@ type ExperimentalThreadForkBeforeParams = Omit<
   beforeTurnId: string;
   excludeTurns: true;
 };
-
-type UserMessageItem = Extract<v2.ThreadItem, { type: 'userMessage' }>;
 
 export type CreateMessageBranchResult = {
   fork: v2.ThreadForkResponse;
@@ -71,21 +72,19 @@ export class ThreadsBranchingService {
   ): Promise<CreateMessageBranchResult> {
     const editedTurnId = this.readEditedTurnId(body);
     const branchPreviewText = this.readBranchPreviewText(body);
-    const source = await this.readThread(sourceThreadId, true);
-    assertPaginatedThread(source.thread, 'thread/read');
-    if (source.thread.id !== sourceThreadId) {
-      throw new BusinessException(
-        ErrorCode.threads.branchForkUnsupported,
-        HttpStatus.BAD_GATEWAY,
-        'thread/read returned a different source conversation id',
-        { threadId: sourceThreadId, returnedThreadId: source.thread.id },
+    let sourceTurnIds: string[];
+    try {
+      sourceTurnIds = await this.history.listAllSettledTurnIds(sourceThreadId);
+    } catch (err) {
+      if (!(err instanceof InProgressTurnHistoryError)) throw err;
+      throw BusinessException.conflict(
+        ErrorCode.threads.branchThreadInProgress,
+        'Cannot branch a conversation while it has an in-progress turn',
+        { threadId: sourceThreadId, turnId: err.turnId },
       );
     }
 
-    this.assertThreadIsBranchable(source.thread, sourceThreadId);
-
-    const turns = source.thread.turns;
-    const editedTurnIndex = turns.findIndex((turn) => turn.id === editedTurnId);
+    const editedTurnIndex = sourceTurnIds.indexOf(editedTurnId);
     if (editedTurnIndex < 0) {
       throw BusinessException.notFound(
         ErrorCode.threads.branchEditedTurnNotFound,
@@ -94,8 +93,14 @@ export class ThreadsBranchingService {
       );
     }
 
-    const userMessage = this.findUserMessageItem(turns[editedTurnIndex]);
-    if (!userMessage) {
+    let userMessageContent: v2.UserInput[];
+    try {
+      userMessageContent = await this.history.readTurnUserMessage(
+        sourceThreadId,
+        editedTurnId,
+      );
+    } catch (err) {
+      if (!(err instanceof TurnUserMessageNotFoundError)) throw err;
       throw BusinessException.badRequest(
         ErrorCode.threads.branchEditedTurnNotUserMessage,
         'Edited turn must contain a user message',
@@ -103,13 +108,26 @@ export class ThreadsBranchingService {
       );
     }
 
-    const expectedPrefixTurnIds = turns
-      .slice(0, editedTurnIndex)
-      .map((turn) => turn.id);
+    const expectedPrefixTurnIds = sourceTurnIds.slice(0, editedTurnIndex);
     const commonPrefixTurnId = expectedPrefixTurnIds.at(-1) ?? null;
     const treeRootThreadId =
       this.branches.resolveTreeRootThreadId(sourceThreadId);
-    const originalPreviewText = previewFromUserInput(userMessage.content);
+    const originalPreviewText = previewFromUserInput(userMessageContent);
+
+    // Keep the sole metadata check adjacent to the fork. The complete header
+    // walk above rejects activity it observes; this late read catches activity
+    // that began while the walk or target-item read was in flight without
+    // pretending the read/fork pair can be made atomic locally.
+    const source = await this.history.readThreadMetadata(sourceThreadId);
+    if (source.thread.id !== sourceThreadId) {
+      throw new BusinessException(
+        ErrorCode.threads.branchForkUnsupported,
+        HttpStatus.BAD_GATEWAY,
+        'thread/read returned a different source conversation id',
+        { threadId: sourceThreadId, returnedThreadId: source.thread.id },
+      );
+    }
+    this.assertThreadIsBranchable(source.thread, sourceThreadId);
 
     let forkResponse: v2.ThreadForkResponse;
     try {
@@ -200,32 +218,6 @@ export class ThreadsBranchingService {
     return { fork: forkResponse, ...recorded };
   }
 
-  /**
-   * Reads a source thread, tolerating a thread with no persisted history.
-   *
-   * An unmaterialized source cannot be branched, but it must fail the
-   * branchability check with a caller-facing error rather than surfacing a raw
-   * app-server refusal.
-   */
-  private async readThread(
-    threadId: string,
-    includeTurns: boolean,
-  ): Promise<v2.ThreadReadResponse> {
-    try {
-      return await this.codex.request<v2.ThreadReadResponse>('thread/read', {
-        threadId,
-        includeTurns,
-      });
-    } catch (err) {
-      if (!includeTurns || !isUnmaterializedThreadReadError(err)) throw err;
-      const metadata = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: false },
-      );
-      return { thread: { ...metadata.thread, turns: [] } };
-    }
-  }
-
   private assertThreadIsBranchable(
     thread: v2.Thread,
     sourceThreadId: string,
@@ -234,14 +226,6 @@ export class ThreadsBranchingService {
       throw BusinessException.conflict(
         ErrorCode.threads.branchThreadInProgress,
         'Cannot branch a conversation while it has an active turn',
-        { threadId: sourceThreadId },
-      );
-    }
-
-    if (thread.turns.some((turn) => turn.status === 'inProgress')) {
-      throw BusinessException.conflict(
-        ErrorCode.threads.branchThreadInProgress,
-        'Cannot branch a conversation while it has an in-progress turn',
         { threadId: sourceThreadId },
       );
     }
@@ -286,14 +270,6 @@ export class ThreadsBranchingService {
       );
     }
     return truncatePreview(body.previewText.trim());
-  }
-
-  private findUserMessageItem(turn: v2.Turn): UserMessageItem | null {
-    return (
-      turn.items.find((item): item is UserMessageItem => {
-        return item.type === 'userMessage';
-      }) ?? null
-    );
   }
 
   private forkPrefixMatches(

@@ -29,7 +29,7 @@ export type ClientTurn = Omit<v2.Turn, 'error'> & {
   error: ClientTurnError | null;
 };
 
-/** Browser-facing thread read shape whose turns cannot contain steering. */
+/** Browser-facing REST thread-read shape whose turns cannot contain steering. */
 export type ClientThreadReadResponse = Omit<v2.ThreadReadResponse, 'thread'> & {
   thread: Omit<v2.Thread, 'turns'> & { turns: ClientTurn[] };
 };
@@ -79,7 +79,13 @@ export function projectTurnForClient(turn: v2.Turn): ClientTurn {
   return { ...turn, error: projectTurnErrorForClient(turn.error) };
 }
 
-/** Projects a full thread read before it crosses the REST boundary. */
+/**
+ * Projects a thread read before it crosses the REST boundary.
+ *
+ * Metadata-only reads normally contain no turns. Keeping this projection at
+ * the boundary is deliberate defense in depth: a future response-shape change
+ * cannot silently expose continuation steering to the browser.
+ */
 export function projectThreadReadForClient(
   response: v2.ThreadReadResponse,
 ): ClientThreadReadResponse {

@@ -57,25 +57,6 @@ export function isUnmaterializedTurnsListError(err: unknown): boolean {
 }
 
 /**
- * Returns true when `thread/read` refused to reconstruct turns for a thread
- * before its first user message.
- *
- * Measured against 0.151.0: `thread/read` still names its backing call rather
- * than the state, and still answers `-32601`, while `thread/turns/list` reports
- * the same condition as `-32600` with the state spelled out. The three history
- * RPCs each word this differently, so each needs its own predicate — a shared
- * loose pattern would reclassify a genuine "method not found" as empty history.
- */
-export function isUnmaterializedThreadReadError(err: unknown): boolean {
-  return (
-    isCodexRpcError(err) &&
-    err.method === 'thread/read' &&
-    err.code === METHOD_NOT_FOUND &&
-    err.rpcMessage === 'list_turns is not supported yet'
-  );
-}
-
-/**
  * Returns true for the pinned item-paging refusal seen on an empty thread.
  *
  * App-server also uses this exact response when its store genuinely lacks item

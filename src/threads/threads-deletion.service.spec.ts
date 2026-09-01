@@ -10,6 +10,7 @@ import type { AppDatabase } from '../database/database.constants';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadHistoryService } from './thread-history.service';
 import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import { ThreadsDeletionService } from './threads-deletion.service';
@@ -56,6 +57,10 @@ describe('ThreadsDeletionService', () => {
     begin: vi.fn(),
     end: vi.fn(),
   };
+  const mockHistory = {
+    readThreadMetadata: vi.fn(),
+    listTurns: vi.fn(),
+  };
   const mockDb = makeDbMock();
 
   beforeEach(() => {
@@ -75,6 +80,7 @@ describe('ThreadsDeletionService', () => {
       mockResumeRegistry as unknown as ThreadResumeRegistryService,
       mockSettingsObserver as unknown as ThreadSettingsObserverService,
       mockDeletionRegistry as unknown as ThreadDeletionRegistryService,
+      mockHistory as unknown as ThreadHistoryService,
       mockDb as unknown as AppDatabase,
     );
 
@@ -85,6 +91,7 @@ describe('ThreadsDeletionService', () => {
     Object.values(mockPendingApprovals).forEach((mock) => mock.mockReset());
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockDeletionRegistry).forEach((mock) => mock.mockReset());
+    Object.values(mockHistory).forEach((mock) => mock.mockReset());
     mockDb.delete.mockClear();
     mockAdoption.getStatus.mockReturnValue(readyAdoption);
     mockAdoption.getBlockingDiagnostics.mockReturnValue([]);
@@ -393,30 +400,17 @@ describe('ThreadsDeletionService', () => {
           ),
         );
       }
-      if (method === 'thread/read') {
-        return Promise.resolve({
-          thread: makeThread('root', null, {
-            status: { type: 'active', activeFlags: [] },
-            turns: [
-              {
-                id: 'turn-1',
-                status: 'inProgress',
-                items: [],
-                itemsView: 'full',
-                error: null,
-                startedAt: 1,
-                completedAt: null,
-                durationMs: null,
-              },
-            ],
-          }),
-        });
-      }
       if (method === 'turn/interrupt' || method === 'thread/delete') {
         return Promise.resolve({});
       }
       throw new Error(`unexpected ${method}`);
     });
+    mockHistory.readThreadMetadata.mockResolvedValue(
+      metadataResponse({ type: 'active', activeFlags: [] }),
+    );
+    mockHistory.listTurns.mockResolvedValue(
+      turnsPage([{ id: 'turn-1', status: 'inProgress' }]),
+    );
 
     const result = await service.deleteThread('root', {
       expectedThreadIds: ['root'],
@@ -424,13 +418,17 @@ describe('ThreadsDeletionService', () => {
 
     expect(result.status).toBe('completed');
     expect(requestLog).toContain('thread/delete');
+    expect(mockHistory.listTurns).toHaveBeenCalledWith({
+      threadId: 'root',
+      limit: 20,
+      sortDirection: 'desc',
+      itemsView: 'notLoaded',
+    });
   });
 
-  it('reports a typed conflict when a running thread has no persisted history', async () => {
-    // A thread can be running before its first user message is persisted, and
-    // 0.151.0 then refuses `thread/read` with turns, naming its backing call
-    // rather than the state. The refusal must resolve to the interrupt conflict
-    // rather than escaping as an unclassified transport error.
+  it('reports a typed conflict when a running turn is not discoverable', async () => {
+    // A bounded newest-first page is sufficient under the pinned protocol, but
+    // deletion must fail closed if metadata still says active after a miss.
     const active: v2.ThreadStatus = { type: 'active', activeFlags: [] };
     mockCodex.request.mockImplementation((method: string, params: unknown) => {
       requestLog.push(method);
@@ -444,21 +442,10 @@ describe('ThreadsDeletionService', () => {
           ),
         );
       }
-      if (method === 'thread/read') {
-        if ((params as { includeTurns?: boolean }).includeTurns) {
-          return Promise.reject(
-            new CodexRpcError(
-              { code: -32601, message: 'list_turns is not supported yet' },
-              { method: 'thread/read' },
-            ),
-          );
-        }
-        return Promise.resolve({
-          thread: makeThread('root', null, { status: active }),
-        });
-      }
       throw new Error(`unexpected ${method}`);
     });
+    mockHistory.readThreadMetadata.mockResolvedValue(metadataResponse(active));
+    mockHistory.listTurns.mockResolvedValue(turnsPage([]));
 
     const result = await service.deleteThread('root', {
       expectedThreadIds: ['root'],
@@ -468,6 +455,75 @@ describe('ThreadsDeletionService', () => {
       status: 'failed',
       failure: { code: ErrorCode.threads.deleteInterruptFailed },
     });
+    expect(requestLog).not.toContain('thread/delete');
+    expect(mockHistory.readThreadMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues when a missed running turn completed before metadata re-check', async () => {
+    const active: v2.ThreadStatus = { type: 'active', activeFlags: [] };
+    mockCodex.request.mockImplementation((method: string, params: unknown) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(
+          listResponse(
+            params,
+            (params as { archived: boolean }).archived
+              ? []
+              : [makeThread('root', null, { status: active })],
+          ),
+        );
+      }
+      if (method === 'thread/delete') return Promise.resolve({});
+      throw new Error(`unexpected ${method}`);
+    });
+    mockHistory.readThreadMetadata
+      .mockResolvedValueOnce(metadataResponse(active))
+      .mockResolvedValueOnce(metadataResponse({ type: 'idle' }));
+    mockHistory.listTurns.mockResolvedValue(turnsPage([]));
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+    });
+
+    expect(result.status).toBe('completed');
+    expect(requestLog).not.toContain('turn/interrupt');
+    expect(requestLog).toContain('thread/delete');
+  });
+
+  it('fails closed when an active thread reports multiple running turns', async () => {
+    const active: v2.ThreadStatus = { type: 'active', activeFlags: [] };
+    mockCodex.request.mockImplementation((method: string, params: unknown) => {
+      requestLog.push(method);
+      if (method === 'thread/list') {
+        return Promise.resolve(
+          listResponse(
+            params,
+            (params as { archived: boolean }).archived
+              ? []
+              : [makeThread('root', null, { status: active })],
+          ),
+        );
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    mockHistory.readThreadMetadata.mockResolvedValue(metadataResponse(active));
+    mockHistory.listTurns.mockResolvedValue(
+      turnsPage([
+        { id: 'turn-2', status: 'inProgress' },
+        { id: 'turn-1', status: 'inProgress' },
+      ]),
+    );
+
+    const result = await service.deleteThread('root', {
+      expectedThreadIds: ['root'],
+    });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      failure: { code: ErrorCode.threads.deleteInterruptFailed },
+    });
+    expect(mockHistory.readThreadMetadata).toHaveBeenCalledTimes(2);
+    expect(requestLog).not.toContain('turn/interrupt');
     expect(requestLog).not.toContain('thread/delete');
   });
 
@@ -555,30 +611,17 @@ describe('ThreadsDeletionService', () => {
           ]),
         );
       }
-      if (method === 'thread/read') {
-        return Promise.resolve({
-          thread: makeThread('root', null, {
-            status: { type: 'active', activeFlags: [] },
-            turns: [
-              {
-                id: 'turn-1',
-                status: 'inProgress',
-                items: [],
-                itemsView: 'full',
-                error: null,
-                startedAt: 1,
-                completedAt: null,
-                durationMs: null,
-              },
-            ],
-          }),
-        });
-      }
       if (method === 'turn/interrupt' || method === 'thread/delete') {
         return Promise.resolve({});
       }
       throw new Error(`unexpected ${method}`);
     });
+    mockHistory.readThreadMetadata.mockResolvedValue(
+      metadataResponse({ type: 'active', activeFlags: [] }),
+    );
+    mockHistory.listTurns.mockResolvedValue(
+      turnsPage([{ id: 'turn-1', status: 'inProgress' }]),
+    );
 
     const result = await service.deleteThread('root', {
       expectedThreadIds: ['root'],
@@ -597,6 +640,20 @@ describe('ThreadsDeletionService', () => {
     );
   });
 });
+
+function metadataResponse(status: v2.ThreadStatus): v2.ThreadReadResponse {
+  return {
+    thread: makeThread('root', null, { status, turns: [] }),
+  };
+}
+
+function turnsPage(turns: Array<{ id: string; status: string }>) {
+  return {
+    data: turns,
+    nextCursor: null,
+    backwardsCursor: null,
+  };
+}
 
 function makeThread(
   id: string,

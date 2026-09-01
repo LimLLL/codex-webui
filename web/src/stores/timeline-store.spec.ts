@@ -4,7 +4,7 @@
  * deleted-elsewhere lockout, and cache eviction for a destroyed conversation.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TurnDto } from '../generated/api';
+import type { ThreadDto, TurnDto } from '../generated/api';
 import type { ApprovalRequest } from '../types/approval';
 
 const emit = vi.fn();
@@ -432,6 +432,79 @@ describe('approval request identity', () => {
     expect(runtime.timeline).toContainEqual(
       expect.objectContaining({ kind: 'turn', turnId: 'callback-turn' }),
     );
+  });
+});
+
+describe('paged read-only history', () => {
+  it('keeps archived mode while seeding the newest page and older cursor', () => {
+    const store = useTimelineStore.getState();
+    store.setActiveThread('archived');
+    store.setReadOnlyThread({
+      id: 'archived',
+      name: 'Archived conversation',
+      preview: 'Archived conversation',
+      cwd: '/workspace',
+      status: { type: 'idle' },
+      turns: [],
+    } as unknown as ThreadDto);
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 'archived',
+      turnsNewestFirst: [answeredTurn('turn-2', 'recent')],
+      historyCursor: 'older-page',
+      readOnlyReason: null,
+      cwd: '/workspace',
+    });
+
+    const runtime = useTimelineStore
+      .getState()
+      .getThreadRuntime('archived')!;
+    expect(runtime.threadMode).toBe('readOnly');
+    expect(runtime.historyCursor).toBe('older-page');
+    expect(runtime.timeline.map((entry) => entry.turnId)).toEqual([
+      'turn-2',
+      'turn-2',
+    ]);
+  });
+
+  it('does not discard earlier pages the user already loaded', () => {
+    // Degrading to read-only must not shrink the transcript. The newest page is
+    // all the fallback re-fetches, so anything that reseeds the timeline before
+    // it lands throws away every page paged in behind the load-earlier control.
+    const store = useTimelineStore.getState();
+    store.setActiveThread('archived');
+    store.hydrateOpenedThread({
+      threadId: 'archived',
+      turnsNewestFirst: [answeredTurn('turn-2', 'recent')],
+      historyCursor: 'older-page',
+      readOnlyReason: null,
+    });
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('archived', [answeredTurn('turn-1', 'old')], null);
+
+    useTimelineStore.getState().setReadOnlyThread({
+      id: 'archived',
+      cwd: '/workspace',
+      status: { type: 'idle' },
+      turns: [],
+    } as unknown as ThreadDto);
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 'archived',
+      turnsNewestFirst: [answeredTurn('turn-2', 'recent')],
+      historyCursor: 'older-page',
+      readOnlyReason: null,
+      cwd: '/workspace',
+    });
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('archived')!;
+    expect(runtime.threadMode).toBe('readOnly');
+    expect([...new Set(runtime.timeline.map((entry) => entry.turnId))]).toEqual([
+      'turn-1',
+      'turn-2',
+    ]);
+    // The pre-degrade cursor is already exhausted; adopting the fallback's
+    // cursor would re-offer history that is on screen.
+    expect(runtime.historyCursor).toBeNull();
   });
 });
 

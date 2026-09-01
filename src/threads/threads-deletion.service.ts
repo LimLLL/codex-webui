@@ -15,11 +15,11 @@ import { tokenUsageSnapshots, turnDiffs, turnErrors } from '../database/schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { ThreadHistoryService } from './thread-history.service';
 import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import {
   isDescendantRejectedError,
   isThreadNotFoundError,
-  isUnmaterializedThreadReadError,
 } from './thread-errors';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import type {
@@ -29,6 +29,8 @@ import type {
   ThreadDeleteRequestDto,
   ThreadDeleteResultDto,
 } from './dto/thread-deletion.dto';
+
+const IN_PROGRESS_TURN_LOOKUP_LIMIT = 20;
 
 @Injectable()
 export class ThreadsDeletionService {
@@ -43,6 +45,7 @@ export class ThreadsDeletionService {
     private readonly resumeRegistry: ThreadResumeRegistryService,
     private readonly settingsObserver: ThreadSettingsObserverService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
+    private readonly history: ThreadHistoryService,
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
   ) {}
 
@@ -388,47 +391,49 @@ export class ThreadsDeletionService {
     }
   }
 
+  /**
+   * Finds the interrupt id from one bounded latest-turn page.
+   *
+   * @param threadId - Planner-classified running thread
+   * @returns The sole running turn id, or null when the thread became idle
+   * @throws When metadata remains active after no unique turn is discoverable
+   */
   private async readInProgressTurnId(threadId: string): Promise<string | null> {
-    let response: v2.ThreadReadResponse;
-    try {
-      response = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        {
-          threadId,
-          includeTurns: true,
-        },
-      );
-    } catch (err) {
-      if (!isUnmaterializedThreadReadError(err)) throw err;
-      // A thread can be running before its first user message is persisted, and
-      // app-server then refuses to reconstruct turns at all. Re-read metadata so
-      // this still resolves to a typed conflict below rather than escaping as a
-      // raw transport error the caller cannot classify.
-      const metadata = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: false },
-      );
-      response = { thread: { ...metadata.thread, turns: [] } };
-    }
-    if (response.thread.status.type !== 'active') return null;
-    const inProgress = [...response.thread.turns]
-      .reverse()
-      .find((turn) => turn.status === 'inProgress');
-    if (inProgress) return inProgress.id;
+    const metadata = await this.history.readThreadMetadata(threadId);
+    if (metadata.thread.status.type !== 'active') return null;
+
+    // The planner has already classified this thread as running. A single
+    // newest-first metadata page is enough to locate the current turn without
+    // making deletion proportional to the conversation's full history.
+    const page = await this.history.listTurns({
+      threadId,
+      limit: IN_PROGRESS_TURN_LOOKUP_LIMIT,
+      sortDirection: 'desc',
+      itemsView: 'notLoaded',
+    });
+    const inProgress = page.data.filter((turn) => turn.status === 'inProgress');
+    if (inProgress.length === 1) return inProgress[0].id;
+
+    // A completion between the metadata read and the turn page is benign. Only
+    // fail closed when the conversation is still active after a miss or an
+    // ambiguous multiple-match response.
+    const current = await this.history.readThreadMetadata(threadId);
+    if (current.thread.status.type !== 'active') return null;
+    const reason =
+      inProgress.length === 0
+        ? 'no in-progress turn'
+        : 'multiple in-progress turns';
     throw new BusinessException(
       ErrorCode.threads.deleteInterruptFailed,
       HttpStatus.CONFLICT,
-      'Active conversation has no in-progress turn to interrupt',
-      { threadId },
+      `Active conversation has ${reason} to interrupt`,
+      { threadId, inProgressTurnCount: inProgress.length },
     );
   }
 
   private async isThreadStillActive(threadId: string): Promise<boolean> {
     try {
-      const response = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: false },
-      );
+      const response = await this.history.readThreadMetadata(threadId);
       return response.thread.status.type === 'active';
     } catch (err) {
       return !isThreadNotFoundError(err);

@@ -3,10 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ReasoningEffort, v2 } from '../codex/codex-schema';
 import type { ThreadOpenResponseDto } from './dto/threads.dto';
-import {
-  isUnmaterializedTurnsListError,
-  isThreadOwnershipConflictError,
-} from './thread-errors';
+import { isThreadOwnershipConflictError } from './thread-errors';
 import {
   ThreadHistoryService,
   type MetadataFirstResumeResponse,
@@ -244,20 +241,12 @@ export class ThreadResumeRegistryService {
     threadId: string,
     initialTurnsLimit: number,
   ): Promise<TurnsPage> {
-    try {
-      return await this.history.listTurns({
-        threadId,
-        limit: initialTurnsLimit,
-        sortDirection: 'desc',
-        itemsView: 'summary',
-      });
-    } catch (err) {
-      if (!isUnmaterializedTurnsListError(err)) throw err;
-      this.logger.debug(
-        `Thread ${threadId} not materialized; returning an empty turn page`,
-      );
-      return { data: [], nextCursor: null, backwardsCursor: null };
-    }
+    return this.history.listTurns({
+      threadId,
+      limit: initialTurnsLimit,
+      sortDirection: 'desc',
+      itemsView: 'summary',
+    });
   }
 
   private readNullableString(

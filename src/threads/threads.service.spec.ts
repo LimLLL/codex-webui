@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThreadsService } from './threads.service';
-import { CodexRpcError } from '../codex/codex-errors';
 import { CodexService } from '../codex/codex.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
@@ -152,21 +151,23 @@ describe('ThreadsService', () => {
     });
   });
 
-  it('should call thread/read with includeTurns', async () => {
-    mockCodex.request.mockResolvedValue({
+  it('reads thread metadata through the paged-history adapter', async () => {
+    const response = {
       thread: { id: 't1', historyMode: 'paginated', turns: [] },
-    });
+    };
+    mockHistory.readThreadMetadata.mockResolvedValue(response);
 
-    await service.readThread('t1', true);
+    await expect(service.readThread('t1')).resolves.toEqual(response);
 
-    expect(mockCodex.request).toHaveBeenCalledWith('thread/read', {
-      threadId: 't1',
-      includeTurns: true,
-    });
+    expect(mockHistory.readThreadMetadata).toHaveBeenCalledWith('t1');
+    expect(mockCodex.request).not.toHaveBeenCalled();
   });
 
-  it('removes misalignment steering from a full thread read', async () => {
-    mockCodex.request.mockResolvedValue({
+  it('keeps the REST projection as a steering guard on metadata reads', async () => {
+    // Metadata reads should have no turns. Supplying one here simulates a
+    // future upstream regression and proves the REST boundary remains safe by
+    // construction instead of depending on that assumption forever.
+    mockHistory.readThreadMetadata.mockResolvedValue({
       thread: {
         id: 't1',
         historyMode: 'paginated',
@@ -190,52 +191,12 @@ describe('ThreadsService', () => {
       },
     });
 
-    const response = await service.readThread('t1', true);
+    const response = await service.readThread('t1');
 
     expect(response.thread.turns[0]?.error?.misalignment).toEqual({
       errorType: 'policy',
       detailedExplanation: 'display this',
     });
-  });
-
-  it('degrades to empty turns when history is not materialized yet', async () => {
-    // Measured on 0.151.0: `thread/read` with turns refuses before the first
-    // user message, naming its backing call rather than the state. A thread
-    // with no turns has none to lose, so the read must still answer.
-    mockCodex.request
-      .mockRejectedValueOnce(
-        new CodexRpcError(
-          { code: -32601, message: 'list_turns is not supported yet' },
-          { method: 'thread/read' },
-        ),
-      )
-      .mockResolvedValueOnce({
-        thread: {
-          id: 't1',
-          historyMode: 'paginated',
-          turns: [{ id: 'stale' }],
-        },
-      });
-
-    await expect(service.readThread('t1', true)).resolves.toEqual({
-      thread: { id: 't1', historyMode: 'paginated', turns: [] },
-    });
-    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/read', {
-      threadId: 't1',
-      includeTurns: false,
-    });
-  });
-
-  it('propagates a thread-read refusal that is not the empty-history case', async () => {
-    mockCodex.request.mockRejectedValueOnce(
-      new CodexRpcError(
-        { code: -32601, message: 'list_turns is not supported yet' },
-        { method: 'thread/turns/list' },
-      ),
-    );
-
-    await expect(service.readThread('t1', true)).rejects.toThrow();
-    expect(mockCodex.request).toHaveBeenCalledTimes(1);
   });
 
   it('should ensure resume via registry', async () => {

@@ -217,7 +217,7 @@ interface CodexJsonRpcClient {
 | `POST /api/threads` | `thread/start` | 新建对话，传 `model`、`cwd`、`approvalPolicy`、`sandboxPolicy` |
 | `GET /api/threads` | `thread/list` | 列表分页，PG 可叠加用户收藏/标签/权限 |
 | `GET /api/threads/overview` | `thread/list` + local topology | 后端生成已折叠/已排序的分支树侧边栏投影 |
-| `GET /api/threads/:id` | `thread/read` | 读取已存会话，可设置 `includeTurns` |
+| `GET /api/threads/:id` | `thread/read` | metadata-only 读取已存会话；历史走分页端点 |
 | `POST /api/threads/:id/resume` | `thread/resume` + `thread/turns/list` | metadata-first 打开；ownership 拒绝时返回只读模式 |
 | `GET /api/threads/:id/turns` | `thread/turns/list` | 不 resume 的 turn 历史分页 |
 | `POST /api/threads/turn-counts` | `thread/turns/list` | 不 resume 的批量 turn count（装饰性，可为 unknown） |
@@ -1127,7 +1127,7 @@ process exit
   → spawn new codex app-server
   → initialize
   → thread/resume for active threads
-  → thread/read includeTurns rebuild projection if needed
+  → metadata-only read + paged turn history rebuild projection if needed
 ```
 
 ### 12.4 schema 管理

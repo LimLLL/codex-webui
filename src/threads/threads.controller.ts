@@ -230,14 +230,10 @@ export class ThreadsController {
   }
 
   @Get(':threadId')
-  @ApiOperation({ summary: 'Read a thread by ID' })
-  @ApiQuery({ name: 'includeTurns', required: false, type: Boolean })
+  @ApiOperation({ summary: 'Read thread metadata by ID' })
   @ApiOkResponse({ type: ThreadReadResponseDto })
-  async readThread(
-    @Param('threadId') threadId: string,
-    @Query('includeTurns') includeTurns?: string,
-  ) {
-    return this.threadsService.readThread(threadId, includeTurns === 'true');
+  async readThread(@Param('threadId') threadId: string) {
+    return this.threadsService.readThread(threadId);
   }
 
   @Get(':threadId/branch-state')

@@ -56,10 +56,34 @@ export interface ThreadItemEntry {
   item: Record<string, unknown>;
 }
 
+/** Raised when a provenance walk observes a turn that is still running. */
+export class InProgressTurnHistoryError extends Error {
+  constructor(
+    readonly threadId: string,
+    readonly turnId: string,
+  ) {
+    super(`Thread ${threadId} contains in-progress turn ${turnId}`);
+    this.name = 'InProgressTurnHistoryError';
+  }
+}
+
+/** Raised when the target turn has no persisted user-message item. */
+export class TurnUserMessageNotFoundError extends Error {
+  constructor(
+    readonly threadId: string,
+    readonly turnId: string,
+  ) {
+    super(`Thread ${threadId} turn ${turnId} contains no user message`);
+    this.name = 'TurnUserMessageNotFoundError';
+  }
+}
+
 interface ThreadItemsPage {
   data?: ThreadItemEntry[];
   nextCursor?: string | null;
 }
+
+type UserMessageItem = Extract<v2.ThreadItem, { type: 'userMessage' }>;
 
 const TURN_ITEMS_PAGE_SIZE = 500;
 
@@ -164,14 +188,27 @@ export class ThreadHistoryService {
 
   /** Pages turn history without resuming the thread. */
   async listTurns(params: TurnsListParams): Promise<TurnsPage> {
-    const response = await this.codex.request<TurnsPage>('thread/turns/list', {
-      threadId: params.threadId,
-      cursor: params.cursor ?? undefined,
-      limit: params.limit ?? undefined,
-      sortDirection: params.sortDirection ?? undefined,
-      itemsView: params.itemsView ?? undefined,
-    });
-    return this.normalizeTurnsPage(response);
+    try {
+      const response = await this.codex.request<TurnsPage>(
+        'thread/turns/list',
+        {
+          threadId: params.threadId,
+          cursor: params.cursor ?? undefined,
+          limit: params.limit ?? undefined,
+          sortDirection: params.sortDirection ?? undefined,
+          itemsView: params.itemsView ?? undefined,
+        },
+      );
+      return this.normalizeTurnsPage(response);
+    } catch (err) {
+      if (
+        (params.cursor !== undefined && params.cursor !== null) ||
+        !isUnmaterializedTurnsListError(err)
+      ) {
+        throw err;
+      }
+      return { data: [], nextCursor: null, backwardsCursor: null };
+    }
   }
 
   /**
@@ -205,6 +242,70 @@ export class ThreadHistoryService {
     }
   }
 
+  /**
+   * Reads the edited turn's user message through the strict provenance path.
+   *
+   * Unlike the UI-facing item reader, this method propagates the pinned
+   * unmaterialized/item-paging refusal and fails on cursor anomalies or entries
+   * attributed to another turn. Branch provenance must not be committed from
+   * a partial or ambiguously filtered item stream.
+   *
+   * @param threadId - Thread that owns the edited turn
+   * @param turnId - Edited turn whose user input is required
+   * @returns The persisted user-message content
+   * @throws When paging is incomplete, attribution is invalid, or no user
+   *   message exists in the target turn
+   */
+  async readTurnUserMessage(
+    threadId: string,
+    turnId: string,
+  ): Promise<v2.UserInput[]> {
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+
+    for (let page = 0; page < TURN_ITEMS_MAX_PAGES; page += 1) {
+      const response = await this.requestTurnItemsPage(
+        threadId,
+        turnId,
+        cursor,
+      );
+      const entries = Array.isArray(response.data) ? response.data : [];
+      for (const entry of entries) {
+        if (entry.turnId !== turnId) {
+          throw new Error(
+            `thread/items/list returned an item without the requested turn id for thread ${threadId} turn ${turnId}`,
+          );
+        }
+      }
+      for (const entry of entries) {
+        if (entry.item?.type !== 'userMessage') continue;
+        const content = (entry.item as UserMessageItem).content;
+        if (!Array.isArray(content)) {
+          throw new Error(
+            `thread/items/list returned invalid user-message content for thread ${threadId} turn ${turnId}`,
+          );
+        }
+        return content;
+      }
+
+      const nextCursor = this.nullableString(response.nextCursor);
+      if (!nextCursor) {
+        throw new TurnUserMessageNotFoundError(threadId, turnId);
+      }
+      if (nextCursor === cursor || seenCursors.has(nextCursor)) {
+        throw new Error(
+          `thread/items/list cursor did not advance for thread ${threadId} turn ${turnId}`,
+        );
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+
+    throw new Error(
+      `thread/items/list exceeded ${TURN_ITEMS_MAX_PAGES} pages for thread ${threadId} turn ${turnId}`,
+    );
+  }
+
   private async listTurnItemsDirect(
     threadId: string,
     turnId: string,
@@ -216,15 +317,10 @@ export class ThreadHistoryService {
     // result as complete — so stopping at the first page would silently drop
     // the tail of a long turn and never retry it.
     for (let page = 0; page < TURN_ITEMS_MAX_PAGES; page += 1) {
-      const response = await this.codex.request<ThreadItemsPage>(
-        'thread/items/list',
-        {
-          threadId,
-          turnId,
-          cursor,
-          limit: TURN_ITEMS_PAGE_SIZE,
-          sortDirection: 'asc',
-        },
+      const response = await this.requestTurnItemsPage(
+        threadId,
+        turnId,
+        cursor,
       );
       if (Array.isArray(response?.data)) entries.push(...response.data);
 
@@ -258,6 +354,36 @@ export class ThreadHistoryService {
    *   thread's first user message
    */
   async listAllTurnIds(threadId: string): Promise<string[]> {
+    return this.listAllTurnIdsInternal(threadId, false);
+  }
+
+  /**
+   * Discovers the complete persisted turn order while rejecting active work.
+   *
+   * The walk is newest-first, so an in-progress turn is normally detected on
+   * the first page. It still retains the same duplicate, cursor, and page-bound
+   * checks as provenance validation and returns only after the full order has
+   * been proven complete.
+   *
+   * @param threadId - Source thread being prepared for message branching
+   * @returns Persisted turn IDs in chronological order
+   * @throws {InProgressTurnHistoryError} When any persisted turn is in progress
+   */
+  async listAllSettledTurnIds(threadId: string): Promise<string[]> {
+    return this.listAllTurnIdsInternal(threadId, true);
+  }
+
+  /**
+   * Walks every lightweight turn page with provenance-grade validation.
+   *
+   * @param threadId - Thread whose complete persisted order is required
+   * @param rejectInProgress - Whether an observed running turn aborts the walk
+   * @returns Turn IDs in chronological order
+   */
+  private async listAllTurnIdsInternal(
+    threadId: string,
+    rejectInProgress: boolean,
+  ): Promise<string[]> {
     const descendingIds: string[] = [];
     const seenIds = new Set<string>();
     const seenCursors = new Set<string>();
@@ -272,27 +398,22 @@ export class ThreadHistoryService {
           `thread/turns/list exceeded ${TURN_ID_MAX_PAGES} pages for thread ${threadId}`,
         );
       }
-      let page: TurnsPage;
-      try {
-        page = await this.listTurns({
-          threadId,
-          cursor,
-          limit: TURN_ID_PAGE_SIZE,
-          sortDirection: 'desc',
-          itemsView: 'notLoaded',
-        });
-      } catch (err) {
-        if (cursor === undefined && isUnmaterializedTurnsListError(err)) {
-          return [];
-        }
-        throw err;
-      }
+      const page = await this.listTurns({
+        threadId,
+        cursor,
+        limit: TURN_ID_PAGE_SIZE,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      });
 
       for (const turn of page.data) {
         if (typeof turn.id !== 'string' || !turn.id) {
           throw new Error(
             `thread/turns/list returned an invalid turn id for thread ${threadId}`,
           );
+        }
+        if (rejectInProgress && turn.status === 'inProgress') {
+          throw new InProgressTurnHistoryError(threadId, turn.id);
         }
         if (seenIds.has(turn.id)) {
           throw new Error(
@@ -407,6 +528,21 @@ export class ThreadHistoryService {
       nextCursor: this.nullableString(record.nextCursor),
       backwardsCursor: this.nullableString(record.backwardsCursor),
     };
+  }
+
+  /** Requests one ascending, target-filtered item page without normalization. */
+  private requestTurnItemsPage(
+    threadId: string,
+    turnId: string,
+    cursor?: string,
+  ): Promise<ThreadItemsPage> {
+    return this.codex.request<ThreadItemsPage>('thread/items/list', {
+      threadId,
+      turnId,
+      cursor,
+      limit: TURN_ITEMS_PAGE_SIZE,
+      sortDirection: 'asc',
+    });
   }
 
   /**

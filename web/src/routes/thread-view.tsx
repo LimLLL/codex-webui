@@ -20,11 +20,17 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
-import { useOpenThread } from '@/hooks/use-thread-open';
+import {
+  applyReadOnlySnapshot,
+  HISTORY_PAGE_SIZE,
+  useOpenThread,
+} from '@/hooks/use-thread-open';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { showSnackbar } from '@/stores/snackbar-store';
-import { threadsReadThreadOptions } from '@/generated/api/@tanstack/react-query.gen';
-import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors } from '@/generated/api/sdk.gen';
+import {
+  threadsListTurnsOptions,
+  threadsReadThreadOptions,
+} from '@/generated/api/@tanstack/react-query.gen';
 
 export function ThreadView() {
   const { threadId } = useParams({ strict: false }) as { threadId: string };
@@ -35,10 +41,6 @@ export function ThreadView() {
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
 
   const threadCwd = useTimelineStore((s) => s.threadCwd);
-  const setReadOnlyThread = useTimelineStore((s) => s.setReadOnlyThread);
-  const hydrateTokenUsageForThread = useTimelineStore((s) => s.hydrateTokenUsageForThread);
-  const hydrateTurnDiffsForThread = useTimelineStore((s) => s.hydrateTurnDiffsForThread);
-  const hydrateTurnErrorsForThread = useTimelineStore((s) => s.hydrateTurnErrorsForThread);
 
   // Pending file open request from @mention click or image badge click.
   // Uses { path, seq } so re-clicking the same file still triggers a new open.
@@ -63,27 +65,27 @@ export function ThreadView() {
 
   const openThread = useOpenThread();
 
-  /** Fallback: try to read the thread as an archived snapshot. */
+  /** Fallback: read metadata plus the newest paged history as a snapshot. */
   const tryReadArchived = async (targetId: string) => {
     try {
-      const res = await queryClient.fetchQuery(
-        threadsReadThreadOptions({
-          path: { threadId: targetId },
-          query: { includeTurns: true },
-        }),
-      );
+      const [response, initialTurnsPage] = await Promise.all([
+        queryClient.fetchQuery(
+          threadsReadThreadOptions({ path: { threadId: targetId } }),
+        ),
+        queryClient.fetchQuery(
+          threadsListTurnsOptions({
+            path: { threadId: targetId },
+            query: {
+              limit: HISTORY_PAGE_SIZE,
+              sortDirection: 'desc',
+              itemsView: 'summary',
+            },
+          }),
+        ),
+      ]);
       // Guard: user may have navigated away during the fetch.
       if (useTimelineStore.getState().threadId !== targetId) return;
-      setReadOnlyThread(res.thread);
-      void tokenUsageReadThreadTokenUsage({ path: { threadId: targetId } })
-        .then(({ data }) => data && hydrateTokenUsageForThread(targetId, data.turns))
-        .catch(() => undefined);
-      void turnDiffReadThreadTurnDiffs({ path: { threadId: targetId } })
-        .then(({ data }) => data && hydrateTurnDiffsForThread(targetId, data.turns))
-        .catch(() => undefined);
-      void turnErrorsReadThreadTurnErrors({ path: { threadId: targetId } })
-        .then(({ data }) => data && hydrateTurnErrorsForThread(targetId, data.errors))
-        .catch(() => undefined);
+      applyReadOnlySnapshot(response, initialTurnsPage);
     } catch {
       if (useTimelineStore.getState().threadId !== targetId) return;
       showSnackbar(t('Thread not found or cannot be opened.'), 'error');

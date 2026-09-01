@@ -20,12 +20,16 @@ import {
   turnDiffReadThreadTurnDiffs,
   turnErrorsReadThreadTurnErrors,
 } from '@/generated/api/sdk.gen';
-import type { ThreadOpenResponseDto } from '@/generated/api/types.gen';
+import type {
+  ThreadOpenResponseDto,
+  ThreadReadResponseDto,
+  ThreadTurnsPageDto,
+} from '@/generated/api/types.gen';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 
 /** Turns fetched per older-history page. */
-const HISTORY_PAGE_SIZE = 20;
+export const HISTORY_PAGE_SIZE = 20;
 
 /** Extracts a display label from a thread DTO. */
 function threadLabel(thread: {
@@ -52,6 +56,37 @@ function hydrateAuxiliaryData(threadId: string): void {
   void turnErrorsReadThreadTurnErrors({ path: { threadId } })
     .then(({ data }) => data && store.hydrateTurnErrorsForThread(threadId, data.errors))
     .catch(() => undefined);
+}
+
+/**
+ * Applies the degraded read-only open from metadata plus its newest turn page.
+ *
+ * This deliberately mirrors the normal metadata-first opener instead of
+ * rebuilding the complete transcript server-side. The returned cursor keeps
+ * earlier history behind the existing explicit load-earlier affordance.
+ */
+export function applyReadOnlySnapshot(
+  response: ThreadReadResponseDto,
+  initialTurnsPage: ThreadTurnsPageDto,
+): void {
+  const store = useTimelineStore.getState();
+  const threadId = response.thread.id;
+  if (!store.getThreadRuntime(threadId)) return;
+
+  store.setReadOnlyThread(response.thread);
+  // The failed open already created this runtime without a label, and
+  // `ensureThreadState` will not relabel an existing one — so the title has to
+  // be applied here exactly as the normal open path applies it.
+  store.setThreadTitleForThread(threadId, threadLabel(response.thread));
+  store.hydrateOpenedThread({
+    threadId,
+    turnsNewestFirst: initialTurnsPage.data,
+    historyCursor: initialTurnsPage.nextCursor,
+    readOnlyReason: null,
+    cwd: response.thread.cwd,
+  });
+  store.setThreadStatusForThread(threadId, response.thread.status);
+  hydrateAuxiliaryData(threadId);
 }
 
 /**

@@ -4,7 +4,6 @@ import {
   isEmptyThreadItemsListRefusal,
   isInvalidForkBoundaryError,
   isThreadServerUnavailableError,
-  isUnmaterializedThreadReadError,
   isUnmaterializedTurnsListError,
   isUnsupportedForkBoundaryFieldError,
 } from './thread-errors';
@@ -51,48 +50,25 @@ describe('thread-errors', () => {
       expect(isEmptyThreadItemsListRefusal(rpc(-32601, message))).toBe(false);
     });
 
-    it('recognizes the pinned thread-read refusal only on its method and code', () => {
-      // Measured against 0.151.0: `thread/read` still names its backing call
-      // and still answers -32601, unlike the turn-list wording above.
-      const message = 'list_turns is not supported yet';
-      expect(
-        isUnmaterializedThreadReadError(rpc(-32601, message, 'thread/read')),
-      ).toBe(true);
-      expect(
-        isUnmaterializedThreadReadError(rpc(-32600, message, 'thread/read')),
-      ).toBe(false);
-      expect(
-        isUnmaterializedThreadReadError(
-          rpc(-32601, message, 'thread/turns/list'),
-        ),
-      ).toBe(false);
-    });
-
-    it('keeps the three history refusals mutually exclusive', () => {
-      const readRefusal = rpc(
-        -32601,
-        'list_turns is not supported yet',
-        'thread/read',
+    it('keeps the two paging refusals mutually exclusive', () => {
+      const turnsRefusal = rpc(
+        -32600,
+        'thread abc is not materialized yet; thread/turns/list is unavailable before first user message',
+        'thread/turns/list',
       );
       const itemsRefusal = rpc(
         -32601,
         'thread/items/list is not supported yet',
         'thread/items/list',
       );
-      expect(isEmptyThreadItemsListRefusal(readRefusal)).toBe(false);
-      expect(isUnmaterializedTurnsListError(readRefusal)).toBe(false);
-      expect(isUnmaterializedThreadReadError(itemsRefusal)).toBe(false);
+      expect(isEmptyThreadItemsListRefusal(turnsRefusal)).toBe(false);
+      expect(isUnmaterializedTurnsListError(itemsRefusal)).toBe(false);
     });
 
     it('does not accept near-match or non-RPC errors', () => {
       expect(
         isUnmaterializedTurnsListError(
           rpc(-32600, 'thread abc is not materialized', 'thread/turns/list'),
-        ),
-      ).toBe(false);
-      expect(
-        isUnmaterializedThreadReadError(
-          rpc(-32601, 'list_turns is not supported', 'thread/read'),
         ),
       ).toBe(false);
       expect(isEmptyThreadItemsListRefusal(new Error('socket hang up'))).toBe(

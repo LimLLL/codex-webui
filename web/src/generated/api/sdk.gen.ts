@@ -523,7 +523,7 @@ export const threadsListBranchTrees = <ThrowOnError extends boolean = false>(opt
 });
 
 /**
- * Read a thread by ID
+ * Read thread metadata by ID
  */
 export const threadsReadThread = <ThrowOnError extends boolean = false>(options: Options<ThreadsReadThreadData, ThrowOnError>) => (options.client ?? client).get<ThreadsReadThreadResponses, ThreadsReadThreadErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

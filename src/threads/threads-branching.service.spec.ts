@@ -1,8 +1,12 @@
 import { CodexService } from '../codex/codex.service';
+import type { v2 } from '../codex/codex-schema';
 import { ErrorCode } from '../common/error-codes';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
-import { ThreadHistoryService } from './thread-history.service';
+import {
+  InProgressTurnHistoryError,
+  ThreadHistoryService,
+} from './thread-history.service';
 import { ThreadsBranchingService } from './threads-branching.service';
 
 describe('ThreadsBranchingService', () => {
@@ -19,7 +23,12 @@ describe('ThreadsBranchingService', () => {
     recordMessageBranch: vi.fn(),
     resolveTreeRootThreadId: vi.fn(),
   };
-  const mockHistory = { listAllTurnIds: vi.fn() };
+  const mockHistory = {
+    listAllTurnIds: vi.fn(),
+    listAllSettledTurnIds: vi.fn(),
+    readTurnUserMessage: vi.fn(),
+    readThreadMetadata: vi.fn(),
+  };
 
   beforeEach(() => {
     service = new ThreadsBranchingService(
@@ -31,34 +40,29 @@ describe('ThreadsBranchingService', () => {
     mockCodex.request.mockReset();
     Object.values(mockResumeRegistry).forEach((mock) => mock.mockReset());
     Object.values(mockBranches).forEach((mock) => mock.mockReset());
-    mockHistory.listAllTurnIds.mockReset();
+    Object.values(mockHistory).forEach((mock) => mock.mockReset());
     mockBranches.hasForkEdge.mockReturnValue(false);
     mockBranches.resolveTreeRootThreadId.mockImplementation(
       (threadId: string): string => threadId,
     );
+    mockHistory.listAllSettledTurnIds.mockResolvedValue(['turn-a']);
+    mockHistory.readTurnUserMessage.mockResolvedValue(userInput('first'));
+    mockHistory.readThreadMetadata.mockResolvedValue(
+      sourceMetadata({ type: 'idle' }),
+    );
   });
 
   it('creates a message branch by forking before the edited turn', async () => {
-    mockCodex.request
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'source',
-          historyMode: 'paginated',
-          status: { type: 'idle' },
-          turns: [
-            completedUserTurn('turn-a', 'first'),
-            completedUserTurn('turn-b', 'second'),
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'child',
-          historyMode: 'paginated',
-          forkedFromId: 'source',
-          turns: [],
-        },
-      });
+    mockCodex.request.mockResolvedValueOnce({
+      thread: {
+        id: 'child',
+        historyMode: 'paginated',
+        forkedFromId: 'source',
+        turns: [],
+      },
+    });
+    mockHistory.listAllSettledTurnIds.mockResolvedValue(['turn-a', 'turn-b']);
+    mockHistory.readTurnUserMessage.mockResolvedValue(userInput('second'));
     mockHistory.listAllTurnIds.mockResolvedValue(['turn-a']);
     mockBranches.resolveTreeRootThreadId.mockReturnValue('root');
     mockBranches.recordMessageBranch.mockReturnValue({
@@ -94,11 +98,8 @@ describe('ThreadsBranchingService', () => {
       previewText: 'edited',
     });
 
-    expect(mockCodex.request).toHaveBeenNthCalledWith(1, 'thread/read', {
-      threadId: 'source',
-      includeTurns: true,
-    });
-    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/fork', {
+    expect(mockHistory.readThreadMetadata).toHaveBeenCalledWith('source');
+    expect(mockCodex.request).toHaveBeenNthCalledWith(1, 'thread/fork', {
       threadId: 'source',
       beforeTurnId: 'turn-b',
       excludeTurns: true,
@@ -118,17 +119,6 @@ describe('ThreadsBranchingService', () => {
 
   it('discards a fork whose prefix does not match the requested boundary', async () => {
     mockCodex.request
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'source',
-          historyMode: 'paginated',
-          status: { type: 'idle' },
-          turns: [
-            completedUserTurn('turn-a', 'first'),
-            completedUserTurn('turn-b', 'second'),
-          ],
-        },
-      })
       // app-server kept turn-b, so the child is not the branch we asked for.
       .mockResolvedValueOnce({
         thread: {
@@ -139,6 +129,8 @@ describe('ThreadsBranchingService', () => {
         },
       })
       .mockResolvedValueOnce({});
+    mockHistory.listAllSettledTurnIds.mockResolvedValue(['turn-a', 'turn-b']);
+    mockHistory.readTurnUserMessage.mockResolvedValue(userInput('second'));
     mockHistory.listAllTurnIds.mockResolvedValue(['turn-a', 'turn-b']);
 
     await expect(
@@ -147,7 +139,7 @@ describe('ThreadsBranchingService', () => {
       errorCode: ErrorCode.threads.branchPrefixMismatch,
     });
 
-    expect(mockCodex.request).toHaveBeenNthCalledWith(3, 'thread/delete', {
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/delete', {
       threadId: 'child',
     });
     expect(mockBranches.recordMessageBranch).not.toHaveBeenCalled();
@@ -155,14 +147,6 @@ describe('ThreadsBranchingService', () => {
 
   it('cleans up the fork when branch metadata persistence fails', async () => {
     mockCodex.request
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'source',
-          historyMode: 'paginated',
-          status: { type: 'idle' },
-          turns: [completedUserTurn('turn-a', 'first')],
-        },
-      })
       .mockResolvedValueOnce({
         thread: {
           id: 'child',
@@ -183,29 +167,20 @@ describe('ThreadsBranchingService', () => {
       errorCode: ErrorCode.threads.branchMetadataFailed,
     });
 
-    expect(mockCodex.request).toHaveBeenNthCalledWith(3, 'thread/delete', {
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/delete', {
       threadId: 'child',
     });
   });
 
   it('preserves a message-branch child once its edge is durable', async () => {
-    mockCodex.request
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'source',
-          historyMode: 'paginated',
-          status: { type: 'idle' },
-          turns: [completedUserTurn('turn-a', 'first')],
-        },
-      })
-      .mockResolvedValueOnce({
-        thread: {
-          id: 'child',
-          historyMode: 'paginated',
-          forkedFromId: 'source',
-          turns: [],
-        },
-      });
+    mockCodex.request.mockResolvedValueOnce({
+      thread: {
+        id: 'child',
+        historyMode: 'paginated',
+        forkedFromId: 'source',
+        turns: [],
+      },
+    });
     mockHistory.listAllTurnIds.mockResolvedValue([]);
     mockBranches.recordMessageBranch.mockImplementation(() => {
       throw new Error('projection failed after commit');
@@ -218,7 +193,7 @@ describe('ThreadsBranchingService', () => {
       errorCode: ErrorCode.threads.branchMetadataFailed,
     });
 
-    expect(mockCodex.request).toHaveBeenCalledTimes(2);
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
     expect(mockCodex.request).not.toHaveBeenCalledWith(
       'thread/delete',
       expect.anything(),
@@ -226,14 +201,9 @@ describe('ThreadsBranchingService', () => {
   });
 
   it('blocks branch creation while the source thread is active', async () => {
-    mockCodex.request.mockResolvedValueOnce({
-      thread: {
-        id: 'source',
-        historyMode: 'paginated',
-        status: { type: 'active', activeFlags: [] },
-        turns: [completedUserTurn('turn-a', 'first')],
-      },
-    });
+    mockHistory.readThreadMetadata.mockResolvedValue(
+      sourceMetadata({ type: 'active', activeFlags: [] }),
+    );
 
     await expect(
       service.createMessageBranch('source', { editedTurnId: 'turn-a' }),
@@ -241,26 +211,37 @@ describe('ThreadsBranchingService', () => {
       errorCode: ErrorCode.threads.branchThreadInProgress,
     });
 
-    expect(mockCodex.request).toHaveBeenCalledTimes(1);
+    expect(mockCodex.request).not.toHaveBeenCalled();
+  });
+
+  it('stops the descending source walk as soon as it observes activity', async () => {
+    mockHistory.listAllSettledTurnIds.mockRejectedValue(
+      new InProgressTurnHistoryError('source', 'turn-running'),
+    );
+
+    await expect(
+      service.createMessageBranch('source', { editedTurnId: 'turn-a' }),
+    ).rejects.toMatchObject({
+      errorCode: ErrorCode.threads.branchThreadInProgress,
+    });
+
+    expect(mockHistory.readTurnUserMessage).not.toHaveBeenCalled();
+    expect(mockHistory.readThreadMetadata).not.toHaveBeenCalled();
+    expect(mockCodex.request).not.toHaveBeenCalled();
   });
 });
 
-function completedUserTurn(id: string, text: string) {
+function sourceMetadata(status: v2.ThreadStatus): v2.ThreadReadResponse {
   return {
-    id,
-    status: 'completed',
-    items: [
-      {
-        type: 'userMessage',
-        id: `${id}-item`,
-        clientId: null,
-        content: [{ type: 'text', text, text_elements: [] }],
-      },
-    ],
-    itemsView: 'full',
-    error: null,
-    startedAt: 1,
-    completedAt: 2,
-    durationMs: 100,
+    thread: {
+      id: 'source',
+      historyMode: 'paginated',
+      status,
+      turns: [],
+    } as v2.Thread,
   };
+}
+
+function userInput(text: string): v2.UserInput[] {
+  return [{ type: 'text', text, text_elements: [] }];
 }

@@ -1000,7 +1000,7 @@ export const threadsListBranchTreesOptions = (options?: Options<ThreadsListBranc
 export const threadsReadThreadQueryKey = (options: Options<ThreadsReadThreadData>) => createQueryKey('threadsReadThread', options);
 
 /**
- * Read a thread by ID
+ * Read thread metadata by ID
  */
 export const threadsReadThreadOptions = (options: Options<ThreadsReadThreadData>) => queryOptions<ThreadsReadThreadResponse, ThreadsReadThreadError, ThreadsReadThreadResponse, ReturnType<typeof threadsReadThreadQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

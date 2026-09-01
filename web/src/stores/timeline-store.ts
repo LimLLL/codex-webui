@@ -860,9 +860,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       const title = thread.name ?? thread.preview ?? null;
       get().unsubscribeThread(thread.id);
       get().ensureThreadState({ threadId: thread.id, cwd: thread.cwd, title, mode: 'readOnly' });
+      // The failed writable open creates a live runtime before this degraded
+      // path runs. `ensureThreadState` intentionally preserves existing state,
+      // so the mode must be changed explicitly before selecting the snapshot.
+      //
+      // The timeline is deliberately untouched here. History now arrives as a
+      // page through `hydrateOpenedThread`, which refuses to shrink a transcript
+      // the user has already paged backwards through; seeding an empty timeline
+      // first would discard those earlier pages and defeat that guard.
+      applyThreadUpdate(thread.id, (runtime) => ({
+        ...runtime,
+        threadMode: 'readOnly',
+      }));
       get().selectThread(thread.id);
-      get().hydrateTimelineForThread(thread.id, thread.turns ?? [], thread.cwd);
-      get().setThreadStatusForThread(thread.id, thread.status as ThreadStatusType);
     },
 
     clearThread: () => get().selectThread(null),

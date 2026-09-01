@@ -2793,9 +2793,7 @@ export type ThreadsReadThreadData = {
     path: {
         threadId: string;
     };
-    query?: {
-        includeTurns?: boolean;
-    };
+    query?: never;
     url: '/api/threads/{threadId}';
 };
 

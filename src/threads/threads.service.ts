@@ -26,7 +26,6 @@ import {
 } from './threads-branching.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
-import { isUnmaterializedThreadReadError } from './thread-errors';
 import { previewFromUserInput } from './thread-input-preview';
 import {
   ThreadHistoryService,
@@ -143,39 +142,18 @@ export class ThreadsService {
   }
 
   /**
-   * Reads a single thread by ID.
+   * Reads one thread's metadata without reconstructing its turn history.
    *
-   * If `includeTurns` is requested before the thread's first user message,
-   * app-server refuses to reconstruct history rather than returning an empty
-   * list. Retrying without turns is the only way to answer at all, and an
-   * unmaterialized thread has no turns to lose.
+   * History is exposed only through the paged turn endpoints. The client
+   * projection remains at this REST boundary as defense in depth: if an
+   * upstream or adapter regression ever returns turns here, continuation
+   * steering is still removed before the response reaches the browser.
    *
-   * @param threadId - The thread identifier
-   * @param includeTurns - Whether to include turn history
-   * @returns The thread data
+   * @param threadId - Thread identifier
+   * @returns Metadata-only browser-safe thread data
    */
-  async readThread(
-    threadId: string,
-    includeTurns = false,
-  ): Promise<ClientThreadReadResponse> {
-    let response: v2.ThreadReadResponse;
-    try {
-      response = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        {
-          threadId,
-          includeTurns,
-        },
-      );
-    } catch (err) {
-      if (!includeTurns || !isUnmaterializedThreadReadError(err)) throw err;
-      const metadata = await this.codex.request<v2.ThreadReadResponse>(
-        'thread/read',
-        { threadId, includeTurns: false },
-      );
-      response = { thread: { ...metadata.thread, turns: [] } };
-    }
-    assertPaginatedThread(response.thread, 'thread/read');
+  async readThread(threadId: string): Promise<ClientThreadReadResponse> {
+    const response = await this.history.readThreadMetadata(threadId);
     return projectThreadReadForClient(response);
   }
 

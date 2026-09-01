@@ -66,7 +66,7 @@
 | GET    | `/api/threads/branch-trees`                      | ThreadsController         | 列出本地已知的消息级分支树                                                                                           |
 | GET    | `/api/threads/collaboration-modes`               | ThreadCommandsController  | 调 `collaborationMode/list` 返回 app-server collaboration mode preset                                      |
 | GET    | `/api/threads/branch-adoption/status`            | ThreadsDeletionController | 读取启动期外部分叉认领扫描器状态、计数和诊断；删除 preview/execute 均受该状态门控                                    |
-| GET    | `/api/threads/:threadId`                         | ThreadsController         | 读取单个 thread。Query: `includeTurns`                                                                               |
+| GET    | `/api/threads/:threadId`                         | ThreadsController         | metadata-only 读取单个 thread；历史统一走分页 turns/items 端点                                                       |
 | GET    | `/api/threads/:threadId/branch-state`            | ThreadsController         | 读取 compact guard 状态与持久化树成员。包含本地创建和启动期认领的拓扑，不做每请求 app-server 扫描                    |
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
 | GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。未 materialized 的 pinned refusal 记 warning 后归一为 `[]`，不回退到 full turn pages |
@@ -76,12 +76,12 @@
 | PATCH  | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 创建/更新 goal。Body 支持 `objective`（≤4000 字符）、`status`、`tokenBudget`；至少提供一个字段；仅 `tokenBudget` 接受显式 `null`（透传给 app-server 走默认预算重置），`objective`/`status` 传 null 会 400 |
 | DELETE | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 清除 thread goal，返回 `{ cleared }`                                                                                 |
 | GET    | `/api/threads/:threadId/delete-preview`          | ThreadsDeletionController | 预览删除该 thread 及所有 fork 后代：返回确认用 id 集、叶到根删除顺序、运行中会话、待审批、扫描器诊断与 blocker       |
-| POST   | `/api/threads/:threadId/delete`                  | ThreadsDeletionController | 按确认过的 `expectedThreadIds` 执行级联删除；执行前和自动中断后重新规划，id 集漂移时返回结构化 conflict/partial 结果 |
+| POST   | `/api/threads/:threadId/delete`                  | ThreadsDeletionController | 按确认过的 `expectedThreadIds` 执行级联删除；运行中 thread 用 metadata + 最新一页 turn headers 定位 interrupt id，miss 时 metadata 复核仍 active 则 fail closed；自动中断后重新规划 |
 | POST   | `/api/threads/:threadId/resume`                  | ThreadsController         | metadata-first 打开：`thread.turns` 恒为空，最近一页在 `initialTurnsPage`，更早历史用 `turnsBackwardsCursor` 翻页。写所有权被占时返回 `mode: readOnly` / `ownership: refused` / `ownershipRefusalMessage`。查询参数 `recordActive=false` 用于后台重开（刷新/重连/auto-resume），使其不改写活跃分支指针 |
 | POST   | `/api/threads/:threadId/archive`                 | ThreadsController         | 归档本地已知整棵分支树                                                                                               |
 | POST   | `/api/threads/:threadId/unarchive`               | ThreadsController         | 取消归档本地已知整棵分支树                                                                                           |
 | POST   | `/api/threads/:threadId/compact`                 | ThreadsController         | 压缩上下文；有本地后代时返回 conflict                                                                                |
-| POST   | `/api/threads/:threadId/branches`                | ThreadsController         | 编辑历史 user message：metadata-only `thread/fork(beforeTurnId, excludeTurns:true)`，轻量分页校验 turn ID 前缀后持久化分支拓扑 |
+| POST   | `/api/threads/:threadId/branches`                | ThreadsController         | 编辑历史 user message：完整分页读取 source turn headers、严格读取目标 user item，fork 前 metadata 校验；metadata-only fork 后精确校验 child 前缀才持久化 provenance |
 | POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | metadata-only 普通 fork；写 topology-only provenance edge（不创建消息版本组），再由 canonical opener 分页 hydration。Body 可选 `{ carryGoal?: boolean }`，默认 false；`ephemeral:true` 不支持 |
 | PATCH  | `/api/threads/:threadId/name`                    | ThreadsController         | 设置 thread 显示名                                                                                                   |
 | POST   | `/api/threads/:threadId/review`                  | ThreadCommandsController  | 启动 inline `review/start` turn。支持 uncommittedChanges/custom/baseBranch/commit target；不暴露 detached review      |
@@ -161,7 +161,7 @@
 | GET /threads                          | `thread/list`                                                 |
 | GET /threads/overview                 | `thread/list` plus local/adopted topology projection          |
 | GET /threads/collaboration-modes      | `collaborationMode/list`                                      |
-| GET /threads/:id                      | `thread/read`                                                 |
+| GET /threads/:id                      | `thread/read` with metadata only                              |
 | GET /threads/:id/collaboration-mode   | local observed settings cache                                 |
 | PATCH /threads/:id/collaboration-mode | experimental `thread/settings/update`                         |
 | GET /threads/:id/goal                 | `thread/goal/get`                                             |

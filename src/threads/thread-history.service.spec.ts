@@ -1,6 +1,9 @@
 import { CodexService } from '../codex/codex.service';
 import { CodexRpcError } from '../codex/codex-errors';
-import { ThreadHistoryService } from './thread-history.service';
+import {
+  InProgressTurnHistoryError,
+  ThreadHistoryService,
+} from './thread-history.service';
 
 describe('ThreadHistoryService', () => {
   const mockCodex = { request: vi.fn() };
@@ -121,6 +124,45 @@ describe('ThreadHistoryService', () => {
     });
   });
 
+  it('normalizes the pinned pre-message turn-list refusal at the paging boundary', async () => {
+    mockCodex.request.mockRejectedValueOnce(
+      new CodexRpcError(
+        {
+          code: -32600,
+          message:
+            'thread t1 is not materialized yet; thread/turns/list is unavailable before first user message',
+        },
+        { method: 'thread/turns/list' },
+      ),
+    );
+
+    await expect(service.listTurns({ threadId: 't1' })).resolves.toEqual({
+      data: [],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+  });
+
+  it('never normalizes that refusal once paging has started', async () => {
+    // The normalization is deliberately first-page only. Mid-walk it would
+    // end a provenance walk early and hand back a truncated prefix, which is
+    // then committed as branch lineage — the exact failure the walk's other
+    // guards exist to prevent.
+    const error = new CodexRpcError(
+      {
+        code: -32600,
+        message:
+          'thread t1 is not materialized yet; thread/turns/list is unavailable before first user message',
+      },
+      { method: 'thread/turns/list' },
+    );
+    mockCodex.request.mockRejectedValueOnce(error);
+
+    await expect(
+      service.listTurns({ threadId: 't1', cursor: 'older' }),
+    ).rejects.toBe(error);
+  });
+
   it('returns unknown count when a graph node cannot be counted', async () => {
     mockCodex.request.mockRejectedValue(new Error('gone'));
 
@@ -149,6 +191,94 @@ describe('ThreadHistoryService', () => {
     mockCodex.request.mockRejectedValueOnce(error);
 
     await expect(service.listTurnItems('t1', 'turn-1')).rejects.toBe(error);
+  });
+
+  it('reads a target user message strictly across item pages', async () => {
+    mockCodex.request
+      .mockResolvedValueOnce({
+        data: [
+          {
+            turnId: 'turn-1',
+            item: { type: 'reasoning', summary: [] },
+          },
+        ],
+        nextCursor: 'next',
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            turnId: 'turn-1',
+            item: {
+              type: 'userMessage',
+              content: [{ type: 'text', text: 'persisted', text_elements: [] }],
+            },
+          },
+        ],
+        nextCursor: null,
+      });
+
+    await expect(service.readTurnUserMessage('t1', 'turn-1')).resolves.toEqual([
+      { type: 'text', text: 'persisted', text_elements: [] },
+    ]);
+    expect(mockCodex.request).toHaveBeenNthCalledWith(2, 'thread/items/list', {
+      threadId: 't1',
+      turnId: 'turn-1',
+      cursor: 'next',
+      limit: 500,
+      sortDirection: 'asc',
+    });
+  });
+
+  it('keeps item-list refusal strict for branch provenance', async () => {
+    const error = new CodexRpcError(
+      { code: -32601, message: 'thread/items/list is not supported yet' },
+      { method: 'thread/items/list' },
+    );
+    mockCodex.request.mockRejectedValueOnce(error);
+
+    await expect(service.readTurnUserMessage('t1', 'turn-1')).rejects.toBe(
+      error,
+    );
+  });
+
+  it('fails the strict item read when the server misattributes an entry', async () => {
+    mockCodex.request.mockResolvedValueOnce({
+      data: [
+        {
+          turnId: 'turn-1',
+          item: { type: 'userMessage', content: [] },
+        },
+        { turnId: 'other-turn', item: { type: 'reasoning' } },
+      ],
+      nextCursor: null,
+    });
+
+    await expect(service.readTurnUserMessage('t1', 'turn-1')).rejects.toThrow(
+      'without the requested turn id',
+    );
+  });
+
+  it('fails the strict item read when its cursor repeats', async () => {
+    mockCodex.request
+      .mockResolvedValueOnce({ data: [], nextCursor: 'same' })
+      .mockResolvedValueOnce({ data: [], nextCursor: 'same' });
+
+    await expect(service.readTurnUserMessage('t1', 'turn-1')).rejects.toThrow(
+      'cursor did not advance',
+    );
+  });
+
+  it('fails the strict item read when fresh cursors exceed its page cap', async () => {
+    let page = 0;
+    mockCodex.request.mockImplementation(() => {
+      page += 1;
+      return Promise.resolve({ data: [], nextCursor: `cursor-${page}` });
+    });
+
+    await expect(service.readTurnUserMessage('t1', 'turn-1')).rejects.toThrow(
+      'exceeded 20 pages',
+    );
+    expect(mockCodex.request).toHaveBeenCalledTimes(20);
   });
 
   it('discovers all turn IDs in chronological order without loading items', async () => {
@@ -191,6 +321,19 @@ describe('ThreadHistoryService', () => {
     );
 
     await expect(service.listAllTurnIds('t1')).resolves.toEqual([]);
+  });
+
+  it('rejects an in-progress turn on the first descending provenance page', async () => {
+    mockCodex.request.mockResolvedValueOnce({
+      data: [{ id: 'turn-running', status: 'inProgress' }],
+      nextCursor: 'older',
+      backwardsCursor: null,
+    });
+
+    await expect(service.listAllSettledTurnIds('t1')).rejects.toEqual(
+      new InProgressTurnHistoryError('t1', 'turn-running'),
+    );
+    expect(mockCodex.request).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when turn paging repeats a cursor', async () => {
