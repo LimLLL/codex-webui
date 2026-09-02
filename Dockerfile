@@ -150,7 +150,7 @@ rebuild_codex_arg0_symlinks() {
   local codex_bin
   codex_bin="$(find /root/.local/share/mise -type f -name codex \
     \( -path '*/vendor/*/bin/codex' -o -path '*/vendor/*/codex/codex' \) \
-    2>/dev/null | head -1)"
+    2>/dev/null | head -1 || true)"
   if [ -n "${codex_bin}" ]; then
     for tool in apply_patch applypatch codex-execve-wrapper codex-linux-sandbox; do
       ln -sf "${codex_bin}" "/usr/local/bin/${tool}"
@@ -160,14 +160,19 @@ rebuild_codex_arg0_symlinks() {
   fi
 }
 
-is_root_empty() {
-  find /root -mindepth 1 -maxdepth 1 -print -quit | grep -q . && return 1
-  return 0
+is_root_seedable() {
+  # Debian already ships standard shell startup files in /root. A root that
+  # contains only those files is still fresh and should receive the seed.
+  ! find /root -mindepth 1 -maxdepth 1 \
+    ! -name '.profile' \
+    ! -name '.bashrc' \
+    ! -name '.bash_logout' \
+    -print -quit | grep -q .
 }
 
 # ── Phase 1: Root seed restore ──────────────────────────────────────
-if is_root_empty; then
-  echo "[entrypoint] /root is empty, restoring seed data..."
+if is_root_seedable; then
+  echo "[entrypoint] /root is fresh, restoring seed data..."
   tar -C /root -xzf "${ROOT_SEED}"
   touch "${ROOT_MARKER}"
   echo "${CODEX_CLI_VERSION:-unknown}" > "${VERSION_MARKER}"
