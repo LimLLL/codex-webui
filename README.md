@@ -249,8 +249,8 @@ Docker Compose 中使用时，`proxy_pass` 改为 `http://codex-webui:8172`，�
 
 ```bash
 docker build \
-  --build-arg CODEX_CLI_VERSION=0.151.0 \
-  -t codex-webui:0.151.0 .
+  --build-arg CODEX_CLI_VERSION=0.152.1 \
+  -t codex-webui:0.152.1 .
 ```
 
 Nginx 必须保留浏览器侧的 `/codex/` 前缀，并在转发到后端时将它移除。`location` 和 `proxy_pass` 末尾的 `/` 均不可省略：
