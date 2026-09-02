@@ -11,7 +11,7 @@ Each version is a real app-server thread. Switching versions is therefore ordina
 - New `POST /api/threads` requests include experimental `historyMode: "paginated"`. If app-server does not confirm paginated mode, the backend best-effort deletes the new thread and fails the request.
 - Branch creation uses only `thread/fork` with experimental `beforeTurnId`. The in-place `thread/revert` path is intentionally unused: it rewrites history while keeping the thread id, which would give the client two sources of truth that are indistinguishable by id.
 - `beforeTurnId` is preferred over `lastTurnId` because it also accepts interrupted turns. `lastTurnId` rejects them, and interrupted turns are roughly 1 in 13 in practice — all of which would otherwise be uneditable.
-- Both ordinary and message-level forks pass `excludeTurns: true`. The 0.151.0 fork response is metadata-only; the backend discovers the child's complete persisted turn-ID prefix through `thread/turns/list` with `itemsView: "notLoaded"` before writing provenance. Message-level forks compare that prefix with the requested boundary exactly.
+- Both ordinary and message-level forks pass `excludeTurns: true`. The pinned 0.152.1 fork response is metadata-only; the backend discovers the child's complete persisted turn-ID prefix through `thread/turns/list` with `itemsView: "notLoaded"` before writing provenance. Message-level forks compare that prefix with the requested boundary exactly.
 - Message branching discovers the source's complete ordered turn IDs through the same metadata-only pages. It fails immediately if the descending walk observes `inProgress`, requires the edited turn to exist in that complete order, and reads only that turn's user message through a strict `thread/items/list` path. The strict path propagates paging refusals and fails on foreign turn attribution, cursor loops, or its page bound; the UI-facing empty-result normalization is not used for provenance.
 - The source metadata read occurs once, immediately before `thread/fork`. It validates the source id, paginated mode, and product rule that the thread is not active. This narrows the existing read/fork race without claiming atomicity: a later turn cannot enter the committed prefix because `beforeTurnId` copies strictly before the edited turn, and the child prefix is still compared for exact ordered equality before provenance is written.
 - Fork responses must remain paginated and identify the expected parent. A mismatched source, history mode, prefix, duplicate turn ID, or non-advancing cursor fails closed. Once a distinct child id exists but before provenance commits, failure triggers a compensating `thread/delete` of that child.
@@ -150,7 +150,7 @@ Rendered with `@xyflow/react` over a `d3-hierarchy` tidy-tree layout. Layout is 
 
 ## Empty Paginated Threads Use Method-Specific Refusals
 
-The pinned 0.151.0 app-server reports one pre-message state differently on the
+The pinned 0.152.1 app-server reports one pre-message state differently on the
 two paging methods still used by this client:
 
 | Method | Refusal before the first user message | Normalized result |

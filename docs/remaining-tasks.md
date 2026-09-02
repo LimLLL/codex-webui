@@ -306,6 +306,8 @@
 - [ ] `/prompts:<name>` 自定义 prompt：官方文档称 `~/.codex/prompts/*.md` 会出现在 slash 列表，但 0.149.1 app-server README 无对应方法，ACP 的 `CustomPrompt` 属 v1 遗留，需实测确认。
 - [x] `config/read`、`config/batchWrite`、profile/settings UI：CodexConfigController（GET/PATCH structured + GET/PUT raw），Settings Codex tab（14 curated fields + profile switch + security read-only + Monaco raw editor），共享 json-safe 工具。
 - [ ] `thread/backgroundTerminals/clean` 等剩余 experimentalApi 能力按开关暴露。
+- [ ] `modelProvider/authRecoveryStarted` / `authRecoveryCompleted`（0.152.1 新增）：**前置依赖 Bedrock 支持，已决定不做**。上游只有 `amazon_bedrock` 实现 `auth_recovery_messages`，且发射被 `uses_aws_auth_recovery()`（`ConfiguredAwsProfile` / `AwsSdk`）门控，因此仅在 model provider 为 Amazon Bedrock 且走 AWS 托管凭证（profile / 环境凭证链）时触发；Codex 托管的 Bedrock API key 与 AWS access keys 不触发，ChatGPT / OpenAI API key 更不触发。该分支是单次凭证刷新而非多步重试，`message` 为写死的英文常量，且失败无对应通知（`Completed` 仅表示成功）。两个方法目前落在前端 dispatcher 的 unknown 分支；在支持 Bedrock 之前，唯一有意义的独立改动是归入 TIER3 消除噪音。
+- [ ] `project/list` 的 `sortKey` / `sortDirection` 与 `Project.recencyAt`（0.152.1 新增）：按最近活跃排序项目列表的前提已具备，当前仍只用手动 position 序。
 
 ### 数据、检索与审计
 
