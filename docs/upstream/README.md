@@ -8,7 +8,7 @@ Do not edit them. Fix anything wrong by refreshing from upstream.
 
 | File | Upstream path | Tag |
 |---|---|---|
-| `codex-app-server-0.151.0.md` | `codex-rs/app-server/README.md` | `rust-v0.151.0` |
+| `codex-app-server-0.152.1.md` | `codex-rs/app-server/README.md` | `rust-v0.152.1` |
 
 The tag matches the `@openai/codex` version pinned in the root `package.json`.
 Refresh after bumping that dependency — a protocol migration is exactly when a

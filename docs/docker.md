@@ -114,16 +114,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 | ARG | 默认值 | 说明 |
 |-----|--------|------|
-| `CODEX_CLI_VERSION` | `0.151.0` | **运行时**镜像内全局安装的 codex npm 包版本 |
+| `CODEX_CLI_VERSION` | `0.152.1` | **运行时**镜像内全局安装的 codex npm 包版本 |
 
 构建阶段生成协议类型用的是 `@openai/codex` devDependency（由 `pnpm-lock.yaml` 锁定），**不受本 ARG 控制**。改 `CODEX_CLI_VERSION` 时须同步更新 `package.json` 里的 devDependency，否则会出现「类型按 A 版本生成、运行时跑 B 版本」的错配。版本的唯一真相源是 `package.json`，Dockerfile / docker-compose / CI fallback 均跟随它。
 
 本地构建：
 ```bash
-docker compose build --build-arg CODEX_CLI_VERSION=0.151.0
+docker compose build --build-arg CODEX_CLI_VERSION=0.152.1
 ```
 
-CI 由 `codex-*` 格式的 tag 触发，tag 名会被解析成本 ARG：`codex-0.151.0` → `0.151.0`。同一 codex 版本重发镜像用 `codex-0.151.0-2` 这类后缀。tag 名不合该格式会导致解析失败、构建报错。
+CI 由 `codex-*` 格式的 tag 触发，tag 名会被解析成本 ARG：`codex-0.152.1` → `0.152.1`。同一 codex 版本重发镜像用 `codex-0.152.1-2` 这类后缀。tag 名不合该格式会导致解析失败、构建报错。
 
 ## 反向代理与子目录部署
 
