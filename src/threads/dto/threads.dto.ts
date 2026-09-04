@@ -118,11 +118,11 @@ export class StartTurnDto {
   model?: string;
 
   @ApiPropertyOptional({
-    enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    enum: REASONING_EFFORT_VALUES,
     description:
       'Override reasoning effort for this turn and subsequent turns.',
   })
-  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  effort?: ReasoningEffort;
 }
 
 /** Request body for steering the current active turn. */

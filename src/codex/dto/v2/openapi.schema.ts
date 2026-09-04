@@ -13,6 +13,8 @@ export const REASONING_EFFORT_VALUES = [
   'medium',
   'high',
   'xhigh',
+  'max',
+  'ultra',
 ] as const;
 
 export const SERVICE_TIER_VALUES = ['fast', 'flex'] as const;

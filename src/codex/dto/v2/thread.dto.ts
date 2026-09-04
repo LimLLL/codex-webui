@@ -1,5 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { NULLABLE_STRING_SCHEMA } from './openapi.schema';
+import {
+  NULLABLE_STRING_SCHEMA,
+  REASONING_EFFORT_VALUES,
+  nullableStringEnumSchema,
+} from './openapi.schema';
 import { sessionSourceSchema } from './session.dto';
 import { threadStatusSchema } from './thread-status.dto';
 import { TurnDto } from './turn.dto';
@@ -32,6 +36,12 @@ export class ThreadDto {
 
   @ApiProperty()
   modelProvider!: string;
+
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  model!: string | null;
+
+  @ApiProperty(nullableStringEnumSchema(REASONING_EFFORT_VALUES))
+  reasoningEffort!: string | null;
 
   @ApiProperty()
   createdAt!: number;

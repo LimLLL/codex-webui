@@ -10,7 +10,9 @@ export type ReasoningEffort =
   | 'low'
   | 'medium'
   | 'high'
-  | 'xhigh';
+  | 'xhigh'
+  | 'max'
+  | 'ultra';
 
 interface ModelState {
   /** Overridden model id — null means use the server default. */

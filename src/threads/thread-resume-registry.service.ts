@@ -160,7 +160,12 @@ export class ThreadResumeRegistryService {
     ]);
     return this.toWritableOpen({
       ...cached,
-      thread: { ...metadata.thread, turns: [] },
+      thread: {
+        ...metadata.thread,
+        model: metadata.thread.model,
+        reasoningEffort: metadata.thread.reasoningEffort,
+        turns: [],
+      },
       cwd: metadata.thread.cwd,
       initialTurnsPage,
       turnsBackwardsCursor: initialTurnsPage.backwardsCursor,
@@ -204,7 +209,12 @@ export class ThreadResumeRegistryService {
       mode: 'writable',
       ownership: 'acquired',
       ownershipRefusalMessage: null,
-      thread: { ...response.thread, turns: [] },
+      thread: {
+        ...response.thread,
+        model: response.model ?? null,
+        reasoningEffort: response.reasoningEffort ?? null,
+        turns: [],
+      },
       cwd: String(response.cwd),
       model: response.model ?? null,
       modelProvider: response.modelProvider ?? null,
