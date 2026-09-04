@@ -121,6 +121,33 @@ describe('normalizeThreadItem', () => {
     expect(JSON.stringify(normalized)).not.toContain('must never reach the page');
   });
 
+  it('preserves structured async questions while discarding malformed entries', () => {
+    const normalized = normalizeThreadItem(
+      {
+        type: 'agentMessage',
+        id: 'agent-questions',
+        text: 'Please choose.',
+        questions: [
+          { title: 'Deployment target', options: ['staging', 'production'] },
+          { title: 'Additional details', options: null },
+          { title: 42, options: ['discard me'] },
+        ],
+      },
+      true,
+    );
+
+    expect(normalized).toMatchObject({
+      kind: 'render',
+      item: {
+        type: 'agentMessage',
+        questions: [
+          { title: 'Deployment target', options: ['staging', 'production'] },
+          { title: 'Additional details', options: null },
+        ],
+      },
+    });
+  });
+
   it('marks encrypted function output without retaining ciphertext', () => {
     const normalized = normalizeThreadItem(
       {

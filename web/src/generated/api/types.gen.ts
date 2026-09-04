@@ -856,12 +856,18 @@ export type HookPromptThreadItemDto = {
     fragments: Array<HookPromptFragmentDto>;
 };
 
+export type AsyncUserInputQuestionDto = {
+    title: string;
+    options: Array<string> | null;
+};
+
 export type AgentMessageThreadItemDto = {
     type: 'agentMessage';
     id: string;
     text: string;
     phase: 'commentary' | 'final_answer' | null;
     memoryCitation: MemoryCitationDto | null;
+    questions: Array<AsyncUserInputQuestionDto> | null;
 };
 
 export type FunctionCallOutputThreadItemDto = {
@@ -943,7 +949,7 @@ export type CollabAgentToolCallThreadItemDto = {
     receiverThreadIds: Array<string>;
     prompt: string | null;
     model: string | null;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
     agentsStates: {
         [key: string]: CollabAgentStateDto;
     };
@@ -1042,6 +1048,8 @@ export type ThreadDto = {
     preview: string;
     ephemeral: boolean;
     modelProvider: string;
+    model: string | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
     createdAt: number;
     updatedAt: number;
     status: ThreadStatusNotLoadedDto | ThreadStatusIdleDto | ThreadStatusSystemErrorDto | ThreadStatusActiveDto;
@@ -1068,7 +1076,7 @@ export type ModelUpgradeInfoDto = {
 };
 
 export type ReasoningEffortOptionDto = {
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     description: string;
 };
 
@@ -1082,7 +1090,7 @@ export type ModelDto = {
     description: string;
     hidden: boolean;
     supportedReasoningEfforts: Array<ReasoningEffortOptionDto>;
-    defaultReasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    defaultReasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     inputModalities: Array<'text' | 'image'>;
     supportsPersonality: boolean;
     additionalSpeedTiers: Array<string>;
@@ -1098,7 +1106,7 @@ export type ThreadStartResponseDto = {
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
 
 export type ThreadResumeResponseDto = {
@@ -1110,7 +1118,7 @@ export type ThreadResumeResponseDto = {
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
 
 export type ThreadForkResponseDto = {
@@ -1122,7 +1130,7 @@ export type ThreadForkResponseDto = {
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
 
 export type ThreadReadResponseDto = {
@@ -1304,7 +1312,7 @@ export type StartTurnDto = {
     /**
      * Override reasoning effort for this turn and subsequent turns.
      */
-    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 };
 
 export type SteerTurnDto = {
@@ -1483,7 +1491,7 @@ export type CollaborationModePresetDto = {
     name: string;
     mode: 'plan' | 'default' | null;
     model: string | null;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
 
 export type CollaborationModesResponseDto = {
@@ -1498,7 +1506,7 @@ export type ThreadCollaborationModeStateDto = {
     source: 'unknown' | 'notification' | 'accepted';
     mode: 'plan' | 'default' | null;
     model: string | null;
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
 
 export type ThreadGoalDto = {

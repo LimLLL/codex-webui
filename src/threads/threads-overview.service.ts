@@ -279,7 +279,12 @@ export class ThreadsOverviewService {
         : group.displayThreadId;
 
     return {
-      thread: { ...displayThread, updatedAt: latestActivityAt },
+      thread: {
+        ...displayThread,
+        model: null,
+        reasoningEffort: null,
+        updatedAt: latestActivityAt,
+      },
       treeRootThreadId: group.treeRootThreadId,
       openThreadId,
       memberThreadIds: memberIds,

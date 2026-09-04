@@ -5,7 +5,7 @@ services:
     # build:
     #   context: .
     #   args:
-    #     CODEX_CLI_VERSION: "0.152.1"
+    #     CODEX_CLI_VERSION: "0.153.2"
     ports:
       - "${PORT:-8172}:8172"
     environment:

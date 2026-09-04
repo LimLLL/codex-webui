@@ -239,11 +239,29 @@ export function normalizeThreadItem(
         item: { ...base, type: 'reasoning', content: [...summary, ...content].join('\n') },
       };
     }
-    case 'agentMessage':
+    case 'agentMessage': {
+      const questions = Array.isArray(item.questions)
+        ? item.questions.flatMap((value) => {
+            const question = asRecord(value);
+            if (!question || typeof question.title !== 'string') return [];
+            const options = Array.isArray(question.options)
+              ? question.options.filter(
+                  (option): option is string => typeof option === 'string',
+                )
+              : null;
+            return [{ title: question.title, options }];
+          })
+        : [];
       return {
         kind: 'render',
-        item: { ...base, type: 'agentMessage', content: stringValue(item.text) },
+        item: {
+          ...base,
+          type: 'agentMessage',
+          content: stringValue(item.text),
+          questions,
+        },
       };
+    }
     case 'mcpToolCall': {
       const result = asRecord(item.result);
       const error = asRecord(item.error);
@@ -453,8 +471,14 @@ export function mergeTurnItem(
         ? { ...incoming, content: existing.content }
         : incoming;
     case 'agentMessage':
-      return existing.type === 'agentMessage' && !incoming.content
-        ? { ...incoming, content: existing.content }
+      return existing.type === 'agentMessage'
+        ? {
+            ...incoming,
+            content: incoming.content || existing.content,
+            questions: incoming.questions.length
+              ? incoming.questions
+              : existing.questions,
+          }
         : incoming;
     case 'commandExecution':
       return existing.type === 'commandExecution'

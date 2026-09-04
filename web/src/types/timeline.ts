@@ -26,6 +26,7 @@ export interface ReasoningTurnItem extends TurnItemBase {
 export interface AgentMessageTurnItem extends TurnItemBase {
   type: 'agentMessage';
   content: string;
+  questions: Array<{ title: string; options: string[] | null }>;
 }
 
 export interface McpToolCallTurnItem extends TurnItemBase {

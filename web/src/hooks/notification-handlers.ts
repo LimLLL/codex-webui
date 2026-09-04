@@ -181,6 +181,7 @@ const handleAgentMessageDelta: Handler = (params, ctx) => {
     content:
       (existing?.type === 'agentMessage' ? existing.content : '') +
       (delta ?? ''),
+    questions: existing?.type === 'agentMessage' ? existing.questions : [],
     completed: false,
   }));
 };
