@@ -3,7 +3,6 @@
  * Displays current model + effort as a compact badge, opens a popover to change.
  */
 import { Bot, ChevronDown } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,20 +10,24 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import {
-  codexStatusGetStatusOptions,
-  modelsListModelsOptions,
-} from '@/generated/api/@tanstack/react-query.gen';
 import type { ModelDto } from '@/generated/api';
-import {
-  useModelStore,
-  type ReasoningEffort,
-} from '@/stores/model-store';
+import { useActiveModel } from '@/hooks/use-active-model';
+import { catalogCopy } from '@/lib/catalog-copy';
+import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { useTimelineStore } from '@/stores/timeline-store';
-import { cn } from '@/lib/utils';
+import { OptionRow } from './option-row';
 
-/** Fallback effort options when a model doesn't declare its own. */
-const DEFAULT_EFFORTS: Array<{ reasoningEffort: ReasoningEffort }> = [
+/**
+ * Fallback effort options used only when no model resolves, so nothing
+ * advertises a list. Deliberately carries no descriptions: inventing copy for
+ * a model we cannot identify would be worse than showing none. Real models
+ * declare their own set — the gpt-5.6 family offers neither `none` nor
+ * `minimal` — so this must never win over `supportedReasoningEfforts`.
+ */
+const DEFAULT_EFFORTS: Array<{
+  reasoningEffort: ReasoningEffort;
+  description?: string;
+}> = [
   { reasoningEffort: 'none' },
   { reasoningEffort: 'minimal' },
   { reasoningEffort: 'low' },
@@ -43,30 +46,16 @@ function modelLabel(model: ModelDto): string {
 /** Displays model picker and reasoning effort selector. */
 export function ModelSelector() {
   const { t } = useTranslation();
-  const modelOverride = useModelStore((s) => s.modelOverride);
   const effortOverride = useModelStore((s) => s.effortOverride);
   const setModelOverride = useModelStore((s) => s.setModelOverride);
   const setEffortOverride = useModelStore((s) => s.setEffortOverride);
+  const setServiceTierOverride = useModelStore((s) => s.setServiceTierOverride);
   const selectedThreadId = useTimelineStore((s) => s.threadId);
   const observedEffort = useModelStore((s) =>
     selectedThreadId ? s.observedEffortByThread[selectedThreadId] : null,
   );
 
-  // Config model from status (lightweight, cached)
-  const { data: statusData } = useQuery({
-    ...codexStatusGetStatusOptions(),
-    refetchOnWindowFocus: true,
-  });
-  // Full model list from dedicated endpoint (longer staleTime)
-  const { data: modelsData } = useQuery({
-    ...modelsListModelsOptions(),
-    staleTime: 60_000,
-  });
-
-  const configModel = (statusData?.config.data as { model?: string } | undefined)?.model;
-  const models = modelsData?.data?.filter((m) => !m.hidden) ?? [];
-  const activeModelId = modelOverride ?? configModel ?? null;
-  const activeModel = models.find((m) => m.model === activeModelId);
+  const { models, activeModelId, activeModel, configModel } = useActiveModel();
   // An explicit user choice wins; otherwise show what app-server reports for
   // this thread, which is how Plan mode's imposed effort becomes visible.
   const activeEffort =
@@ -83,8 +72,11 @@ export function ModelSelector() {
     } else {
       setModelOverride(model.model);
     }
-    // Reset effort to model default when switching models
+    // Reset effort and speed tier to the new model's defaults. Both are
+    // advertised per model, so carrying a previous choice across could select
+    // an option the new model never offered.
     setEffortOverride(null);
+    setServiceTierOverride(undefined);
   };
 
   const handleEffortSelect = (effort: ReasoningEffort) => {
@@ -120,33 +112,23 @@ export function ModelSelector() {
       <PopoverContent
         align="start"
         side="top"
-        className="w-64 space-y-3 p-3 text-sm"
+        className="w-80 space-y-3 p-3 text-sm"
       >
         {/* Model list */}
         <div className="space-y-1">
           <div className="text-xs font-medium text-muted-foreground">
             {t('Model')}
           </div>
-          <div className="max-h-48 space-y-0.5 overflow-y-auto">
+          <div className="max-h-56 space-y-0.5 overflow-y-auto">
             {models.map((model) => (
-              <button
+              <OptionRow
                 key={model.id}
-                type="button"
-                onClick={() => handleModelSelect(model)}
-                className={cn(
-                  'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-                  model.model === activeModelId
-                    ? 'bg-accent text-accent-foreground'
-                    : 'hover:bg-accent/50',
-                )}
-              >
-                <span className="truncate">{modelLabel(model)}</span>
-                {model.isDefault && (
-                  <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
-                    {t('default')}
-                  </span>
-                )}
-              </button>
+                active={model.model === activeModelId}
+                badge={model.isDefault ? t('default') : undefined}
+                description={catalogCopy(model.description)}
+                label={modelLabel(model)}
+                onSelect={() => handleModelSelect(model)}
+              />
             ))}
             {models.length === 0 && (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
@@ -161,29 +143,27 @@ export function ModelSelector() {
           <div className="text-xs font-medium text-muted-foreground">
             {t('Reasoning effort')}
           </div>
-          {(activeModel && activeModel.supportedReasoningEfforts.length > 0
-            ? activeModel.supportedReasoningEfforts
-            : DEFAULT_EFFORTS
-          ).map((opt) => (
-            <button
-              key={opt.reasoningEffort}
-              type="button"
-              onClick={() => handleEffortSelect(opt.reasoningEffort)}
-              className={cn(
-                'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-                opt.reasoningEffort === activeEffort
-                  ? 'bg-accent text-accent-foreground'
-                  : 'hover:bg-accent/50',
-              )}
-            >
-              <span>{opt.reasoningEffort}</span>
-              {activeModel && opt.reasoningEffort === activeModel.defaultReasoningEffort && (
-                <span className="text-[10px] text-muted-foreground">
-                  {t('default')}
-                </span>
-              )}
-            </button>
-          ))}
+          <div className="max-h-56 space-y-0.5 overflow-y-auto">
+            {(activeModel && activeModel.supportedReasoningEfforts.length > 0
+              ? activeModel.supportedReasoningEfforts
+              : DEFAULT_EFFORTS
+            ).map((opt) => (
+              <OptionRow
+                key={opt.reasoningEffort}
+                active={opt.reasoningEffort === activeEffort}
+                badge={
+                  opt.reasoningEffort === activeModel?.defaultReasoningEffort
+                    ? t('default')
+                    : undefined
+                }
+                description={
+                  opt.description ? catalogCopy(opt.description) : undefined
+                }
+                label={opt.reasoningEffort}
+                onSelect={() => handleEffortSelect(opt.reasoningEffort)}
+              />
+            ))}
+          </div>
         </div>
       </PopoverContent>
     </Popover>

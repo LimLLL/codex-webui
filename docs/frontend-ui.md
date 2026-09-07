@@ -210,7 +210,18 @@ Vite `cssTarget: ['chrome100', 'safari16', 'firefox100']`：防止 CSS minifier 
 
 ## 模型选择器
 
-ChatInput 内 `ModelSelector` popover → 选模型 + 推理强度。Session-level overrides 存 `model-store`，传给 `turn/start`。
+ChatInput 内两个同级 popover，共用 `use-active-model` 解析「下一轮实际使用的模型」，避免两处各自推导后给出该模型并未声明的选项：
+
+- 左侧 `ModelSelector`：选模型 + 推理强度。
+- 右侧（token 用量环左边）`ServiceTierSelector`：选速度档位。模型未声明任何 tier 时整个控件不渲染 —— 常驻一个不可选的控件会让人以为速度可调。
+
+三者的 session-level overrides 都存 `model-store`，随 `turn/start` 发出。
+
+选项行统一用 `option-row.tsx`，带 `default` 角标和第二行说明。**说明文案来自 app-server 目录，且只有英文** —— `model/list` 没有 locale 参数，`initialize` 也没有语言能力位。文案统一过 `lib/catalog-copy.ts` 的 `catalogCopy()`：本项目 i18n 以英文自然语言串为 key，因此已收录的串会被翻译，未收录的原样落回英文，无需另建一套按 id 索引的字典。由于 key 就是英文原文，上游改文案时只会 miss 并回落到新英文，不会把旧译文错配到新内容。
+
+`catalogCopy()` 不能简化成裸 `t(value)`：**i18next 即使 key 缺失也会解析 `$t(...)` 嵌套**（实测 `"Has $t(Model) nesting"` 会被改写成 `"Has Model nesting"`），把任意上游散文喂给 `t()` 会静默篡改文案。因此它先 `i18n.exists()` 再取值。`catalog-copy.spec.ts` 锁住这个行为。
+
+推理强度与速度档位都是**逐模型 advertise** 的（`supportedReasoningEfforts` / `serviceTiers`），必须按目录顺序原样渲染，不要自行推导或排序；切换模型时两个 override 一并重置，否则可能选中新模型根本没有的档位。`DEFAULT_EFFORTS` 仅在识别不出当前模型时兜底，且刻意不带说明文案。
 
 ## 分支图
 

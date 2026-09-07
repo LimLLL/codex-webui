@@ -85,12 +85,14 @@
 | POST   | `/api/threads/:threadId/fork`                    | ThreadsController         | metadata-only 普通 fork；写 topology-only provenance edge（不创建消息版本组），再由 canonical opener 分页 hydration。Body 可选 `{ carryGoal?: boolean }`，默认 false；`ephemeral:true` 不支持 |
 | PATCH  | `/api/threads/:threadId/name`                    | ThreadsController         | 设置 thread 显示名                                                                                                   |
 | POST   | `/api/threads/:threadId/review`                  | ThreadCommandsController  | 启动 inline `review/start` turn。支持 uncommittedChanges/custom/baseBranch/commit target；不暴露 detached review      |
-| POST   | `/api/threads/:threadId/turns`                   | ThreadsController         | 发送消息。Body: `{ input: UserInput[] }`，支持 text/image/localImage/skill/mention                                   |
+| POST   | `/api/threads/:threadId/turns`                   | ThreadsController         | 发送消息。Body: `{ input: UserInput[], model?, effort?, serviceTier? }`，input 支持 text/image/localImage/skill/mention |
 | POST   | `/api/threads/:threadId/turns/:turnId/steer`     | ThreadsController         | 向进行中的 turn 发送 rich user input                                                                                 |
 | POST   | `/api/threads/:threadId/turns/:turnId/interrupt` | ThreadsController         | 中断进行中的 turn                                                                                                    |
 | GET    | `/api/threads/:threadId/token-usage`             | TokenUsageController      | 按分支 provenance 读取 token usage                                                                                   |
 | GET    | `/api/threads/:threadId/turn-diffs`              | TurnDiffController        | 按分支 provenance 读取持久化 turn diff                                                                               |
 | GET    | `/api/threads/:threadId/turn-errors`             | TurnErrorsController      | 按 provenance 读取持久化 turn 错误；除 message 外返回 nullable category/additionalDetails/misalignment type+explanation，页面刷新后恢复结构化失败提示。continuation steer 不入库也不出现在响应中 |
+
+`turns` 的 `serviceTier` 是**三态**，镜像 app-server 的 `Option<Option<String>>`：字段缺省 = 保持 thread 现有档位，显式 `null` = 清回标准速度，字符串 = 选该档位。把 `null` 折叠成缺省会让「切回标准速度」变得无法表达。校验只查形状（非空字符串或 null），tier id 是否有效由 app-server 判定 —— 客户端臆造白名单正是此前 `['fast','flex']` 与真实 id 对不上的成因。
 
 ### Chat
 
@@ -103,6 +105,11 @@
 | Method | Path          | Controller       | 说明                                 |
 | ------ | ------------- | ---------------- | ------------------------------------ |
 | GET    | `/api/models` | ModelsController | 列出可用模型。Query: `cursor, limit` |
+
+每个模型逐项 advertise `supportedReasoningEfforts` 与 `serviceTiers`（`{ id, name, description }`，按目录顺序），外加 `defaultServiceTier`。
+
+- **tier id 不做 enum**：app-server 把 `serviceTier` 定义为不透明 string，实际 id 随模型目录变化（gpt-5.6 系列是 `priority` / `ultrafast`）。任何客户端侧白名单都会过期，因此响应侧一律 nullable string，未知 id 由 app-server 拒绝。
+- 上游已弃用的 `additionalSpeedTiers` **不再镜像**：它只有裸 id，没有展示名和说明，而后者正是选择器需要的。
 
 ### Skills
 
@@ -170,7 +177,7 @@
 | POST /threads/:id/resume              | `thread/resume` with experimental metadata-first history      |
 | GET /threads/:id/turns                | experimental `thread/turns/list`                              |
 | POST /threads/turn-counts             | experimental `thread/turns/list` without resuming             |
-| POST /threads/:id/turns               | `turn/start`                                                  |
+| POST /threads/:id/turns               | `turn/start`（可选 `model` / `effort` / `serviceTier` 覆盖）      |
 | POST /threads/:id/turns/:id/interrupt | `turn/interrupt`                                              |
 | POST /threads/:id/review              | `review/start` with `delivery: "inline"`                      |
 | POST /threads/:id/archive             | `thread/archive`                                              |

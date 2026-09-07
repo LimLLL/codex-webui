@@ -2,7 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   NULLABLE_STRING_SCHEMA,
   REASONING_EFFORT_VALUES,
-  SERVICE_TIER_VALUES,
   nullableStringEnumSchema,
 } from './openapi.schema';
 import { approvalPolicySchema, approvalsReviewerSchema } from './approval.dto';
@@ -22,8 +21,9 @@ export class ThreadStartResponseDto {
   @ApiProperty()
   modelProvider!: string;
 
-  @ApiProperty(nullableStringEnumSchema(SERVICE_TIER_VALUES))
-  serviceTier!: (typeof SERVICE_TIER_VALUES)[number] | null;
+  /** Resolved service tier id, or null when the thread inherits the default. */
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  serviceTier!: string | null;
 
   @ApiProperty()
   cwd!: string;

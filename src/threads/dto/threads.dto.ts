@@ -126,6 +126,26 @@ export class StartTurnDto {
   // which is an opaque `string`: this is client-supplied input, so it should not
   // compile any wider than the enum the endpoint actually advertises.
   effort?: (typeof REASONING_EFFORT_VALUES)[number];
+
+  /**
+   * Override the service tier for this turn and subsequent turns.
+   *
+   * Free-form on purpose: tier ids are model-advertised (`Model.serviceTiers`)
+   * and opaque to the app-server, so any allow-list here would go stale the
+   * moment the catalog changes. Unknown ids are rejected upstream.
+   *
+   * Three-state, mirroring the app-server's `Option<Option<String>>`: omitted
+   * leaves the thread's tier untouched, an explicit `null` clears it back to
+   * standard speed, and a string selects that tier. Collapsing null into
+   * omitted would make "switch back to standard" unexpressible.
+   */
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description:
+      'Override the service tier for this turn and subsequent turns. Null clears it back to standard speed.',
+  })
+  serviceTier?: string | null;
 }
 
 /** Request body for steering the current active turn. */
@@ -358,8 +378,8 @@ export class ThreadOpenResponseDto {
   @ApiPropertyOptional({ nullable: true, type: String })
   modelProvider!: string | null;
 
-  @ApiProperty(nullableStringEnumSchema(['fast', 'flex']))
-  serviceTier!: 'fast' | 'flex' | null;
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  serviceTier!: string | null;
 
   @ApiPropertyOptional({ type: () => [String] })
   instructionSources!: string[];

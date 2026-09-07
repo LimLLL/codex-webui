@@ -113,6 +113,27 @@ describe('Codex v2 OpenAPI contract', () => {
     ).toEqual(expect.arrayContaining(['title', 'options']));
   });
 
+  it('advertises model-declared service tiers instead of a guessed enum', () => {
+    const modelProps = schema('ModelDto').properties ?? {};
+    expect(Object.keys(modelProps)).toEqual(
+      expect.arrayContaining(['serviceTiers', 'defaultServiceTier']),
+    );
+    // The deprecated bare-id list must not come back: it carries no display
+    // name or description, which is the whole reason the picker needs tiers.
+    expect(Object.keys(modelProps)).not.toContain('additionalSpeedTiers');
+    expect(refName(modelProps.serviceTiers.items!)).toBe('ModelServiceTierDto');
+    expect(Object.keys(schema('ModelServiceTierDto').properties ?? {})).toEqual(
+      expect.arrayContaining(['id', 'name', 'description']),
+    );
+
+    // Tier ids are opaque upstream and vary per model, so no consumer-facing
+    // schema may pin them to an enum — that mismatch is what this replaces.
+    const resolvedTier = schema('ThreadStartResponseDto').properties
+      ?.serviceTier;
+    expect(resolvedTier?.type).toBe('string');
+    expect(resolvedTier?.enum).toBeUndefined();
+  });
+
   it.each([
     ['HookPromptThreadItemDto', ['type', 'id', 'fragments']],
     [

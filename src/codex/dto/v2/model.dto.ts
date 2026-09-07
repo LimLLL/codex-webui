@@ -26,6 +26,19 @@ export class ModelUpgradeInfoDto {
   migrationMarkdown!: string | null;
 }
 
+/** One speed/service tier a model advertises, in catalog order. */
+export class ModelServiceTierDto {
+  /** Opaque tier id sent back as `serviceTier` (e.g. `priority`, `ultrafast`). */
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty()
+  description!: string;
+}
+
 /** Reasoning effort option advertised by a model. */
 export class ReasoningEffortOptionDto {
   @ApiProperty({ enum: REASONING_EFFORT_VALUES })
@@ -73,8 +86,17 @@ export class ModelDto {
   @ApiProperty()
   supportsPersonality!: boolean;
 
-  @ApiProperty({ type: [String] })
-  additionalSpeedTiers!: string[];
+  /**
+   * Advertised speed tiers in catalog order. Replaces the app-server's
+   * deprecated `additionalSpeedTiers`, which was a bare id list carrying no
+   * display name or description and is not mirrored here.
+   */
+  @ApiProperty({ type: () => [ModelServiceTierDto] })
+  serviceTiers!: ModelServiceTierDto[];
+
+  /** Catalog default tier id, or null when the model configures none. */
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  defaultServiceTier!: string | null;
 
   @ApiProperty()
   isDefault!: boolean;

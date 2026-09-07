@@ -30,6 +30,7 @@ import { GoalProgressRow } from './goal-progress-row';
 import { PlanModeBadge } from './plan-mode-badge';
 import { SecurityPolicyBadge } from './security-policy-badge';
 import { ModelSelector } from './model-selector';
+import { ServiceTierSelector } from './service-tier-selector';
 import { TokenUsageRing } from './token-usage-ring';
 import { McpStatusBadge } from './mcp-status-badge';
 import { SkillSelector } from './skill-selector';
@@ -197,13 +198,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       .map((a) => a.path);
     addUserMessage(valueRef.current.trim(), imageAttachments.length > 0 ? imageAttachments : undefined);
     clearAfterSend();
-    const { modelOverride, effortOverride } = useModelStore.getState();
+    const { modelOverride, effortOverride, serviceTierOverride } =
+      useModelStore.getState();
     startTurn.mutate({
       path: { threadId },
       body: {
         input: input as never,
         ...(modelOverride && { model: modelOverride }),
         ...(effortOverride && { effort: effortOverride }),
+        // Explicit null is meaningful here (clears the tier), so this checks
+        // for `undefined` rather than falsiness like the two overrides above.
+        ...(serviceTierOverride !== undefined && {
+          serviceTier: serviceTierOverride,
+        }),
       },
     });
   }, [buildInput, threadId, loading, readOnly, attachmentsRef, addUserMessage, clearAfterSend, startTurn]);
@@ -392,6 +399,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             </div>
 
             <div className="flex items-center gap-2">
+              <ServiceTierSelector />
               <TokenUsageRing />
               {hasActiveTurn ? (
                 <>

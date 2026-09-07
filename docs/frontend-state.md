@@ -125,6 +125,26 @@ Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，
 
 文件操作 mutations 集中在 `hooks/use-file-operations.ts`（详见 [files-service.md](files-service.md)）。
 
+## model-store
+
+文件: `web/src/stores/model-store.ts`
+
+Session 级的模型 / 推理强度 / 速度档位 override，随每次 `turn/start` 发出。
+
+| 字段 | 语义 |
+|------|------|
+| `modelOverride` | `string \| null`，null = 用服务端默认 |
+| `effortOverride` | `ReasoningEffort \| null`，null = 用模型默认。**仅用户操作可写** —— 把观测值回写这里会把该强度强加到下一个发送的 thread 上 |
+| `observedEffortByThread` | 按 thread 记录 app-server 报告的强度，**仅供展示**。Plan mode 会在服务端改写 thread 强度，badge 要能显示但不能把它变成 override |
+| `observedServiceTierByThread` | 同上，按 thread 记录 app-server 报告的速度档位，仅供展示 |
+| `serviceTierOverride` | `string \| null \| undefined` —— **三态** |
+
+`serviceTierOverride` 与上面两个不同，必须是三态：`undefined` = 用户没碰过选择器，字段缺省，thread 保持原档位；`null` = 用户显式选了标准速度，必须发出去才能清掉已有档位；字符串 = 模型 advertise 的 tier id。折叠掉 `null` 会让「切回标准」无法表达；反过来永远发送则会把没开过选择器的用户的配置档位强行清空。
+
+推理强度与速度档位都是逐模型 advertise 的，切换模型时两者一并重置（`setServiceTierOverride(undefined)`），否则可能残留新模型没有的档位。
+
+两张观测表由两条路径写入：`thread/settings/updated` 通知，以及 `applyOpenResponse` 中的开线程水合。**光靠通知不够** —— 它只在设置发生变化时才发，所以重新打开或刷新后的线程会退回目录默认值：速度选择器会对一个实际跑在付费档的线程显示「标准」，而 composer 因为 override 是 `undefined` 又不发 `serviceTier`，该档位继续生效。用户会以为自己在标准速度和标准计费上。`forgetObservedThreadEffort` 同时清两张表，且早退条件必须同时检查两者 —— 只看 effort 会漏掉只有 tier 记录的线程。
+
 ## connection-store
 
 文件: `web/src/stores/connection-store.ts`

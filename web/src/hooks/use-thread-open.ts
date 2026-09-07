@@ -25,6 +25,7 @@ import type {
   ThreadReadResponseDto,
   ThreadTurnsPageDto,
 } from '@/generated/api/types.gen';
+import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 
@@ -121,6 +122,18 @@ export function applyOpenResponse(response: ThreadOpenResponseDto): void {
     cwd: response.cwd,
   });
   store.setThreadStatusForThread(threadId, response.thread.status);
+
+  // Seed the composer's display-only view of this thread's resolved settings.
+  // `thread/settings/updated` only fires when settings change, so without this
+  // a reopened thread would fall back to catalog defaults — the speed picker
+  // would claim "Standard" for a thread already running on a paid tier while
+  // the composer omits `serviceTier`, leaving that tier in force.
+  const modelStore = useModelStore.getState();
+  modelStore.setObservedThreadEffort(
+    threadId,
+    (response.reasoningEffort ?? null) as ReasoningEffort | null,
+  );
+  modelStore.setObservedThreadServiceTier(threadId, response.serviceTier);
 
   // `thread.turns` is empty by construction now, so an in-progress turn has to
   // be recognised from the page that was returned instead.

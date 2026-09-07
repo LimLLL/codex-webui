@@ -1080,6 +1080,12 @@ export type ReasoningEffortOptionDto = {
     description: string;
 };
 
+export type ModelServiceTierDto = {
+    id: string;
+    name: string;
+    description: string;
+};
+
 export type ModelDto = {
     id: string;
     model: string;
@@ -1093,7 +1099,8 @@ export type ModelDto = {
     defaultReasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     inputModalities: Array<'text' | 'image'>;
     supportsPersonality: boolean;
-    additionalSpeedTiers: Array<string>;
+    serviceTiers: Array<ModelServiceTierDto>;
+    defaultServiceTier: string | null;
     isDefault: boolean;
 };
 
@@ -1101,7 +1108,7 @@ export type ThreadStartResponseDto = {
     thread: ThreadDto;
     model: string;
     modelProvider: string;
-    serviceTier: 'fast' | 'flex' | null;
+    serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
@@ -1113,7 +1120,7 @@ export type ThreadResumeResponseDto = {
     thread: ThreadDto;
     model: string;
     modelProvider: string;
-    serviceTier: 'fast' | 'flex' | null;
+    serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
@@ -1125,7 +1132,7 @@ export type ThreadForkResponseDto = {
     thread: ThreadDto;
     model: string;
     modelProvider: string;
-    serviceTier: 'fast' | 'flex' | null;
+    serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
     approvalsReviewer: 'user' | 'guardian_subagent';
@@ -1267,7 +1274,7 @@ export type ThreadOpenResponseDto = {
     cwd: string;
     model?: string | null;
     modelProvider?: string | null;
-    serviceTier: 'fast' | 'flex' | null;
+    serviceTier: string | null;
     instructionSources?: Array<string>;
     approvalPolicy?: {
         [key: string]: unknown;
@@ -1313,6 +1320,10 @@ export type StartTurnDto = {
      * Override reasoning effort for this turn and subsequent turns.
      */
     effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+    /**
+     * Override the service tier for this turn and subsequent turns. Null clears it back to standard speed.
+     */
+    serviceTier?: string | null;
 };
 
 export type SteerTurnDto = {

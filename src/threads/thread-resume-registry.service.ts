@@ -213,7 +213,7 @@ export class ThreadResumeRegistryService {
       cwd: String(response.cwd),
       model: response.model ?? null,
       modelProvider: response.modelProvider ?? null,
-      serviceTier: (response.serviceTier ?? null) as 'fast' | 'flex' | null,
+      serviceTier: response.serviceTier ?? null,
       instructionSources: (response.instructionSources ?? []).map(String),
       approvalPolicy: response.approvalPolicy ?? null,
       approvalsReviewer: response.approvalsReviewer ?? null,

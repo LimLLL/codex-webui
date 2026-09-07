@@ -17,7 +17,13 @@ export const REASONING_EFFORT_VALUES = [
   'ultra',
 ] as const;
 
-export const SERVICE_TIER_VALUES = ['fast', 'flex'] as const;
+/**
+ * Service tier ids are deliberately NOT enumerated here. The app-server types
+ * them as an opaque string and each model advertises its own set through
+ * `Model.serviceTiers` (`priority` / `ultrafast` on the gpt-5.6 family, not the
+ * `fast` / `flex` this once guessed). Clients must render the advertised list
+ * rather than a hardcoded one, exactly as with `supportedReasoningEfforts`.
+ */
 export const INPUT_MODALITY_VALUES = ['text', 'image'] as const;
 export const MESSAGE_PHASE_VALUES = ['commentary', 'final_answer'] as const;
 /**

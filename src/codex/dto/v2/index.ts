@@ -18,6 +18,7 @@ import {
 import {
   ModelAvailabilityNuxDto,
   ModelDto,
+  ModelServiceTierDto,
   ModelUpgradeInfoDto,
   ReasoningEffortOptionDto,
 } from './model.dto';
@@ -89,6 +90,7 @@ export const CODEX_V2_EXTRA_MODELS = [
   ModelAvailabilityNuxDto,
   ModelUpgradeInfoDto,
   ReasoningEffortOptionDto,
+  ModelServiceTierDto,
   ModelDto,
   ThreadStartResponseDto,
   ThreadResumeResponseDto,

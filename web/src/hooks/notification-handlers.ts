@@ -301,15 +301,18 @@ const handleThreadSettingsUpdated: Handler = (params, ctx) => {
   // only — writing it into `effortOverride` would make it ride along on the
   // next `turn/start` and force this effort onto a different thread.
   const settings = params.threadSettings as
-    | { effort?: string | null }
+    | { effort?: string | null; serviceTier?: string | null }
     | undefined;
   if (!settings) return;
-  useModelStore
-    .getState()
-    .setObservedThreadEffort(
-      threadId,
-      (settings.effort ?? null) as ReasoningEffort | null,
-    );
+  const store = useModelStore.getState();
+  store.setObservedThreadEffort(
+    threadId,
+    (settings.effort ?? null) as ReasoningEffort | null,
+  );
+  // Same display-only contract as the effort above. Without it the speed picker
+  // falls back to the model's catalog default and can claim "Standard" for a
+  // thread that is actually running on a paid tier.
+  store.setObservedThreadServiceTier(threadId, settings.serviceTier ?? null);
 };
 
 /** Keeps the goal row live when a goal changes outside this tab. */

@@ -375,11 +375,30 @@ export class ThreadsController {
         'Invalid reasoning effort',
       );
     }
+    // Tier ids are model-advertised and opaque upstream, so the only check
+    // possible here is shape. An unknown id is the app-server's to reject.
+    // Null must survive as null: it is how the caller clears the tier, which
+    // is distinct from omitting the field to leave it untouched.
+    let serviceTier: string | null | undefined;
+    if (body.serviceTier === null) {
+      serviceTier = null;
+    } else if (body.serviceTier !== undefined) {
+      const trimmed =
+        typeof body.serviceTier === 'string' ? body.serviceTier.trim() : '';
+      if (!trimmed) {
+        throw BusinessException.badRequest(
+          ErrorCode.threads.invalidServiceTier,
+          'serviceTier must be a non-empty string or null',
+        );
+      }
+      serviceTier = trimmed;
+    }
     return this.threadsService.startTurn({
       threadId,
       input,
       ...(model && { model }),
       ...(effort && { effort }),
+      ...(serviceTier !== undefined && { serviceTier }),
     });
   }
 

@@ -129,6 +129,55 @@ describe('ThreadsController rich input validation', () => {
     });
   });
 
+  // `serviceTier` mirrors the app-server's `Option<Option<String>>`: absent,
+  // explicit null and a value are three distinct instructions. Collapsing null
+  // into absent — the obvious "simplification" — silently removes the only way
+  // to switch a thread back to standard speed.
+  describe('service tier three-state forwarding', () => {
+    it('omits serviceTier when the caller did not supply one', async () => {
+      await controller.startTurn('thread1', {
+        input: [{ type: 'text', text: 'hi' }],
+      } as never);
+
+      const params = threadsService.startTurn.mock.calls[0]?.[0] as Record<
+        string,
+        unknown
+      >;
+      expect(params).not.toHaveProperty('serviceTier');
+    });
+
+    it('forwards an explicit null so the thread tier is cleared', async () => {
+      await controller.startTurn('thread1', {
+        input: [{ type: 'text', text: 'hi' }],
+        serviceTier: null,
+      } as never);
+
+      expect(threadsService.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ serviceTier: null }),
+      );
+    });
+
+    it('forwards a model-advertised tier id verbatim', async () => {
+      await controller.startTurn('thread1', {
+        input: [{ type: 'text', text: 'hi' }],
+        serviceTier: '  priority  ',
+      } as never);
+
+      expect(threadsService.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ serviceTier: 'priority' }),
+      );
+    });
+
+    it('rejects a blank tier rather than silently treating it as absent', async () => {
+      await expect(
+        controller.startTurn('thread1', {
+          input: [{ type: 'text', text: 'hi' }],
+          serviceTier: '   ',
+        } as never),
+      ).rejects.toBeInstanceOf(BusinessException);
+    });
+  });
+
   it('rejects malformed image URLs', async () => {
     await expect(
       controller.startTurn('thread1', {

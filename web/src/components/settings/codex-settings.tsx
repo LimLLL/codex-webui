@@ -21,6 +21,7 @@ import {
   codexConfigUpdateConfigMutation,
   codexConfigUpdateRawConfigMutation,
   codexStatusGetStatusOptions,
+  modelsListModelsOptions,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { ConfigEditDto } from '@/generated/api/types.gen';
 import { showSnackbar } from '@/stores/snackbar-store';
@@ -115,7 +116,19 @@ const FIELD_DEFS: FieldDef[] = [
     label: 'Reasoning Effort',
     group: 'Reasoning',
     control: 'select',
-    options: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    // Kept in sync with the backend's REASONING_EFFORT_VALUES. Unlike service
+    // tiers this really is a fixed enum, but it still has to be updated on a
+    // CLI bump — 0.153.2 added `max` and `ultra`.
+    options: [
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ],
   },
   {
     key: 'model_reasoning_summary',
@@ -145,7 +158,8 @@ const FIELD_DEFS: FieldDef[] = [
     label: 'Service Tier',
     group: 'Advanced',
     control: 'select',
-    options: ['fast', 'flex'],
+    // Options are supplied at render time from the model catalog; see
+    // `serviceTierOptions`. No static list can be correct here.
   },
 ];
 
@@ -297,6 +311,30 @@ export function CodexSettings() {
     return options;
   }, [config]);
 
+  // ---- Service tier options (dynamic from the model catalog) ----
+  // Tier ids are advertised per model and opaque to the app-server, so this
+  // cannot be a static list. It previously hardcoded `fast` / `flex`, which the
+  // real catalog does not use — the gpt-5.6 family returns `priority` and
+  // `ultrafast` — so the control could only ever write invalid values. The
+  // config key is global, hence the union across models rather than one model's
+  // set. Any tier already written to config is kept so an existing value is
+  // never silently dropped from the list.
+  const { data: modelsData } = useQuery({
+    ...modelsListModelsOptions(),
+    staleTime: 60_000,
+  });
+  const serviceTierOptions = useMemo(() => {
+    const options: string[] = [];
+    for (const model of modelsData?.data ?? []) {
+      for (const tier of model.serviceTiers) {
+        if (!options.includes(tier.id)) options.push(tier.id);
+      }
+    }
+    const current = configValueToString(config?.['service_tier']);
+    if (current && !options.includes(current)) options.push(current);
+    return options;
+  }, [modelsData, config]);
+
   // ---- Group fields ----
   const groupedFields = useMemo(() => {
     const map = new Map<string, FieldDef[]>();
@@ -401,6 +439,9 @@ export function CodexSettings() {
                 origin={originLabel(origins, def.key)}
                 saving={updateMutation.isPending}
                 profileOptions={def.key === 'profile' ? profileOptions : undefined}
+                serviceTierOptions={
+                  def.key === 'service_tier' ? serviceTierOptions : undefined
+                }
                 onDraftChange={handleDraftChange}
                 onSave={handleSaveField}
               />
@@ -521,6 +562,7 @@ interface FieldEditorProps {
   origin: string | null;
   saving: boolean;
   profileOptions?: string[];
+  serviceTierOptions?: string[];
   onDraftChange: (key: string, value: string) => void;
   onSave: (key: ConfigEditDto['keyPath']) => void;
 }
@@ -532,13 +574,21 @@ function ConfigFieldEditor({
   origin,
   saving,
   profileOptions,
+  serviceTierOptions,
   onDraftChange,
   onSave,
 }: FieldEditorProps) {
   const { t, i18n } = useTranslation();
   const isNonEnglish = !i18n.language.startsWith('en');
 
-  const options = def.key === 'profile' ? (profileOptions ?? []) : (def.options ?? []);
+  // `profile` and `service_tier` are both runtime-discovered rather than
+  // statically enumerable, so they arrive as props instead of on the field def.
+  const options =
+    def.key === 'profile'
+      ? (profileOptions ?? [])
+      : def.key === 'service_tier'
+        ? (serviceTierOptions ?? [])
+        : (def.options ?? []);
 
   return (
     <div className="space-y-2 rounded-lg border border-border bg-card/50 px-4 py-3">

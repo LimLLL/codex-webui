@@ -101,6 +101,7 @@ export const ErrorCode = {
     invalidSortKey: 'threads.invalid_sort_key',
     invalidModel: 'threads.invalid_model',
     invalidEffort: 'threads.invalid_effort',
+    invalidServiceTier: 'threads.invalid_service_tier',
     invalidName: 'threads.invalid_name',
     invalidInput: 'threads.invalid_input',
     /** Params: { index } */

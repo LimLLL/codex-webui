@@ -310,6 +310,9 @@
 - [ ] `project/list` 的 `sortKey` / `sortDirection` 与 `Project.recencyAt`（0.152.1 新增）：按最近活跃排序项目列表的前提已具备，当前仍只用手动 position 序。
 - [x] `request_user_input_async`（0.153.0 新增）：`agentMessage.questions` 已进入后端 OpenAPI、前端统一 normalizer 与消息展示；建议答案作为只读提示展示，自由文本仍通过普通新消息回复，不与会阻塞 turn 的 `item/tool/requestUserInput` 混用。
 - [x] 新模型推理强度：0.153.2 的真实 `model/list` 已返回 `max` / `ultra`，后端 OpenAPI 与前端选择器已同步放宽并完成冒烟验证。
+- [x] 速度档位（service tier）：`ModelDto` 改为镜像 `serviceTiers` + `defaultServiceTier`（弃用的 `additionalSpeedTiers` 不再镜像），响应侧 `serviceTier` 从臆造的 `['fast','flex']` enum 改为 nullable string，`turn/start` 支持三态 `serviceTier` 覆盖，前端新增与模型选择器同级的 `ServiceTierSelector`。
+- [x] 选择器展示目录说明文案：模型 / 推理强度 / 速度档位三处 description 统一过 `catalogCopy()`，复用英文自然语言 key 机制，未收录的串原样回落英文。`model/list` 无 locale 参数，`initialize` 也无语言能力位，上游不提供本地化。
+- [x] 设置页 `service_tier` 下拉改为从模型目录动态取 tier id（原先写死 `fast` / `flex`，真实目录是 `priority` / `ultrafast`，该控件此前只能写出无效值）；`model_reasoning_effort` 下拉补齐 0.153.2 新增的 `max` / `ultra`。
 - [ ] `plugin/reconcile` 及其 `changedPlugins` 刷新提示（0.153.0 新增）：当前安装、卸载与列表流程不依赖 reconcile；待出现插件落盘状态漂移的真实用例后再接入，避免引入无意义轮询。
 - [ ] `AppsConfig.links`（0.153.0 新增）：当前 Apps 页面只消费 app 列表与启用状态，尚未展示外部链接配置。
 
