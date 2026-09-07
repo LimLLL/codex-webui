@@ -67,6 +67,15 @@ export class HookPromptThreadItemDto {
   fragments!: HookPromptFragmentDto[];
 }
 
+/** One non-blocking question embedded in an asynchronous assistant message. */
+export class AsyncUserInputQuestionDto {
+  @ApiProperty()
+  title!: string;
+
+  @ApiProperty({ nullable: true, type: [String] })
+  options!: string[] | null;
+}
+
 /** v2 ThreadItem branch for assistant messages. */
 export class AgentMessageThreadItemDto {
   @ApiProperty({ enum: ['agentMessage'] })
@@ -86,6 +95,9 @@ export class AgentMessageThreadItemDto {
     oneOf: [{ $ref: getSchemaPath(MemoryCitationDto) }],
   })
   memoryCitation!: MemoryCitationDto | null;
+
+  @ApiProperty({ nullable: true, type: () => [AsyncUserInputQuestionDto] })
+  questions!: AsyncUserInputQuestionDto[] | null;
 }
 
 /** v2 ThreadItem branch for standalone function-call outputs. */

@@ -16,11 +16,12 @@ import {
   modelsListModelsOptions,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { ModelDto } from '@/generated/api';
-import { useModelStore } from '@/stores/model-store';
+import {
+  useModelStore,
+  type ReasoningEffort,
+} from '@/stores/model-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { cn } from '@/lib/utils';
-
-type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Fallback effort options when a model doesn't declare its own. */
 const DEFAULT_EFFORTS: Array<{ reasoningEffort: ReasoningEffort }> = [
@@ -30,6 +31,8 @@ const DEFAULT_EFFORTS: Array<{ reasoningEffort: ReasoningEffort }> = [
   { reasoningEffort: 'medium' },
   { reasoningEffort: 'high' },
   { reasoningEffort: 'xhigh' },
+  { reasoningEffort: 'max' },
+  { reasoningEffort: 'ultra' },
 ];
 
 /** Short display label for a model. */

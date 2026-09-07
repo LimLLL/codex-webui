@@ -204,6 +204,11 @@ export class ThreadResumeRegistryService {
       mode: 'writable',
       ownership: 'acquired',
       ownershipRefusalMessage: null,
+      // `thread.model` / `thread.reasoningEffort` are the app-server's own view of
+      // the thread's settings; the sibling top-level fields below are this client's
+      // resolved-settings contract. Keep them separate — overwriting the thread's
+      // values with the cached resolved ones silently discards the fresher metadata
+      // `readAsOpen` just fetched.
       thread: { ...response.thread, turns: [] },
       cwd: String(response.cwd),
       model: response.model ?? null,
