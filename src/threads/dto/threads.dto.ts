@@ -122,7 +122,10 @@ export class StartTurnDto {
     description:
       'Override reasoning effort for this turn and subsequent turns.',
   })
-  effort?: ReasoningEffort;
+  // Derived from the OpenAPI enum rather than the schema's `ReasoningEffort`,
+  // which is an opaque `string`: this is client-supplied input, so it should not
+  // compile any wider than the enum the endpoint actually advertises.
+  effort?: (typeof REASONING_EFFORT_VALUES)[number];
 }
 
 /** Request body for steering the current active turn. */

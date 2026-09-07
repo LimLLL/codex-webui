@@ -310,7 +310,7 @@
 - [ ] `project/list` 的 `sortKey` / `sortDirection` 与 `Project.recencyAt`（0.152.1 新增）：按最近活跃排序项目列表的前提已具备，当前仍只用手动 position 序。
 - [x] `request_user_input_async`（0.153.0 新增）：`agentMessage.questions` 已进入后端 OpenAPI、前端统一 normalizer 与消息展示；建议答案作为只读提示展示，自由文本仍通过普通新消息回复，不与会阻塞 turn 的 `item/tool/requestUserInput` 混用。
 - [x] 新模型推理强度：0.153.2 的真实 `model/list` 已返回 `max` / `ultra`，后端 OpenAPI 与前端选择器已同步放宽并完成冒烟验证。
-- [ ] `plugin/reconcile` 与 `plugin/reconcile` 相关变更通知（0.153.0 新增）：当前安装、卸载与列表流程不依赖 reconcile；待出现插件落盘状态漂移的真实用例后再接入，避免引入无意义轮询。
+- [ ] `plugin/reconcile` 及其 `changedPlugins` 刷新提示（0.153.0 新增）：当前安装、卸载与列表流程不依赖 reconcile；待出现插件落盘状态漂移的真实用例后再接入，避免引入无意义轮询。
 - [ ] `AppsConfig.links`（0.153.0 新增）：当前 Apps 页面只消费 app 列表与启用状态，尚未展示外部链接配置。
 
 ### 数据、检索与审计

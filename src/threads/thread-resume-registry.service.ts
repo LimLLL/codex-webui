@@ -160,12 +160,7 @@ export class ThreadResumeRegistryService {
     ]);
     return this.toWritableOpen({
       ...cached,
-      thread: {
-        ...metadata.thread,
-        model: metadata.thread.model,
-        reasoningEffort: metadata.thread.reasoningEffort,
-        turns: [],
-      },
+      thread: { ...metadata.thread, turns: [] },
       cwd: metadata.thread.cwd,
       initialTurnsPage,
       turnsBackwardsCursor: initialTurnsPage.backwardsCursor,
@@ -209,12 +204,12 @@ export class ThreadResumeRegistryService {
       mode: 'writable',
       ownership: 'acquired',
       ownershipRefusalMessage: null,
-      thread: {
-        ...response.thread,
-        model: response.model ?? null,
-        reasoningEffort: response.reasoningEffort ?? null,
-        turns: [],
-      },
+      // `thread.model` / `thread.reasoningEffort` are the app-server's own view of
+      // the thread's settings; the sibling top-level fields below are this client's
+      // resolved-settings contract. Keep them separate — overwriting the thread's
+      // values with the cached resolved ones silently discards the fresher metadata
+      // `readAsOpen` just fetched.
+      thread: { ...response.thread, turns: [] },
       cwd: String(response.cwd),
       model: response.model ?? null,
       modelProvider: response.modelProvider ?? null,
