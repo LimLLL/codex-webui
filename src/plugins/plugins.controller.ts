@@ -19,6 +19,8 @@ import {
   PluginInstallResponseDto,
   PluginListResponseDto,
   PluginReadResponseDto,
+  PluginReconcileRequestDto,
+  PluginReconcileResponseDto,
   PluginUninstallRequestDto,
   PluginUninstallResponseDto,
 } from './dto/plugins.dto';
@@ -65,6 +67,20 @@ export class PluginsController {
       ),
       pluginName: this.requireTrimmedString(pluginName, 'pluginName'),
     });
+  }
+
+  /** Reconciles installed remote plugin bundles to the latest plugin-service state. */
+  @Post('reconcile')
+  @ApiOperation({ summary: 'Reconcile installed Codex plugins' })
+  @ApiBody({ type: PluginReconcileRequestDto, required: false })
+  @ApiOkResponse({ type: PluginReconcileResponseDto })
+  reconcilePlugin(
+    @Body() body: PluginReconcileRequestDto | undefined,
+  ): Promise<v2.PluginReconcileResponse> {
+    const reason = this.parseOptionalString(body?.reason, 'reason');
+    return this.pluginsService.reconcilePlugin(
+      reason === undefined ? {} : { reason },
+    );
   }
 
   /** Installs a plugin from a marketplace. */
@@ -146,6 +162,23 @@ export class PluginsController {
     if (value === undefined) return undefined;
     const values = Array.isArray(value) ? value : value.split(',');
     const trimmed = values.map((item) => item.trim()).filter(Boolean);
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private parseOptionalString(
+    value: unknown,
+    field: string,
+  ): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== 'string') {
+      throw BusinessException.badRequest(
+        ErrorCode.validation.typeMismatch,
+        `${field} must be a string or null`,
+        { field, type: 'string' },
+      );
+    }
+    const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
   }
 }

@@ -35,7 +35,11 @@ export const MESSAGE_PHASE_VALUES = ['commentary', 'final_answer'] as const;
  * is represented separately as an object payload.
  */
 export const APPROVAL_POLICY_VALUES = ['on-request', 'never'] as const;
-export const APPROVALS_REVIEWER_VALUES = ['user', 'guardian_subagent'] as const;
+export const APPROVALS_REVIEWER_VALUES = [
+  'user',
+  'auto_review',
+  'guardian_subagent',
+] as const;
 export const NETWORK_ACCESS_VALUES = ['restricted', 'enabled'] as const;
 export const THREAD_ACTIVE_FLAG_VALUES = [
   'waitingOnApproval',

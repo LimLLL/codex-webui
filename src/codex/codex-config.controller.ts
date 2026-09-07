@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { toJsonSafe, type JsonSafeValue } from '../common/json-safe';
 import { ApiErrorResponseDto } from '../common/dto/api-responses.dto';
+import { CodexRpcError } from './codex-errors';
 import { CodexStatusService } from './codex-status.service';
 import { CodexService } from './codex.service';
 import type { v2 } from './codex-schema';
@@ -78,10 +79,15 @@ export class CodexConfigController {
     this.logger.log(
       `Updating ${edits.length} config field(s): ${edits.map((e) => e.keyPath).join(', ')}`,
     );
-    await this.codex.request('config/batchWrite', {
-      edits,
-      reloadUserConfig: true,
-    } satisfies v2.ConfigBatchWriteParams);
+    try {
+      await this.codex.request('config/batchWrite', {
+        edits,
+        reloadUserConfig: true,
+      } satisfies v2.ConfigBatchWriteParams);
+    } catch (error) {
+      this.translateConfigWriteError(error, edits);
+      throw error;
+    }
     this.codexStatusService.invalidateCache();
 
     return this.readConfig();
@@ -173,15 +179,6 @@ export class CodexConfigController {
         );
       }
 
-      // V1: null/clear semantics for config/batchWrite are unverified
-      if (edit.value === null) {
-        throw BusinessException.badRequest(
-          ErrorCode.codex.valueInvalid,
-          'Clearing config values is not supported',
-          { key: keyPath },
-        );
-      }
-
       if (!isJsonValue(edit.value)) {
         throw BusinessException.badRequest(
           ErrorCode.codex.valueInvalidJson,
@@ -196,6 +193,40 @@ export class CodexConfigController {
         mergeStrategy: 'replace',
       } satisfies v2.ConfigEdit;
     });
+  }
+
+  /**
+   * Rewrites known app-server config validation refusals into field-level API errors.
+   *
+   * The app-server already validates enum/value content and returns a structured
+   * discriminator. We translate the single-edit case into a field-scoped
+   * BusinessException so the UI can anchor the refusal to the edited control.
+   */
+  private translateConfigWriteError(
+    error: unknown,
+    edits: v2.ConfigEdit[],
+  ): void {
+    if (!this.isConfigValidationError(error) || edits.length !== 1) {
+      return;
+    }
+
+    const [edit] = edits;
+    throw BusinessException.badRequest(
+      ErrorCode.codex.valueInvalid,
+      error.rpcMessage,
+      { key: edit.keyPath },
+    );
+  }
+
+  /** Checks whether an RPC error is the app-server's structured config validation refusal. */
+  private isConfigValidationError(error: unknown): error is CodexRpcError {
+    if (!(error instanceof CodexRpcError)) return false;
+    const data = error.data;
+    if (!data || typeof data !== 'object') return false;
+    return (
+      (data as Record<string, unknown>).config_write_error_code ===
+      'configValidationError'
+    );
   }
 
   /**

@@ -290,13 +290,13 @@
 - [x] `mcpServerStatus/list`、MCP server startup 状态、MCP tool call progress 可视化、`config/mcpServer/reload`。ChatInput + Header badge + Popover。
 - [x] `skills/list`：GET /api/skills 透传 + SkillSelector popover + skill input item。
 - [x] `skills/config/write`：POST /api/skills/config + SkillSelector manage mode（inline Switch toggle）。`skills/changed` invalidation 修复为 queryHasId 模式。
-- [x] `app/list`：GET /api/apps + Integrations 页面 Apps tab（分页列表 + enable/disable via config/batchWrite + installUrl 外链）。App config allowlist 扩展支持 `apps.<id>.<field>` 正则。
-- [x] plugin marketplace：`plugin/list`、`plugin/read`、`plugin/install`、`plugin/uninstall`。PluginsModule 4 端点 + Integrations 页面 Plugins tab（搜索/Featured/Installed/Marketplace 分组 + Sheet detail drawer + cascade invalidation）。
+- [x] `app/list` / `app/read`：GET /api/apps + GET /api/apps/detail；Integrations 页面 Apps tab（分页列表 + enable/disable via config/batchWrite + installUrl 外链 + app defaults/app detail sheet）。App config allowlist 支持 app-default、per-app、per-tool leaf keys，`value:null` 清除 leaf override 回到继承。
+- [x] plugin marketplace：`plugin/list`、`plugin/read`、`plugin/install`、`plugin/uninstall`、`plugin/reconcile`。PluginsModule 5 端点 + Integrations 页面 Plugins tab（搜索/Featured/Installed/Marketplace 分组 + Sheet detail drawer + Sync installed + scoped invalidation）。
 - [x] `mcpServer/oauth/login`：POST /api/mcp-servers/oauth/login + MCPs tab OAuth 登录流程（sync blank tab + copy-link fallback）。BigInt timeoutSecs 安全序列化。
 - [x] Integrations 页面：`/integrations` 路由（URL search tab state）+ sidebar Puzzle 图标导航 + 3 tab（Plugins/Apps/MCPs）。
 - [ ] `app/list` connector @mention composer 输入能力。
-- [ ] App tool-level config（per-tool enabled + approval_mode）。
-- [ ] App/Plugin ID 字符集放宽：当前 config allowlist 正则只接受 `[A-Za-z0-9_-]+`，若 app-server 返回含 `.`/`:`/`/` 等字符的 ID，config 写入会 400。需用真实 app/list 样本确认后放宽。
+- [x] App tool-level config（per-tool enabled + approval_mode）：app detail sheet 通过 `app/read?includeTools=true` 枚举 tool id；tool summaries 只作为 display/enumeration 数据，policy truth 仍来自 config/read + app-server write validation。
+- [ ] App/Plugin ID 字符集放宽：当前 config allowlist 正则只接受 `[A-Za-z0-9_-]+`，若 app-server 返回含 `.`/`:`/`/` 等字符的 ID，config 写入会 400。schema 里 `AppInfo.id` 与 `AppToolSummary.name` 都是不受约束的 `string`，需用真实 `app/list` / `app/read` 样本确认真实字母表后放宽。放宽时后端 allowlist 正则与前端 `isEditableConfigSegment`（app detail sheet 用它决定是否显示"无法通过 curated 路径编辑"提示）必须同步修改，否则前端守卫与后端边界会不一致。注意 `apps._default.*` 的负向先行断言依赖 id 字符类，放宽后需重新确认 `_default` 仍不会被 per-app pattern 匹配。
 - [ ] Plugins `cwds` 查询参数类型修正：后端 `@ApiQuery` 缺 `type: String`，SDK 生成为 `Array<unknown>`。前端暂不传 cwds，启用 repo marketplace 过滤时需修。
 - [x] Slash-command 后端能力：collaboration mode preset/list + settings update cache、thread goal read/set/clear、inline `review/start`、`feedback/upload`、fork opt-in `deferGoalContinuation`。
 - [x] Slash-command 前端入口：composer `/` palette、plan indicator、goal progress row、review/feedback dialogs、`contextCompaction`/`enteredReviewMode`/`exitedReviewMode` item 渲染、fork 带 goal 勾选框。
@@ -313,8 +313,8 @@
 - [x] 速度档位（service tier）：`ModelDto` 改为镜像 `serviceTiers` + `defaultServiceTier`（弃用的 `additionalSpeedTiers` 不再镜像），响应侧 `serviceTier` 从臆造的 `['fast','flex']` enum 改为 nullable string，`turn/start` 支持三态 `serviceTier` 覆盖，前端新增与模型选择器同级的 `ServiceTierSelector`。
 - [x] 选择器展示目录说明文案：模型 / 推理强度 / 速度档位三处 description 统一过 `catalogCopy()`，复用英文自然语言 key 机制，未收录的串原样回落英文。`model/list` 无 locale 参数，`initialize` 也无语言能力位，上游不提供本地化。
 - [x] 设置页 `service_tier` 下拉改为从模型目录动态取 tier id（原先写死 `fast` / `flex`，真实目录是 `priority` / `ultrafast`，该控件此前只能写出无效值）；`model_reasoning_effort` 下拉补齐 0.153.2 新增的 `max` / `ultra`。
-- [ ] `plugin/reconcile` 及其 `changedPlugins` 刷新提示（0.153.0 新增）：当前安装、卸载与列表流程不依赖 reconcile；待出现插件落盘状态漂移的真实用例后再接入，避免引入无意义轮询。
-- [ ] `AppsConfig.links`（0.153.0 新增）：当前 Apps 页面只消费 app 列表与启用状态，尚未展示外部链接配置。
+- [x] `plugin/reconcile` 及其 `changedPlugins` 刷新提示（0.153.0 新增）：作为用户触发的 Sync installed 接入；按 hints scoped invalidate Plugins / Apps / MCP / Skills，hooks 无 consumer 不新增刷新面。
+- [x] `AppsConfig.links`（0.153.0 新增）：**will not implement**。这是 per-linked-account approval override，不是外部链接配置；协议没有枚举 app link IDs 的 primitive，link id 只在 runtime tool-call app context 出现，按项目规则不模拟 client-side 能力。
 
 ### 数据、检索与审计
 

@@ -34,11 +34,13 @@
 | Method | Path                    | Controller            | 说明                                                                                                                                   |
 | ------ | ----------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/codex/config`     | CodexConfigController | 读取完整 Codex config + origins（includeLayers:true），bigint→number，敏感字段 redaction                                               |
-| PATCH  | `/api/codex/config`     | CodexConfigController | 结构化编辑 curated config 字段（allowlist 14 个 key）。Body: `{ edits: [{ keyPath, value }] }`。写 user config.toml + reloadUserConfig |
+| PATCH  | `/api/codex/config`     | CodexConfigController | 结构化编辑 curated config 字段。Body: `{ edits: [{ keyPath, value }] }`。`value:null` 仅清除 allowlist 命中的 leaf key；写 user config.toml + reloadUserConfig |
 | GET    | `/api/codex/config/raw` | CodexConfigController | 读取 user config.toml 原始内容，返回 `{ filePath, content }`                                                                           |
 | PUT    | `/api/codex/config/raw` | CodexConfigController | 替换 user config.toml 内容并触发热加载。Body: `{ content }`                                                                            |
 
-**Allowlist**: profile, model, review_model, model_provider, model_context_window, model_auto_compact_token_limit, instructions, developer_instructions, compact_prompt, model_reasoning_effort, model_reasoning_summary, model_verbosity, web_search, service_tier
+**Allowlist**: profile, model, review_model, model_provider, model_context_window, model_auto_compact_token_limit, instructions, developer_instructions, compact_prompt, model_reasoning_effort, model_reasoning_summary, model_verbosity, web_search, service_tier, approvals_reviewer；以及 leaf-only app paths：`apps._default.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode}`、`apps.<id>.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode,default_tools_enabled}`、`apps.<id>.tools.<tool>.{enabled,approval_mode}`。父级 table path 不开放，`apps.<id>.links.<link>` 不开放。
+
+`approvals_reviewer` 的 OpenAPI contract 包含 `user` / `auto_review` / `guardian_subagent`。具体 enum/value 校验由 app-server 的 `config/batchWrite` 执行；其结构化 `configValidationError` 会在单字段写入时转换为字段级 400。
 
 ### Codex Feedback
 
@@ -117,12 +119,33 @@
 | ------ | ------------------ | ---------------- | ----------------------------------------- |
 | GET    | `/api/skills?cwd=` | SkillsController | 调 `skills/list`，原样返回 Codex response |
 
+### Apps
+
+| Method | Path                    | Controller     | 说明                                                                 |
+| ------ | ----------------------- | -------------- | -------------------------------------------------------------------- |
+| GET    | `/api/apps`             | AppsController | 调 `app/list`，分页列出可用 connectors                               |
+| GET    | `/api/apps/detail`      | AppsController | 调 `app/read`，按 `appIds` 读取 metadata；`includeTools=true` 返回 display-only tool summaries |
+
+Apps UI 的列表行保持紧凑，只保留启用状态和管理入口。Defaults 与每个 app 的 detail sheet 使用 config allowlist 写入 app-default、per-app、per-tool leaf keys；继承通过显式 `value:null` 清除当前 leaf key 表达，不写父级 table。
+
 ### MCP Servers
 
 | Method | Path                      | Controller           | 说明                                                      |
 | ------ | ------------------------- | -------------------- | --------------------------------------------------------- |
 | GET    | `/api/mcp-servers`        | McpServersController | 调 `mcpServerStatus/list`，Query: `cursor, limit, detail` |
 | POST   | `/api/mcp-servers/reload` | McpServersController | 调 `config/mcpServer/reload`，重新加载所有 MCP servers    |
+
+### Plugins
+
+| Method | Path                     | Controller        | 说明                                                                                         |
+| ------ | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
+| GET    | `/api/plugins`           | PluginsController | 调 `plugin/list`，支持 `forceRefetch=true` 刷新 installable catalog                           |
+| GET    | `/api/plugins/detail`    | PluginsController | 调 `plugin/read` 读取插件详情                                                                 |
+| POST   | `/api/plugins/reconcile` | PluginsController | 调 `plugin/reconcile`，用户触发同步已安装 remote plugin bundle 的本地 materialization 状态 |
+| POST   | `/api/plugins/install`   | PluginsController | 调 `plugin/install` 安装插件                                                                  |
+| POST   | `/api/plugins/uninstall` | PluginsController | 调 `plugin/uninstall` 卸载插件                                                                |
+
+`plugin/reconcile` 不是轮询 primitive。前端只在用户点击 Sync installed 时调用；返回的 `changedPlugins` 作为本 pass 的 cache invalidation hints 使用，只刷新对应的 Plugins / Apps / MCP / Skills 查询。`hasHooks` 当前无 inventory consumer，不创建 hook 列表刷新。`failedRemotePluginIds` 与 `failedMaterializationRemotePluginIds` 分别展示为 success-with-warnings。
 
 ### Settings
 
@@ -193,8 +216,10 @@
 | GET /skills                           | `skills/list`                                                 |
 | POST /skills/config                   | `skills/config/write`                                         |
 | GET /apps                             | `app/list`                                                    |
+| GET /apps/detail                      | `app/read`                                                    |
 | GET /plugins                          | `plugin/list`                                                 |
 | GET /plugins/detail                   | `plugin/read`                                                 |
+| POST /plugins/reconcile               | `plugin/reconcile`                                            |
 | POST /plugins/install                 | `plugin/install`                                              |
 | POST /plugins/uninstall               | `plugin/uninstall`                                            |
 | POST /mcp-servers/oauth/login         | `mcpServer/oauth/login`                                       |

@@ -35,6 +35,8 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 线程相关 predicate 集中在 `src/threads/thread-errors.ts`，用于区分未 materialized、实验 fork boundary 不支持、非法 fork boundary、删除有后代失败等情况。
 
+`config/batchWrite` 的 server-side `configValidationError` 由 `CodexConfigController` 在单字段写入时转换成字段级 400；enum/value 仍以 app-server 为准，WebUI 只校验 keyPath allowlist 与 JSON shape。
+
 ## App-server 扩展能力
 
 部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
@@ -50,6 +52,7 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 - `nextId` 自增分配 request id
 - `pending` Map 存储 `{ resolve, reject, timer }`
 - 默认 30s 超时，超时后自动 reject 并清理
+- `app/read` 与 `plugin/reconcile` 都走普通 request/response 路径；`plugin/reconcile` 不额外放宽 timeout，也不在 transport 层加锁。
 
 ## 进程管理 (CodexProcessManager)
 

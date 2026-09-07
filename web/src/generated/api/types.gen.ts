@@ -334,7 +334,7 @@ export type CodexConfigResponseDto = {
 };
 
 export type ConfigEditDto = {
-    keyPath: 'profile' | 'model' | 'review_model' | 'model_provider' | 'model_context_window' | 'model_auto_compact_token_limit' | 'instructions' | 'developer_instructions' | 'compact_prompt' | 'model_reasoning_effort' | 'model_reasoning_summary' | 'model_verbosity' | 'web_search' | 'service_tier' | string | string;
+    keyPath: 'profile' | 'model' | 'review_model' | 'model_provider' | 'model_context_window' | 'model_auto_compact_token_limit' | 'instructions' | 'developer_instructions' | 'compact_prompt' | 'model_reasoning_effort' | 'model_reasoning_summary' | 'model_verbosity' | 'web_search' | 'service_tier' | 'approvals_reviewer' | string | string | string;
     value: number | string | boolean | Array<unknown> | {
         [key: string]: unknown;
     } | null;
@@ -522,6 +522,32 @@ export type AppInfoDto = {
 export type AppsListResponseDto = {
     data: Array<AppInfoDto>;
     nextCursor: string | null;
+};
+
+export type AppToolSummaryDto = {
+    name: string;
+    title: string | null;
+    description: string;
+    isEnabled: boolean;
+    disabledReason: string | null;
+    isReadOnly: boolean;
+};
+
+export type ConnectorMetadataDto = {
+    id: string;
+    name: string;
+    description: string | null;
+    iconUrl: string | null;
+    iconUrlDark: string | null;
+    distributionChannel: string | null;
+    installUrl: string | null;
+    pluginDisplayNames: Array<string>;
+    toolSummaries: Array<AppToolSummaryDto> | null;
+};
+
+export type AppsReadResponseDto = {
+    apps: Array<ConnectorMetadataDto>;
+    missingAppIds: Array<string>;
 };
 
 export type SkillsListResponseDto = {
@@ -1111,7 +1137,7 @@ export type ThreadStartResponseDto = {
     serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
-    approvalsReviewer: 'user' | 'guardian_subagent';
+    approvalsReviewer: 'user' | 'auto_review' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
@@ -1123,7 +1149,7 @@ export type ThreadResumeResponseDto = {
     serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
-    approvalsReviewer: 'user' | 'guardian_subagent';
+    approvalsReviewer: 'user' | 'auto_review' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
@@ -1135,7 +1161,7 @@ export type ThreadForkResponseDto = {
     serviceTier: string | null;
     cwd: string;
     approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto;
-    approvalsReviewer: 'user' | 'guardian_subagent';
+    approvalsReviewer: 'user' | 'auto_review' | 'guardian_subagent';
     sandbox: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
     reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
 };
@@ -1683,6 +1709,24 @@ export type PluginDetailDto = {
 
 export type PluginReadResponseDto = {
     plugin: PluginDetailDto;
+};
+
+export type PluginReconcileRequestDto = {
+    reason?: string | null;
+};
+
+export type PluginReconcileChangedPluginDto = {
+    id: string;
+    hasMcps: boolean;
+    hasApps: boolean;
+    hasHooks: boolean;
+    hasSkills: boolean;
+};
+
+export type PluginReconcileResponseDto = {
+    changedPlugins: Array<PluginReconcileChangedPluginDto>;
+    failedRemotePluginIds: Array<string>;
+    failedMaterializationRemotePluginIds: Array<string>;
 };
 
 export type PluginInstallRequestDto = {
@@ -2649,6 +2693,30 @@ export type AppsListAppsResponses = {
 
 export type AppsListAppsResponse = AppsListAppsResponses[keyof AppsListAppsResponses];
 
+export type AppsReadAppsData = {
+    body?: never;
+    path?: never;
+    query: {
+        threadId?: string;
+        includeTools?: boolean;
+        appIds: Array<string>;
+    };
+    url: '/api/apps/detail';
+};
+
+export type AppsReadAppsErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type AppsReadAppsError = AppsReadAppsErrors[keyof AppsReadAppsErrors];
+
+export type AppsReadAppsResponses = {
+    200: AppsReadResponseDto;
+};
+
+export type AppsReadAppsResponse = AppsReadAppsResponses[keyof AppsReadAppsResponses];
+
 export type SkillsListSkillsData = {
     body?: never;
     path?: never;
@@ -3468,6 +3536,26 @@ export type PluginsReadPluginResponses = {
 };
 
 export type PluginsReadPluginResponse = PluginsReadPluginResponses[keyof PluginsReadPluginResponses];
+
+export type PluginsReconcilePluginData = {
+    body?: PluginReconcileRequestDto;
+    path?: never;
+    query?: never;
+    url: '/api/plugins/reconcile';
+};
+
+export type PluginsReconcilePluginErrors = {
+    400: ApiErrorResponseDto;
+    401: ApiErrorResponseDto;
+};
+
+export type PluginsReconcilePluginError = PluginsReconcilePluginErrors[keyof PluginsReconcilePluginErrors];
+
+export type PluginsReconcilePluginResponses = {
+    200: PluginReconcileResponseDto;
+};
+
+export type PluginsReconcilePluginResponse = PluginsReconcilePluginResponses[keyof PluginsReconcilePluginResponses];
 
 export type PluginsInstallPluginData = {
     body: PluginInstallRequestDto;

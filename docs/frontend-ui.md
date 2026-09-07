@@ -38,9 +38,16 @@ Code-based route tree: `routes/router.tsx`。Auth guard via pathless layout rout
 | `/terminal` | TerminalRoute | 全局终端 |
 | `/diagnostics` | DiagnosticsRoute | 诊断日志 |
 | `/settings` | SettingsPage | 设置（General/Account/Codex/Terminal/Files/Security） |
-| `/integrations` | IntegrationsPage | 集成管理（Plugins/Apps/MCPs），`?tab=` URL search state |
+| `/integrations` | IntegrationsPage | 集成管理（Plugins/Apps/MCPs），`?tab=` URL search state，含 plugin/app detail sheet |
 
 `AuthenticatedLayout` 包裹所有认证路由：responsive sidebar + header + `<Outlet />`。
+
+## Integrations 页面
+
+- Plugins tab: `Refresh` 只刷新 installable catalog（`plugin/list?forceRefetch=true`）；`Sync installed` 是用户触发的 `plugin/reconcile`，按返回的 `changedPlugins` hints scoped invalidate Plugins / Apps / MCP / Skills 查询。`hasHooks` 暂无前端 inventory consumer，不新增刷新面。`failedRemotePluginIds` 与 `failedMaterializationRemotePluginIds` 分开展示为 warning。
+- Apps tab: 列表行保持紧凑，只显示 metadata、install link、enable switch 和 Manage 入口。Defaults sheet 编辑 `apps._default.*` leaf keys；app detail sheet 用 `app/read?includeTools=true` 获取 display-only tool summaries，再编辑 per-app 与 per-tool leaf keys。
+- Nullable app config fields 不把 inherited 作为 enum option。控件只列真实值，继承状态由 badge 表示；user-origin 字段显示 `Return to inheritance`，通过 `value:null` 清除当前 leaf override。
+- `approvals_reviewer` 是专门的安全控制，提交或清除前都要求二次确认，并说明 approval routing 风险。
 
 ### 响应式布局
 

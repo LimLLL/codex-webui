@@ -226,3 +226,39 @@ export class PluginUninstallRequestDto {
 
 /** Empty response body for plugin/uninstall. */
 export class PluginUninstallResponseDto {}
+
+/** Request body for plugin/reconcile. */
+export class PluginReconcileRequestDto {
+  @ApiProperty({ type: String, nullable: true, required: false })
+  reason?: string | null;
+}
+
+/** Change hint returned for one reconciled plugin. */
+export class PluginReconcileChangedPluginDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  hasMcps!: boolean;
+
+  @ApiProperty()
+  hasApps!: boolean;
+
+  @ApiProperty()
+  hasHooks!: boolean;
+
+  @ApiProperty()
+  hasSkills!: boolean;
+}
+
+/** Response for plugin/reconcile. */
+export class PluginReconcileResponseDto {
+  @ApiProperty({ type: () => [PluginReconcileChangedPluginDto] })
+  changedPlugins!: PluginReconcileChangedPluginDto[];
+
+  @ApiProperty({ type: [String] })
+  failedRemotePluginIds!: string[];
+
+  @ApiProperty({ type: [String] })
+  failedMaterializationRemotePluginIds!: string[];
+}

@@ -134,3 +134,63 @@ export class AppsListResponseDto {
   @ApiProperty({ type: String, nullable: true })
   nextCursor!: string | null;
 }
+
+/** Display-only tool metadata returned by app/read when includeTools is true. */
+export class AppToolSummaryDto {
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  title!: string | null;
+
+  @ApiProperty()
+  description!: string;
+
+  @ApiProperty()
+  isEnabled!: boolean;
+
+  @ApiProperty({ type: String, nullable: true })
+  disabledReason!: string | null;
+
+  @ApiProperty()
+  isReadOnly!: boolean;
+}
+
+/** Connector metadata returned by app/read. */
+export class ConnectorMetadataDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  name!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  description!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  iconUrl!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  iconUrlDark!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  distributionChannel!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  installUrl!: string | null;
+
+  @ApiProperty({ type: [String] })
+  pluginDisplayNames!: string[];
+
+  @ApiProperty({ type: () => [AppToolSummaryDto], nullable: true })
+  toolSummaries!: AppToolSummaryDto[] | null;
+}
+
+/** Response returned by app/read. */
+export class AppsReadResponseDto {
+  @ApiProperty({ type: () => [ConnectorMetadataDto] })
+  apps!: ConnectorMetadataDto[];
+
+  @ApiProperty({ type: () => [String] })
+  missingAppIds!: string[];
+}

@@ -23,10 +23,20 @@ export const CODEX_CONFIG_EDITABLE_KEYS = [
   'model_verbosity',
   'web_search',
   'service_tier',
+  'approvals_reviewer',
+] as const;
+
+export const APP_DEFAULT_CONFIG_EDITABLE_FIELDS = [
+  'enabled',
+  'approvals_reviewer',
+  'destructive_enabled',
+  'open_world_enabled',
+  'default_tools_approval_mode',
 ] as const;
 
 export const APP_CONFIG_EDITABLE_FIELDS = [
   'enabled',
+  'approvals_reviewer',
   'destructive_enabled',
   'open_world_enabled',
   'default_tools_approval_mode',
@@ -38,9 +48,20 @@ export const APP_TOOL_CONFIG_EDITABLE_FIELDS = [
   'approval_mode',
 ] as const;
 
+/**
+ * Leaf-only curated app config paths.
+ *
+ * The per-app patterns exclude `_default` explicitly: `_default` matches the
+ * generic `[A-Za-z0-9_-]+` app-id class, so without the negative lookahead the
+ * narrower app-default field list would be bypassed by the wider per-app one.
+ * That matters because the app-server accepts writes to fields `AppsDefaultConfig`
+ * does not model (they land in config.toml but are dropped on typed read), so a
+ * bad path fails silently rather than being refused.
+ */
 export const APP_CONFIG_EDITABLE_KEY_PATTERNS = [
-  `^apps\\.[A-Za-z0-9_-]+\\.(${APP_CONFIG_EDITABLE_FIELDS.join('|')})$`,
-  `^apps\\.[A-Za-z0-9_-]+\\.tools\\.[A-Za-z0-9_-]+\\.(${APP_TOOL_CONFIG_EDITABLE_FIELDS.join('|')})$`,
+  `^apps\\._default\\.(${APP_DEFAULT_CONFIG_EDITABLE_FIELDS.join('|')})$`,
+  `^apps\\.(?!_default\\.)[A-Za-z0-9_-]+\\.(${APP_CONFIG_EDITABLE_FIELDS.join('|')})$`,
+  `^apps\\.(?!_default\\.)[A-Za-z0-9_-]+\\.tools\\.[A-Za-z0-9_-]+\\.(${APP_TOOL_CONFIG_EDITABLE_FIELDS.join('|')})$`,
 ] as const;
 
 /** Returns true when a key path is supported by the curated config editor. */

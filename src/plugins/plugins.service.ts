@@ -29,6 +29,16 @@ export class PluginsService {
     );
   }
 
+  /** Reconciles installed plugin bundles against the latest plugin-service state. */
+  reconcilePlugin(
+    params: v2.PluginReconcileParams = {},
+  ): Promise<v2.PluginReconcileResponse> {
+    return this.codex.request<v2.PluginReconcileResponse>(
+      'plugin/reconcile',
+      params,
+    );
+  }
+
   /** Uninstalls a user-installed plugin. */
   uninstallPlugin(
     params: v2.PluginUninstallParams,

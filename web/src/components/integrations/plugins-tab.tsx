@@ -9,16 +9,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  appsListAppsQueryKey,
+  mcpServersListServersQueryKey,
   pluginsListPluginsOptions,
   pluginsListPluginsQueryKey,
+  pluginsReadPluginQueryKey,
   pluginsInstallPluginMutation,
+  pluginsReconcilePluginMutation,
   pluginsUninstallPluginMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
-import { appsListAppsQueryKey, mcpServersListServersQueryKey } from '@/generated/api/@tanstack/react-query.gen';
 import { pluginsListPlugins } from '@/generated/api/sdk.gen';
-import type { PluginSummaryDto, PluginMarketplaceEntryDto } from '@/generated/api/types.gen';
+import type {
+  PluginMarketplaceEntryDto,
+  PluginReconcileResponseDto,
+  PluginSummaryDto,
+} from '@/generated/api/types.gen';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { queryHasId } from '@/lib/query-invalidation';
 import { PluginCard } from './plugin-card';
 import { PluginDetailSheet, type PluginKey } from './plugin-detail-sheet';
 
@@ -27,6 +35,8 @@ export function PluginsTab() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [selectedPlugin, setSelectedPlugin] = useState<PluginKey | null>(null);
+  const [lastReconcile, setLastReconcile] =
+    useState<PluginReconcileResponseDto | null>(null);
 
   // --- Data ---
   const { data, isLoading, isError } = useQuery({
@@ -116,6 +126,30 @@ export function PluginsTab() {
     onError: (err) => showSnackbar(getApiErrorMessage(err), 'error'),
   });
 
+  const reconcileMutation = useMutation({
+    ...pluginsReconcilePluginMutation(),
+    onSuccess: (res) => {
+      invalidateAfterReconcile(queryClient, res, allPlugins);
+      setLastReconcile(res);
+      const failures =
+        res.failedRemotePluginIds.length +
+        res.failedMaterializationRemotePluginIds.length;
+      if (failures > 0) {
+        showSnackbar(t('Plugin sync completed with warnings'), 'warning', 5000);
+      } else if (res.changedPlugins.length > 0) {
+        showSnackbar(
+          t('Plugin sync completed: {{count}} changed', {
+            count: res.changedPlugins.length,
+          }),
+          'success',
+        );
+      } else {
+        showSnackbar(t('Plugin sync completed: no changes'), 'success');
+      }
+    },
+    onError: (err) => showSnackbar(getApiErrorMessage(err), 'error'),
+  });
+
   const mutating = installMutation.isPending || uninstallMutation.isPending;
 
   const makeCardProps = (plugin: PluginSummaryDto, mp: PluginMarketplaceEntryDto) => ({
@@ -165,6 +199,20 @@ export function PluginsTab() {
           {refreshMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           {t('Refresh')}
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          disabled={reconcileMutation.isPending}
+          onClick={() => reconcileMutation.mutate({ body: { reason: 'user' } })}
+        >
+          {reconcileMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          {t('Sync installed')}
+        </Button>
       </div>
 
       {/* Error banners */}
@@ -172,6 +220,7 @@ export function PluginsTab() {
       {loadErrors.map((err) => (
         <ErrorBanner key={err.marketplacePath} message={`${err.marketplacePath}: ${err.message}`} />
       ))}
+      {lastReconcile && <ReconcileWarnings result={lastReconcile} />}
 
       {/* Search results */}
       {filtered !== null ? (
@@ -261,13 +310,90 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-/** Matches generated TanStack Query keys whose first element has `{ _id: id }`. */
-function queryHasId(query: { queryKey: readonly unknown[] }, id: string): boolean {
-  const first = query.queryKey[0];
+function ReconcileWarnings({ result }: { result: PluginReconcileResponseDto }) {
+  const { t } = useTranslation();
+  if (
+    result.failedRemotePluginIds.length === 0 &&
+    result.failedMaterializationRemotePluginIds.length === 0
+  ) {
+    return null;
+  }
+
   return (
-    typeof first === 'object' &&
-    first !== null &&
-    '_id' in first &&
-    (first as { _id?: unknown })._id === id
+    <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+      <div className="flex items-start gap-2">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{t('Plugin sync completed with warnings')}</span>
+      </div>
+      {result.failedRemotePluginIds.length > 0 && (
+        <FailureList
+          title={t('Update failures')}
+          ids={result.failedRemotePluginIds}
+        />
+      )}
+      {result.failedMaterializationRemotePluginIds.length > 0 && (
+        <FailureList
+          title={t('Bundle materialization failures')}
+          ids={result.failedMaterializationRemotePluginIds}
+        />
+      )}
+    </div>
   );
 }
+
+function FailureList({ title, ids }: { title: string; ids: string[] }) {
+  return (
+    <div className="pl-5">
+      <div className="font-medium">{title}</div>
+      <div className="break-all text-muted-foreground">{ids.join(', ')}</div>
+    </div>
+  );
+}
+
+function invalidateAfterReconcile(
+  queryClient: ReturnType<typeof useQueryClient>,
+  result: PluginReconcileResponseDto,
+  plugins: Array<{
+    plugin: PluginSummaryDto;
+    marketplace: PluginMarketplaceEntryDto;
+  }>,
+) {
+  const changedIds = new Set(result.changedPlugins.map((plugin) => plugin.id));
+  const failedIds = new Set([
+    ...result.failedRemotePluginIds,
+    ...result.failedMaterializationRemotePluginIds,
+  ]);
+  const pluginIds = new Set([...changedIds, ...failedIds]);
+  if (pluginIds.size > 0) {
+    void queryClient.invalidateQueries({ queryKey: pluginsListPluginsQueryKey() });
+  }
+
+  for (const { plugin, marketplace } of plugins) {
+    if (!pluginIds.has(plugin.id)) continue;
+    void queryClient.invalidateQueries({
+      queryKey: pluginsReadPluginQueryKey({
+        query: {
+          marketplacePath: marketplace.path,
+          pluginName: plugin.name,
+        },
+      }),
+    });
+  }
+
+  const changedPlugins = result.changedPlugins;
+  if (changedPlugins.some((plugin) => plugin.hasApps)) {
+    void queryClient.invalidateQueries({ queryKey: appsListAppsQueryKey() });
+    void queryClient.invalidateQueries({
+      predicate: (query) => queryHasId(query, 'appsReadApps'),
+    });
+  }
+  if (changedPlugins.some((plugin) => plugin.hasMcps)) {
+    void queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
+  }
+  if (changedPlugins.some((plugin) => plugin.hasSkills)) {
+    void queryClient.invalidateQueries({
+      predicate: (query) => queryHasId(query, 'skillsListSkills'),
+    });
+  }
+}
+

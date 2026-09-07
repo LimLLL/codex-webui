@@ -62,6 +62,7 @@ codex app-server (server request, 有 id)
 - **可选 decisions**：未提供 `availableDecisions` 时，仅显示 accept/decline（deny-by-default）
 - **Session 级授权**：`acceptForSession`/`cancel` 需要服务端显式提供
 - **Amendments 不可自由构造**：exec/network policy 修正内容来自服务端 `proposed*` 字段，用户只能选择接受
+- **Approval reviewer 配置**：`approvals_reviewer` / `apps.*.approvals_reviewer` 改变 app-server 将审批 review 路由给用户、automatic review 还是 guardian subagent；WebUI 只通过 Settings/Integrations 的二次确认控件写 config，不改变 approval request 的 REST 响应协议。
 
 ## 前端文件
 

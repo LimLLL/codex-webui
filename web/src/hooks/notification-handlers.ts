@@ -18,6 +18,7 @@ import type { RateLimitSnapshotDto } from '@/generated/api';
 import {
   invalidateBranchTreesSoon,
   invalidateThreadListSoon,
+  queryHasId,
 } from '@/lib/query-invalidation';
 import { useAccountStore } from '@/stores/account-store';
 import { useMcpStore } from '@/stores/mcp-store';
@@ -131,17 +132,6 @@ function debouncedInvalidateMcpServers(queryClient: QueryClient): void {
     void queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
     invalidateMcpTimer = null;
   }, 500);
-}
-
-/** Matches generated TanStack Query keys whose first element has `{ _id: id }`. */
-function queryHasId(query: { queryKey: readonly unknown[] }, id: string): boolean {
-  const first = query.queryKey[0];
-  return (
-    typeof first === 'object' &&
-    first !== null &&
-    '_id' in first &&
-    (first as { _id?: unknown })._id === id
-  );
 }
 
 function invalidateAccountQueries(queryClient: QueryClient): void {

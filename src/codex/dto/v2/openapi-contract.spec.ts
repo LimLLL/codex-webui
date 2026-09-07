@@ -113,6 +113,15 @@ describe('Codex v2 OpenAPI contract', () => {
     ).toEqual(expect.arrayContaining(['title', 'options']));
   });
 
+  it('accepts the live approvals reviewer enum values', () => {
+    expect(
+      schema('ThreadStartResponseDto').properties?.approvalsReviewer?.enum,
+    ).toEqual(['user', 'auto_review', 'guardian_subagent']);
+    expect(
+      schema('ThreadResumeResponseDto').properties?.approvalsReviewer?.enum,
+    ).toEqual(['user', 'auto_review', 'guardian_subagent']);
+  });
+
   it('advertises model-declared service tiers instead of a guessed enum', () => {
     const modelProps = schema('ModelDto').properties ?? {};
     expect(Object.keys(modelProps)).toEqual(

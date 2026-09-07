@@ -111,3 +111,24 @@ export function invalidateBranchTreeMembersSoon(
     ),
   );
 }
+
+/**
+ * Matches generated TanStack Query keys whose first element carries `{ _id }`.
+ *
+ * Hey API keys an operation's cache entries by an `_id` on the first key
+ * element, with the request arguments alongside it. Invalidating every variant
+ * of one operation therefore needs a predicate rather than a key prefix, since
+ * the arguments differ per call site.
+ */
+export function queryHasId(
+  query: { queryKey: readonly unknown[] },
+  id: string,
+): boolean {
+  const first = query.queryKey[0];
+  return (
+    typeof first === 'object' &&
+    first !== null &&
+    '_id' in first &&
+    (first as { _id?: unknown })._id === id
+  );
+}
