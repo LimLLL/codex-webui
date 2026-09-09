@@ -305,6 +305,7 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
                   <TimelineEntryRow
                     entry={entry}
                     threadCwd={threadCwd}
+                    threadId={threadId}
                     canBranch={canBranch}
                     versionsByTurnId={versionsByTurnId}
                     deleteBlockedReason={deleteBlockedReason}
@@ -376,6 +377,7 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
 function TimelineEntryRow({
   entry,
   threadCwd,
+  threadId,
   canBranch,
   versionsByTurnId,
   deleteBlockedReason,
@@ -386,6 +388,7 @@ function TimelineEntryRow({
 }: {
   entry: TimelineEntry;
   threadCwd: string | null;
+  threadId: string | null;
   canBranch: boolean;
   versionsByTurnId: Map<string, MessageVersions>;
   deleteBlockedReason: string | null;
@@ -404,7 +407,12 @@ function TimelineEntryRow({
             was the only high-chroma surface in an otherwise neutral palette.
             Side and alignment already say who wrote it. */}
         <div className="max-w-2xl overflow-hidden rounded-2xl border border-border/60 bg-muted px-4 py-3 text-foreground [&_a]:underline">
-          <UserMessageBubble content={entry.content} threadCwd={threadCwd} images={entry.images} />
+          <UserMessageBubble
+            content={entry.content}
+            threadCwd={threadCwd}
+            threadId={threadId}
+            images={entry.images}
+          />
         </div>
         {/* Reserved even when empty so revealing the controls cannot shift layout. */}
         <div className="mt-1 flex h-6 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">

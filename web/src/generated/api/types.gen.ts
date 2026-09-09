@@ -60,6 +60,7 @@ export type FileEntryDto = {
 export type FileReadResponseDto = {
     content: string;
     size: number;
+    mtime: number;
 };
 
 export type CreateFileRequestDto = {

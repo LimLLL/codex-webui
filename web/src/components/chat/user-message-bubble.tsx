@@ -8,18 +8,14 @@ import remarkGfm from 'remark-gfm';
 import { FileText, ImageIcon } from 'lucide-react';
 import { remarkMentions } from '@/lib/remark-mentions';
 import { normalizeMessageMentions } from '@/lib/mention-utils';
+import { requestOpenFile } from '@/lib/open-file-request';
 
 interface Props {
   content: string;
   threadCwd: string | null;
+  /** Conversation this message belongs to, carried on open requests it raises. */
+  threadId: string | null;
   images?: string[];
-}
-
-/** Dispatches a custom event to open a file in the session panel. */
-function openFileInPanel(absolutePath: string): void {
-  window.dispatchEvent(
-    new CustomEvent('codex-webui:open-file', { detail: { path: absolutePath } }),
-  );
 }
 
 /** Allow `mention:` scheme through react-markdown's URL sanitizer. */
@@ -37,8 +33,12 @@ function userUrlTransform(url: string): string {
  *
  * Links with `mention:` scheme render as clickable file badges;
  * regular links open in a new tab.
+ *
+ * @param threadId - Conversation raising any open request, or null when unknown
  */
-const userComponents: ComponentProps<typeof Markdown>['components'] = {
+const userComponents = (
+  threadId: string | null,
+): ComponentProps<typeof Markdown>['components'] => ({
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-1">{children}</ul>,
   ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>,
@@ -52,15 +52,17 @@ const userComponents: ComponentProps<typeof Markdown>['components'] = {
     // Mention links → clickable file badge
     if (href?.startsWith('mention:')) {
       const absolutePath = href.slice('mention:'.length);
+      const openMention = () =>
+        requestOpenFile({ path: absolutePath, sourceThreadId: threadId });
       return (
         <span
           role="button"
           tabIndex={0}
-          onClick={() => openFileInPanel(absolutePath)}
+          onClick={openMention}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              openFileInPanel(absolutePath);
+              openMention();
             }
           }}
           className="inline-flex cursor-pointer items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-foreground/20"
@@ -95,9 +97,9 @@ const userComponents: ComponentProps<typeof Markdown>['components'] = {
   pre: ({ children }) => <>{children}</>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   hr: () => <hr className="my-3 border-border" />,
-};
+});
 
-export function UserMessageBubble({ content, threadCwd, images }: Props) {
+export function UserMessageBubble({ content, threadCwd, threadId, images }: Props) {
   // Normalize absolute @mentions to relative before rendering
   const normalizedContent = useMemo(
     () => normalizeMessageMentions(content, threadCwd),
@@ -110,12 +112,18 @@ export function UserMessageBubble({ content, threadCwd, images }: Props) {
     [threadCwd],
   );
 
+  const markdownComponents = useMemo(() => userComponents(threadId), [threadId]);
+
   // Filter out direct URLs — only server paths are openable
   const imageFiles = images?.filter((src) => !/^(https?|data|blob):/.test(src));
 
   return (
     <div className="text-sm leading-relaxed [overflow-wrap:break-word]">
-      <Markdown remarkPlugins={remarkPlugins} components={userComponents} urlTransform={userUrlTransform}>
+      <Markdown
+        remarkPlugins={remarkPlugins}
+        components={markdownComponents}
+        urlTransform={userUrlTransform}
+      >
         {normalizedContent}
       </Markdown>
 
@@ -126,11 +134,11 @@ export function UserMessageBubble({ content, threadCwd, images }: Props) {
               key={i}
               role="button"
               tabIndex={0}
-              onClick={() => openFileInPanel(src)}
+              onClick={() => requestOpenFile({ path: src, sourceThreadId: threadId })}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  openFileInPanel(src);
+                  requestOpenFile({ path: src, sourceThreadId: threadId });
                 }
               }}
               className="inline-flex cursor-pointer items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[0.85em] transition-colors hover:bg-foreground/20"

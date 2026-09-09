@@ -18,7 +18,7 @@
 | `resolveSafeTargetPath(path, opts?)` | 目标路径校验（可不存在，校验 parent）。支持 `recursiveParent` 选项 |
 | `validateEntryName(name)` | 拒绝空名、`.`、`..`、路径分隔符、null byte |
 | `readDirectory(dir)` | 读取一级目录内容（含隐藏文件），按 `files.excludedDirs` 设置排除指定名称，目录优先排序 |
-| `readFile(path)` | 读取文本文件（上限 5MB），返回 content + size |
+| `readFile(path)` | 读取文本文件（上限 5MB），返回 content + size + mtime（mtime 与内容配对，作为写入前置，见下文） |
 | `writeFile(path, content, expectedMtime?)` | 保存文件，支持 mtime 冲突检测（1s 容差） |
 | `createFile(path, content?, overwrite?)` | 创建新文件，默认空内容，默认不覆盖（wx flag） |
 | `createDirectory(path, recursive?, overwrite?)` | 创建目录，可选 recursive（mkdir -p） |
@@ -115,9 +115,11 @@ Zustand store 仅管理 UI 状态，REST 数据由 TanStack Query 管理。
 | `selectedFile` | `string \| null` | 当前选中的文件路径 |
 | `panelOpen` | `boolean` | 文件面板是否展示 |
 | `expandedDirs` | `Set<string>` | 展开的目录（保留但 FileTree 不再使用） |
-| `fileMtime` | `number \| null` | 选中文件的 mtime（冲突检测） |
+| `pendingLine` | `number \| null` | 待跳转的行号（一次性导航意图，到达即消费） |
 
-Actions: `setRootDir`（重置所有状态）, `selectFile`, `setPanelOpen`, `toggleDirectory`, `setFileMtime`, `navigateUp`
+Actions: `setRootDir`（重置所有状态）, `selectFile(path, line?)`, `clearPendingLine`, `setPanelOpen`, `toggleDirectory`, `navigateUp`
+
+冲突检测用的 mtime **不在 store 里**：它随 `files/read` 响应与内容一起返回，由 CodeViewer 直接取用。曾经作为 store 字段由独立的 metadata 查询写入，两者新鲜度互不相干，导致新 mtime 为旧内容背书——详见下文。
 
 ### useFileOperations hook
 
@@ -210,7 +212,7 @@ Thread 创建/切换 → rootDir 更新
 `src/files/files.service.spec.ts` — 37 个测试:
 - resolveSafePath: 合法路径/越界路径/空路径/不存在路径
 - readDirectory: 列表/排除 node_modules/目录优先排序
-- readFile: 读取内容/拒绝目录
+- readFile: 读取内容/拒绝目录/返回与内容配对的 mtime
 - createFile: 创建空文件/拒绝已存在/拒绝越界
 - createDirectory: 递归创建/拒绝已存在
 - writeFile: 写入/mtime 冲突拒绝
@@ -224,6 +226,57 @@ Thread 创建/切换 → rootDir 更新
 - addWorkspaceRoot: 动态注册/拒绝越界 root
 
 E2e upload 测试延后（Fastify 插件在 NestJS 测试上下文注册有兼容问题）。
+
+## 聊天消息中的文件引用
+
+Agent 回复里的文件路径点击后在会话面板打开，而不是让浏览器导航到一个静态服务器上并不存在的地址（issue #15）。
+
+### 识别（`lib/file-references.ts`）
+
+纯函数，只做结构判定——**识别不等于存在性证明**，文件存不存在由打开动作本身回答。按来源分两套准入规则：
+
+| 来源 | 规则 |
+|------|------|
+| markdown 链接 | 语法本身已声明导航意图，准入门槛低：非 scheme、非 protocol-relative、非纯 fragment 即可，含裸文件名 |
+| inline code | 必须有结构信号：显式前缀 `./` `../` `/`，或「file-like 末段 + （目录分隔符 或 行号后缀）」 |
+
+inline code 额外要求整个 token 合格，不从更大表达式里抠子串；命令、glob、替换、类型表达式、包名一律 inert。裸文件名（`package.json`、`Dockerfile`）**故意**不识别：散文里提及远多于引用，全做成可点会制造大量指向不存在文件的假可点元素。
+
+行号语法支持 `path:42` 与 `path#L42`（1-based）。非法行号（0、负数、超 100 万）视为 **malformed 而非缺省**——文本许诺了具体位置，落到任意位置比不动更糟，所以整个 token 转为 inert。列号、区间（`:12:3`、`#L12-L20`）明确不支持且不臆测。
+
+已知取舍：`example.com:3000` 这类「末段像文件名的 host:port」会被识别为带行号的文件，无 hostname 名单则无法与 `README.md:42` 区分，打开时如实失败。点分四段 IP（`127.0.0.1:8000`）单独排除。
+
+### 两个容易踩的坑
+
+- **URL sanitizer**：`react-markdown` 的 `defaultUrlTransform` 会把「第一个冒号出现在任何 `/` `?` `#` 之前」的 destination 抹成空串，即 `README.md:42` 这一种形态（带目录分隔符的 `src/a.ts:42` 不受影响）。仅对这一形态归一化成 `./README.md:42` 再交给默认 sanitizer，其余全部走原路径。该 transform **限定 `a` 的 href**——不限定时会一并改写 `img` 的 src 并真的发出请求。
+- **链接解码**：链接 destination 是 percent-encoded 的（`<>` 包裹的空格也会被编码），需在**切掉行号后**解码一次，这样文件名里编码的 `#` 不会被反读成 fragment。inline code 是字面量，不解码。
+
+被判定为「本地但无法解析」的链接渲染为惰性文本，**不能**退化成 `<a>`——退化即原样复现 404。
+
+### 打开通道（`lib/open-file-request.ts`）
+
+`codex-webui:open-file` 事件携带 `{ path, line?, sourceThreadId? }`，由 `thread-view` 接收。用户消息的 @mention 与图片徽章走同一通道。
+
+- 行号是**一次性导航意图**（`files-store.pendingLine`），不是 tab 的持久属性；tab 仍按 path 去重，同一文件不同行是同一个 tab
+- 面板必须在 ack route 请求**之前**把行号转交给 store
+- 纯 path 打开清除既有行号意图；`selectFile` 不全局解析后缀，@mention 与文件树的路径保持字面语义
+- 归属作废：请求携带发起会话 id，route 在渲染期丢弃非当前会话的请求（仅过滤会让它在切回时复活）；面板卸载/换会话时清 `pendingLine`，**并同时重置「已处理」的 seq 记号**——两者描述同一件事，只清目标却仍宣称已处理，会在 effect replay（StrictMode）下让首次打开永久丢掉跳转
+- 定位前重新读一次 store：effect 闭包捕获的 `pendingLine` 可能已在 render 与 effect 之间被取消，仅凭捕获值会跳到届时在屏的那个文件上
+- 只有文本 viewer 支持行号，由 `FileContentViewer` dispatcher 判定；其余 viewer 消费掉行号并提示不支持，避免 PDF 的行号变成页码
+
+### CodeViewer 的三条硬约束
+
+- **行号定位时机**：不能只等 mount。`@monaco-editor/react` 跨文件复用同一个 editor 实例、只换 model，且挂载是异步的——用布尔 ready 标志会因「重复设同值不触发重渲染」而在第二个文件之后静默失效。实例本身存进 state，新实例即新值
+- **model 身份校验**：wrapper 会把 `path` prop 当 URI 解析，所以传入路径需逐段 `encodeURIComponent` 成 `file://` URI，否则文件名里的 `#` 会被当 fragment 截断、`%` 会被当转义。校验比对 scheme/authority/query/fragment/path 全等，不做 `endsWith` 后缀匹配（会误接受 `/other/work/app.ts`）
+- **保存前置**：内容加载成功且**无进行中的刷新** + 有随内容返回的 mtime + editor 持有该文件的 model，缺一不可。读取失败时**保留**已有 editor 而非卸载（卸载会释放 model，丢掉未保存的编辑），改为禁用保存并显示重载失败横幅。
+
+  写入前置**必须与它所描述的内容同源**。原先 mtime 来自 FileViewer 的独立 metadata 查询，两个查询各有各的 30 秒新鲜度时钟，于是存在这条真实的数据丢失路径：metadata 过期 31 秒、内容还新鲜 29 秒 → 文件被外部改动 → 可见性回归只重取 metadata → 新 mtime 落地而编辑器仍是旧内容 → 保存通过服务端冲突校验，覆盖他人改动。
+
+  现在 `files/read` 直接返回与该次读取配对的 mtime（`fs.stat` 本来就已执行，不增加 syscall），CodeViewer 只认这一个来源，整类不一致从结构上消失。`isFetching` 则关掉「同一查询正在重取」这个更窄的窗口。
+
+  mtime 在读取**之前**采集，这个方向是有意的：文件若在读取期间被改，得到的 mtime 比内容更旧，保存会被拒绝而非静默胜出（fail-safe）
+
+`selectFile` 重选同一文件时保留 mtime，且 metadata 同步 effect 以路径为依赖——否则元数据已缓存、mtime 值未变，effect 不重跑，保存会被永久禁用。
 
 ## 注意事项
 

@@ -377,7 +377,9 @@ export class FilesService implements OnModuleDestroy {
    * @returns The file content as UTF-8 string
    * @throws BusinessException if file exceeds MAX_READ_SIZE
    */
-  async readFile(filePath: string): Promise<{ content: string; size: number }> {
+  async readFile(
+    filePath: string,
+  ): Promise<{ content: string; size: number; mtime: number }> {
     const resolved = await this.resolveSafePath(filePath);
 
     const stat = await fs.stat(resolved);
@@ -395,7 +397,16 @@ export class FilesService implements OnModuleDestroy {
     }
 
     const content = await fs.readFile(resolved, 'utf-8');
-    return { content, size: stat.size };
+    // The modification time is returned with the content it belongs to, so a
+    // later write can prove it is overwriting the revision the caller actually
+    // read. Sourcing that precondition from a separate metadata request lets
+    // the two drift: the newer time then vouches for an older buffer and the
+    // conflict check waves it through.
+    //
+    // Captured before the read rather than after, which errs toward rejecting
+    // a save: a file changed mid-read yields a time older than the content,
+    // and the write is refused instead of silently winning.
+    return { content, size: stat.size, mtime: stat.mtimeMs };
   }
 
   /**

@@ -470,12 +470,10 @@
   "Approval mode for tools without a tool override.": "未设置工具覆盖时的审批模式。",
   "App approval reviewer": "应用审批审查方",
   "Reviewer used for this app after inheritance is applied.": "应用继承规则后此应用使用的审查方。",
-  "not available": "不可用",
   "Tool summaries are not available for this app.": "此应用没有可用的工具摘要。",
   "No tools reported": "未报告工具",
   "runtime enabled": "运行时已启用",
   "runtime disabled": "运行时已禁用",
-  "read-only": "只读",
   "Tool enabled": "工具已启用",
   "Tool approval": "工具审批",
   "This tool name cannot be edited through the curated config path.": "无法通过精选配置路径编辑此工具名称。",
@@ -794,5 +792,12 @@
   "Opaque background": "不透明背景",
   "Unsupported activity": "暂不支持的活动",
   "Turn failed": "轮次失败",
-  "Request alignment explanation": "请求对齐说明"
+  "Request alignment explanation": "请求对齐说明",
+  "Cannot resolve this path: the conversation has no directory": "无法解析该路径：会话没有工作目录",
+  "Line {{line}} is beyond the end of this file": "第 {{line}} 行超出了文件末尾",
+  "Cannot save: this file has not loaded": "无法保存：该文件未成功加载",
+  "Could not open this file": "无法打开该文件",
+  "Line navigation is not available for this file type": "该文件类型不支持跳转到指定行",
+  "Reload failed — saving is disabled": "重新加载失败——保存已禁用",
+  "Refreshing…": "正在刷新…"
 }
