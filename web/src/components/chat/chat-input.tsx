@@ -50,10 +50,20 @@ interface Props {
   className?: string;
   /** Reports the composer's rendered height whenever it changes. */
   onHeightChange?: (height: number) => void;
+  /**
+   * Fired only when a send or steer is actually accepted and dispatched.
+   *
+   * Deliberately not fired for submits swallowed by a guard, or consumed by a
+   * slash command: the transcript uses this to resume following the latest
+   * output, and that is a decision only an explicit send may make. Inferring it
+   * from an appended timeline entry instead would also resume following for
+   * output the user never asked to be pulled to.
+   */
+  onSubmitted?: () => void;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
-  { panelOpen, onTogglePanel, className, onHeightChange },
+  { panelOpen, onTogglePanel, className, onHeightChange, onSubmitted },
   ref,
 ) {
   const footerRef = useRef<HTMLElement>(null);
@@ -213,7 +223,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         }),
       },
     });
-  }, [buildInput, threadId, loading, readOnly, attachmentsRef, addUserMessage, clearAfterSend, startTurn]);
+    onSubmitted?.();
+  }, [buildInput, threadId, loading, readOnly, attachmentsRef, addUserMessage, clearAfterSend, startTurn, onSubmitted]);
 
   const handleSteer = useCallback(() => {
     const input = buildInput();
@@ -223,7 +234,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       path: { threadId, turnId: activeTurnId },
       body: { input: input as never },
     });
-  }, [buildInput, clearAfterSend, canSteer, threadId, activeTurnId, steer]);
+    onSubmitted?.();
+  }, [buildInput, clearAfterSend, canSteer, threadId, activeTurnId, steer, onSubmitted]);
 
   const handleStop = useCallback(() => {
     if (!threadId || !activeTurnId || interruptTurn.isPending) return;

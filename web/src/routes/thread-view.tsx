@@ -150,6 +150,12 @@ export function ThreadView() {
   const composerFloats = !(showPanel && isDesktop);
   const [composerHeight, setComposerHeight] = useState(0);
 
+  // Counts accepted sends and steers. The transcript resumes following on the
+  // change, so an explicit send is the only thing that can pull a reader who
+  // scrolled away back to the latest output.
+  const [sendSignal, setSendSignal] = useState(0);
+  const handleSubmitted = useCallback(() => setSendSignal((n) => n + 1), []);
+
   const sessionPanelContent = showPanel ? (
     <SessionPanel
       threadId={threadId}
@@ -169,7 +175,10 @@ export function ThreadView() {
         <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
           <ResizablePanel defaultSize="65%" minSize="20%">
             <div className="flex h-full flex-col">
-              <ChatTimeline onEditMessage={(v) => chatInputRef.current?.setInput(v)} />
+              <ChatTimeline
+                onEditMessage={(v) => chatInputRef.current?.setInput(v)}
+                scrollToLatestSignal={sendSignal}
+              />
             </div>
           </ResizablePanel>
           <ResizableHandle withHandle />
@@ -183,6 +192,7 @@ export function ThreadView() {
         <ChatTimeline
           onEditMessage={(v) => chatInputRef.current?.setInput(v)}
           bottomInset={composerFloats ? composerHeight : 0}
+          scrollToLatestSignal={sendSignal}
         />
       )}
 
@@ -204,6 +214,7 @@ export function ThreadView() {
         onTogglePanel={() => setSessionPanelOpen((o) => !o)}
         className={composerFloats ? 'absolute inset-x-0 bottom-0' : 'shrink-0'}
         onHeightChange={setComposerHeight}
+        onSubmitted={handleSubmitted}
       />
     </div>
   );

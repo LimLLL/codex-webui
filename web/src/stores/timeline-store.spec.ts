@@ -570,3 +570,186 @@ describe('forgetThreads', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 });
+
+describe('failures hydrated before their turn was paged in', () => {
+  /** A failed turn that reports its own error on the paged-turn path. */
+  function failedTurn(id: string, text: string): TurnDto {
+    return {
+      id,
+      items: [{ type: 'userMessage', content: [{ type: 'text', text }] }],
+      status: 'failed',
+      error: { message: 'page-level failure' },
+    } as unknown as TurnDto;
+  }
+
+  /** Structured error row as auxiliary hydration delivers it. */
+  function errorRow(turnId: string, message: string) {
+    return {
+      turnId,
+      message,
+      errorCategory: 'misalignmentPolicyViolation',
+      additionalDetails: 'aux detail',
+      misalignmentErrorType: 'policy',
+      misalignmentExplanation: 'aux explanation',
+      createdAt: 1,
+    };
+  }
+
+  /**
+   * Seeds a conversation whose newest page is loaded, then hydrates an error
+   * for an older turn no page has reached yet. That failure has nowhere to sit,
+   * so it is parked at the end of the timeline.
+   */
+  function seedWithParkedFailure() {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-new', 'newest')],
+      historyCursor: 'cursor-1',
+      readOnlyReason: null,
+    });
+    useTimelineStore
+      .getState()
+      .hydrateTurnErrorsForThread('t1', [errorRow('turn-old', 'aux failure')]);
+
+    const parked = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(parked).toHaveLength(1);
+  }
+
+  it('absorbs the parked failure instead of duplicating it', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const failures = timeline.filter(
+      (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
+    );
+    expect(failures).toHaveLength(1);
+    // The structured record wins the merge: it carries misalignment detail the
+    // paged turn's own error field does not.
+    expect(failures[0]).toMatchObject({
+      failure: {
+        message: 'aux failure',
+        misalignmentExplanation: 'aux explanation',
+      },
+    });
+  });
+
+  it('keeps the surviving failure next to its own turn', () => {
+    seedWithParkedFailure();
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const newestIndex = timeline.findIndex(
+      (entry) => entry.kind === 'user' && entry.turnId === 'turn-new',
+    );
+    // Nothing may remain parked below the newest turn. Asserting on the first
+    // match would pass even when a duplicate is still stranded down there,
+    // because the correctly placed copy is found first.
+    const strandedBelowNewest = timeline
+      .slice(newestIndex)
+      .filter((entry) => entry.kind === 'turnFailure');
+    expect(strandedBelowNewest).toHaveLength(0);
+  });
+
+  it('relocates a parked failure even when the page reports no error', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [answeredTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const failureIndex = timeline.indexOf(failures[0]);
+    const oldTurnIndex = timeline.findIndex(
+      (entry) => entry.kind === 'turn' && entry.turnId === 'turn-old',
+    );
+    expect(oldTurnIndex).toBeGreaterThanOrEqual(0);
+    expect(failureIndex).toBe(oldTurnIndex + 1);
+  });
+
+  it('places the relocated failure immediately after its own turn', () => {
+    // A page carries several turns, so "below the newest turn" is not enough:
+    // the failure has to land against the right one, and before the turn that
+    // follows it.
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-mid', 'middle'), answeredTurn('turn-old', 'older')],
+        null,
+      );
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const at = timeline.indexOf(failures[0]);
+    expect(timeline[at - 1]).toMatchObject({
+      kind: 'turn',
+      turnId: 'turn-old',
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-mid',
+    });
+  });
+
+  it('relocates a failure whose turn arrived with only a user message', () => {
+    // A turn whose items all normalize away, and whose own error field is
+    // empty, contributes no `turn` entry at all. Reading the arriving turn ids
+    // off the entries would miss it and leave the failure parked forever.
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-mid', 'middle'), userOnlyTurn('turn-old', 'older')],
+        null,
+      );
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const at = timeline.indexOf(failures[0]);
+    expect(timeline[at - 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-old',
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-mid',
+    });
+  });
+
+  it('leaves a parked failure alone when its turn is not in this page', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [answeredTurn('turn-other', 'other')], null);
+
+    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
+      .timeline;
+    const failures = timeline.filter(
+      (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
+    );
+    expect(failures).toHaveLength(1);
+  });
+});

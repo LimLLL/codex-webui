@@ -721,6 +721,7 @@
   "Close it there, then reopen this conversation to continue it.": "在那一端关闭后，重新打开本会话即可继续。",
   "Load earlier messages": "加载更早的消息",
   "Loading earlier messages…": "正在加载更早的消息…",
+  "Jump to latest": "回到最新",
   "Delete this branch and everything below it": "删除该分支及其下方全部内容",
   "Turns in this branch": "该分支的轮数",
   "Each node is one branch of this conversation; an edge is labelled with the message that was edited to create the branch below it. Click a node to open it, or use its bin icon to delete it and everything below it.": "每个节点是本对话的一个分支；连线上标注的是为创建下方分支而被编辑的那条消息。点击节点可打开，点击垃圾桶图标可删除该节点及其下方全部内容。",

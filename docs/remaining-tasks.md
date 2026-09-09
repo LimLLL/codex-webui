@@ -269,7 +269,7 @@
 - [x] `/api/codex/status` models 字段瘦身：只返回 `{ ok, listable, count, defaultModel }`，ModelSelector 用独立 `GET /api/models`。
 - [x] Markdown 渲染：`react-markdown` + `remark-gfm` + Shiki 懒加载语法高亮，agent/user 消息均支持。
 - [x] react-i18next 国际化：自然语言 key，en + zh-CN，语言切换。
-- [x] TanStack Virtual 虚拟列表：`useVirtualizer` + `measureElement` 动态高度，smart auto-scroll（流式跟随 + 上翻不打断），TurnBlock 去 motion 避免 recycling 重复动画。
+- [x] TanStack Virtual 虚拟列表：`useVirtualizer` + `measureElement` 动态高度，TurnBlock 去 motion 避免 recycling 重复动画。自动跟随后由库的末端锚定接管（见下方 issue #18）。
 - [x] Rich Chat Input：@ 文件引用（内联文本 + 路径导航 popover）、粘贴图片/文件上传、Skill 选择器、FileTree 右键附加、消息气泡 @mention badge + AuthImage 图片预览。ChatInput 拆分为 3 文件。后端 ChatModule（upload 暂存）+ SkillsModule + StartTurnDto v2 union 校验。
 - [ ] app @mention 的 composer 输入能力。
 - [x] 分支图节点显示轮数：后端新增 `POST /api/threads/turn-counts`，通过实验性 `thread/turns/list` + `itemsView: notLoaded` 分页计数，不 resume；单节点失败返回 unknown，不阻塞图或删除预览。
@@ -280,9 +280,17 @@
 - [x] 删除 mutation 四态（`use-thread-deletion.spec.tsx`）：`completed` 导航到 `resolveSurvivor` 选中的版本、无幸存者时回空态、把服务端返回的树写进幸存成员的缓存而不写被删成员；`conflict` 一个都没删所以不挪动用户；`partial` 有树只失效 removed，无树则连同 planned/remaining 一起兜底刷新。
 - [x] 「重开不替换已覆盖页」（`hydrateOpenedThread` 的 `pageIsSubsumed` 分支）：已覆盖页不被最新页顶掉且不吞掉已翻出的更早历史、cursor 不被换成会重复拉取的新值；反向用例确认页中出现未见过的轮次时服务端视图整体取胜。
 - [ ] `GET /api/threads/overview` 的代价是 O(库内会话总数)：实测 154 会话单次全量枚举约 900ms（冷）/400ms（热），带 `cwd`/`searchTerm` 过滤时仍需两次完整枚举。这是「后端统一投影」换取排序正确性的固有成本，不打算退回客户端 join。若真实使用中可感知，下一步是后端加一层短生命周期投影缓存（由 thread/branch/approval 变更失效），而不是继续调前端防抖。
-- [ ] 打开线程只加载最近一页 turns，更早历史需点「加载更早的消息」。这是 metadata-first 的固有取舍（换来打开 47ms / 2.8 KB）。若长会话回看体验不佳，可考虑按滚动位置预取，但需先解决虚拟列表前插的滚动锚定问题。
+- [x] 打开线程只加载最近一页 turns，更早历史需要往前翻。这是 metadata-first 的固有取舍（换来打开 47ms / 2.8 KB）。已改为按滚动位置预取（见下「加载更早」条），前插的滚动锚定问题由 `anchorTo: 'end'` + 稳定 `getItemKey` 解决。
 - [x] diff 面板增强：`@git-diff-view/react` + `@git-diff-view/shiki` GitHub 风格 diff 视图（split/unified 切换、语法高亮、error boundary fallback）。
 - [x] 审批卡片增强：`acceptForSession`、`cancel`、granular permission（exec/network policy amendment）。按钮由服务端 `availableDecisions` 动态控制，legacy fallback 仅 accept/decline。proposed amendments 由服务端提供，不允许自由构造。`FileChangeItem` 同步支持。runtime parser 校验协议数据。
+- [x] issue #18-1 首屏白条：`item/started` 会在首个 delta 之前插入 `content: ''` 的 agent 消息，外壳只看「有没有 item」于是围着空 renderer 画出头像 + 玻璃气泡。新增 `lib/turn-item-display.ts` 穷尽判据，外壳空判定与渲染列表共用；plan/diff 改按渲染器真实条件判断而非字段存在性；挂着审批/输入卡的 item 不被滤掉；此前不可达的 `Thinking...` 占位复活。
+- [x] `turnFailure` 条目可重复插入（既有 store 缺陷，本轮由 `getItemKey` 暴露并修复）：辅助错误水合会为**尚未加载**的旧 turn 追加一条 `turnFailure`，因无处安放而停在时间线末尾；之后加载到该 turn 所在页时会再产生一条同 turnId 的失败条目，于是一条正确就位、一条游离在下方。后果不止是重复渲染——`getItemKey` 的组内序号被重排（原 `turnFailure:<id>:0` 变成 `:1`），前插时缓存行高与末端锚点会落到错误的行上。修法是前插时由 `absorbStrandedFailures` 收编：结构化错误记录（携带 misalignment 细节，分页 turn 自身的 `error` 字段没有）在合并中取胜，页面未报错的游离条目则**移动**到其 turn 之后而非丢弃。刻意**没有**把「仅有失败条目的 turn」计入 `collectKnownTurnIds`——那会让分页跳过该 turn 的对话内容。归属判断取自**本页拉到的 turn id 列表**而非它们产出的条目：items 全部归零、自身 `error` 又为空的 turn（正是结构化记录存在的场景）只会产出一条 `user` 条目甚至什么都不产出，从条目反推会让这条失败永远留在最新回合之下。
+- [x] 「加载更早」改为接近顶部自动加载：原先做成手动按钮是因为前插会顶走正在读的内容，而末端锚定 + 稳定 `getItemKey` 正是消除这一点的机制，理由已不成立。判据（`lib/history-prefetch.ts`）除「接近顶部」外还要求**向上移动**——所有主动滚动写入都只会让 offset 变大或不变，缺了方向判断会让「打开落位 / 回到最新」在短会话上顺手翻出没人要的历史。控件保留，用于内容不足一屏时的入口与加载中状态。
+- [x] issue #18-2/3 跟随与「回到最新」：**根因是版本落后，不是需要自研**。手写的 `shouldAutoScroll` 原理上就拦不住库自己的两处 `scrollTop` 写入（`scrollToIndex` 遗留的 scrollState 最长追目标 5 秒；旧版尺寸补偿判据为「行起点在折叠线之上」，而一整个回合就是一行）。升级 `@tanstack/react-virtual` 3.13.24 → 3.14.11（virtual-core 3.14.0 → 3.17.9）后改用 `anchorTo: 'end'`，删除全部手写滚动；补稳定 `getItemKey`（前插必需，且函数本身须保持引用稳定）；「回到最新」浮动按钮的显隐由实时 DOM 几何驱动；发送/steer 经 `onSubmitted` 显式恢复跟随而非从 timeline 增长推断。
+  - `followOnAppend` 最终**没有**开：它的实现就是调 `scrollToEnd()` → `scrollToIndex()`，等于库自己在每次追加时重新种下那个追 5 秒的 indexed target。追加时的定位改为本项目用一次 `scrollToOffset` 补，仅在条目数增长且此前就在末端时触发。
+  - `paddingStart` 改为常量：按实测高度动态设置会让内容跳两次（控件首次测量、游标耗尽移除控件），而 `paddingStart` 的变化不在库会做位置还原的那类变化里。
+  - 视口/分栏改变滚动容器自身高度时不发滚动事件，需 `ResizeObserver` 单独接住，否则跟随者被静默甩出阈值而按钮不出现。
+- [ ] issue #18-4 桌面端会话预览面板：左侧列表内联内容片段/摘要 + 关键词或时间定位 + 点击直达对应消息位置，仅桌面端。用户明确要求单独排期，本轮不做。注意定位到具体消息与当前分页历史（默认只加载最近一页）存在交互，需先想清楚落位策略。
 
 ### Codex 高级能力
 
