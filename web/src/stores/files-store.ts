@@ -13,14 +13,20 @@ interface FilesState {
   panelOpen: boolean;
   /** Expanded directory paths for tree state. */
   expandedDirs: Set<string>;
-  /** Mtime of currently open file (for conflict detection). */
-  fileMtime: number | null;
+  /**
+   * One-based line to reveal once the selected file loads, or null.
+   *
+   * Transient rather than a property of the open tab: it expresses "go there
+   * now", so it is consumed on arrival. Left standing, a later plain open of
+   * the same file would jump somewhere the user never asked for.
+   */
+  pendingLine: number | null;
 
   setRootDir: (dir: string | null) => void;
-  selectFile: (filePath: string | null) => void;
+  selectFile: (filePath: string | null, line?: number | null) => void;
+  clearPendingLine: () => void;
   setPanelOpen: (open: boolean) => void;
   toggleDirectory: (dirPath: string) => void;
-  setFileMtime: (mtime: number | null) => void;
   navigateUp: () => void;
 }
 
@@ -29,7 +35,7 @@ export const useFilesStore = create<FilesState>((set, get) => ({
   selectedFile: null,
   panelOpen: false,
   expandedDirs: new Set<string>(),
-  fileMtime: null,
+  pendingLine: null,
 
   setRootDir: (dir: string | null) => {
     if (dir === get().rootDir) return;
@@ -37,13 +43,31 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       rootDir: dir,
       selectedFile: null,
       expandedDirs: new Set<string>(),
-      fileMtime: null,
+      // The selection is gone, so a line target for it would only wait to be
+      // applied to whichever file is opened next.
+      pendingLine: null,
     });
   },
 
-  selectFile: (filePath: string | null) => {
-    set({ selectedFile: filePath, panelOpen: filePath !== null, fileMtime: null });
+  /**
+   * Selects a file, optionally targeting a line.
+   *
+   * Callers that pass no line clear any standing target rather than inheriting
+   * one: a file-tree click or a plain mention means "show me this file", not
+   * "show me where the previous request pointed".
+   *
+   * @param filePath - Absolute path to display, or null to clear the selection
+   * @param line - One-based line to reveal once loaded
+   */
+  selectFile: (filePath: string | null, line: number | null = null) => {
+    set({
+      selectedFile: filePath,
+      panelOpen: filePath !== null,
+      pendingLine: filePath === null ? null : line,
+    });
   },
+
+  clearPendingLine: () => set({ pendingLine: null }),
 
   setPanelOpen: (open: boolean) => set({ panelOpen: open }),
 
@@ -58,8 +82,6 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       return { expandedDirs: next };
     });
   },
-
-  setFileMtime: (mtime: number | null) => set({ fileMtime: mtime }),
 
   navigateUp: () => {
     const { rootDir } = get();

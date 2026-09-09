@@ -2,8 +2,7 @@
  * File viewer shell — shows file path header and delegates content to the
  * appropriate viewer (Monaco for code/text, ImageViewer for images, etc.).
  */
-import { useEffect } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { filesGetMetadataOptions } from '@/generated/api/@tanstack/react-query.gen';
@@ -14,20 +13,16 @@ import { FileContentViewer } from './viewers';
 export function FileViewer() {
   const { t } = useTranslation();
   const selectedFile = useFilesStore((s) => s.selectedFile);
-  const setFileMtime = useFilesStore((s) => s.setFileMtime);
 
-  const { data: metadata, isLoading } = useQuery({
+  // Metadata drives the header and the viewer's loading state only. The write
+  // precondition deliberately does not come from here: this query refreshes on
+  // its own schedule, independently of the content query, so a modification
+  // time taken from it can end up describing a revision the editor never held.
+  // `filesReadFile` returns the time paired with the body it read.
+  const { isLoading } = useQuery({
     ...filesGetMetadataOptions({ query: { path: selectedFile! } }),
     enabled: !!selectedFile,
-    placeholderData: keepPreviousData,
   });
-
-  // Track mtime for conflict detection (used by CodeViewer)
-  useEffect(() => {
-    if (metadata?.mtime != null) {
-      setFileMtime(metadata.mtime);
-    }
-  }, [metadata?.mtime, setFileMtime]);
 
   if (!selectedFile) {
     return (

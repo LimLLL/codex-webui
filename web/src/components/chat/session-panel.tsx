@@ -19,8 +19,10 @@ interface Props {
   threadId: string;
   cwd: string;
   onClose: () => void;
-  /** File path to open (from @mention or image badge click). */
+  /** File path to open (from a mention, image badge or agent file reference). */
   openFile?: string | null;
+  /** One-based line to reveal once that file loads, when the request named one. */
+  openFileLine?: number | null;
   /** Monotonic sequence number — ensures re-clicking the same file triggers a new open. */
   openFileSeq?: number;
   /** Called after the file has been opened in a tab. */
@@ -40,13 +42,22 @@ function terminalIdFromTab(tab: string): string | null {
   return tab.startsWith('terminal:') ? tab.slice('terminal:'.length) : null;
 }
 
-export function SessionPanel({ threadId, cwd, onClose, openFile, openFileSeq, onFileOpened }: Props) {
+export function SessionPanel({
+  threadId,
+  cwd,
+  onClose,
+  openFile,
+  openFileLine,
+  openFileSeq,
+  onFileOpened,
+}: Props) {
   const { t } = useTranslation();
   useTerminalSocketEvents();
   const contextKey = `thread:${threadId}`;
   const [activeTab, setActiveTab] = useState<string>('terminal');
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]);
   const selectFile = useFilesStore((s) => s.selectFile);
+  const clearPendingLine = useFilesStore((s) => s.clearPendingLine);
   const terminalContext = useTerminalStore((s) => s.contexts[contextKey]);
   const ensureContext = useTerminalStore((s) => s.ensureContext);
   const selectTerminal = useTerminalStore((s) => s.selectTerminal);
@@ -66,6 +77,27 @@ export function SessionPanel({ threadId, cwd, onClose, openFile, openFileSeq, on
     void ensureContext(contextKey, cwd, true);
   }, [contextKey, cwd, ensureContext]);
 
+  // Tracks which open request has already been applied, so an unrelated render
+  // cannot reopen the same one.
+  const lastProcessedSeqRef = useRef(-1);
+
+  // A line target only means anything while this panel is showing the file it
+  // was raised for. Closing the panel, or moving to another conversation,
+  // leaves it with nothing to apply to — and left standing it would jump
+  // whichever file is opened next.
+  //
+  // The "already applied" marker is reset alongside it. The two describe one
+  // fact, and clearing the target while claiming the request was handled
+  // strands it: under an effect replay the target is cleared and then never
+  // reinstalled, so the first open silently loses its jump.
+  useEffect(
+    () => () => {
+      lastProcessedSeqRef.current = -1;
+      clearPendingLine();
+    },
+    [threadId, clearPendingLine],
+  );
+
   const handleFileClick = useCallback(
     (filePath: string) => {
       const name = filePath.split('/').pop() ?? filePath;
@@ -82,21 +114,25 @@ export function SessionPanel({ threadId, cwd, onClose, openFile, openFileSeq, on
   // Open a file when requested externally (from @mention click, image badge, etc.)
   // Ref-backed seq avoids re-triggering on unrelated renders; useEffect avoids parent
   // state updates during child render.
-  const lastProcessedSeqRef = useRef(-1);
   useEffect(() => {
     if (!openFile || openFileSeq == null || openFileSeq === lastProcessedSeqRef.current) {
       return;
     }
     lastProcessedSeqRef.current = openFileSeq;
     const name = openFile.split('/').pop() ?? openFile;
+    // Tabs stay keyed by path: two references to different lines of one file
+    // are the same tab, not two.
     setFileTabs((prev) => {
       if (prev.some((t) => t.path === openFile)) return prev;
       return [...prev, { path: openFile, name }];
     });
     setActiveTab(openFile);
-    selectFile(openFile);
+    // The line target must reach the store before the request is acknowledged,
+    // or the route clears the request while the viewer still has nothing to
+    // navigate to.
+    selectFile(openFile, openFileLine ?? null);
     onFileOpened?.();
-  }, [openFile, openFileSeq, onFileOpened, selectFile]);
+  }, [openFile, openFileLine, openFileSeq, onFileOpened, selectFile]);
 
   const closeTab = useCallback(
     (path: string) => {

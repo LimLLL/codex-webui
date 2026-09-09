@@ -124,6 +124,15 @@ describe('FilesService', () => {
       expect(result.size).toBe(11);
     });
 
+    it('should return the modification time belonging to the content it read', async () => {
+      // The write precondition has to travel with the body. Sourced separately
+      // it can refresh on its own and vouch for a buffer it never described.
+      const target = path.join(tmpDir, 'hello.txt');
+      const stat = await fs.stat(target);
+      const result = await service.readFile(target);
+      expect(result.mtime).toBe(stat.mtimeMs);
+    });
+
     it('should reject directory path', async () => {
       await expect(service.readFile(tmpDir)).rejects.toThrow(BusinessException);
     });

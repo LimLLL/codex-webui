@@ -25,6 +25,7 @@ import {
   HISTORY_PAGE_SIZE,
   useOpenThread,
 } from '@/hooks/use-thread-open';
+import { OPEN_FILE_EVENT, type OpenFileRequestDetail } from '@/lib/open-file-request';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import {
@@ -42,22 +43,48 @@ export function ThreadView() {
 
   const threadCwd = useTimelineStore((s) => s.threadCwd);
 
-  // Pending file open request from @mention click or image badge click.
-  // Uses { path, seq } so re-clicking the same file still triggers a new open.
+  // Pending file open request from a message mention, image badge or agent
+  // file reference. Uses { path, line, seq } so re-clicking the same file — or
+  // the same file at the same line — still triggers a new open.
   const openSeqRef = useRef(0);
-  const [pendingOpenFile, setPendingOpenFile] = useState<{ path: string; seq: number } | null>(null);
+  const [pendingOpenFile, setPendingOpenFile] = useState<{
+    path: string;
+    line: number | null;
+    seq: number;
+    threadId: string;
+  } | null>(null);
 
-  // Listen for codex-webui:open-file events from chat message badges
+  // Listen for open-file requests raised by chat messages.
   useEffect(() => {
     const handler = (e: Event) => {
-      const path = (e as CustomEvent<{ path: string }>).detail?.path;
-      if (!path) return;
+      const detail = (e as CustomEvent<OpenFileRequestDetail>).detail;
+      if (!detail?.path) return;
+      // A request raised in another conversation must not open here. Opening is
+      // asynchronous, so one raised just before a thread switch can still be in
+      // flight; requests without an origin are legacy callers and are accepted.
+      if (detail.sourceThreadId && detail.sourceThreadId !== threadId) return;
       setSessionPanelOpen(true);
-      setPendingOpenFile({ path, seq: ++openSeqRef.current });
+      setPendingOpenFile({
+        path: detail.path,
+        line: detail.line ?? null,
+        seq: ++openSeqRef.current,
+        threadId,
+      });
     };
-    window.addEventListener('codex-webui:open-file', handler);
-    return () => window.removeEventListener('codex-webui:open-file', handler);
-  }, []);
+    window.addEventListener(OPEN_FILE_EVENT, handler);
+    return () => window.removeEventListener(OPEN_FILE_EVENT, handler);
+  }, [threadId]);
+
+  // An unfulfilled request is scoped to the conversation that raised it: it
+  // names a file in that conversation's directory, so switching away discards
+  // it. Discarded during render rather than merely filtered — filtering alone
+  // would leave it dormant and let it fire again on returning to that
+  // conversation, long after the click that raised it.
+  if (pendingOpenFile && pendingOpenFile.threadId !== threadId) {
+    setPendingOpenFile(null);
+  }
+  const activeOpenFile =
+    pendingOpenFile?.threadId === threadId ? pendingOpenFile : null;
 
   const handleFileOpened = useCallback(() => {
     setPendingOpenFile(null);
@@ -128,8 +155,9 @@ export function ThreadView() {
       threadId={threadId}
       cwd={threadCwd!}
       onClose={() => setSessionPanelOpen(false)}
-      openFile={pendingOpenFile?.path ?? null}
-      openFileSeq={pendingOpenFile?.seq ?? -1}
+      openFile={activeOpenFile?.path ?? null}
+      openFileLine={activeOpenFile?.line ?? null}
+      openFileSeq={activeOpenFile?.seq ?? -1}
       onFileOpened={handleFileOpened}
     />
   ) : null;

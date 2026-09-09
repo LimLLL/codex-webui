@@ -2,10 +2,13 @@
  * File content viewer dispatcher — routes to the appropriate viewer by file type.
  * Office files can be delegated to OnlyOffice when configured.
  */
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { settingsListSettings } from '@/generated/api/sdk.gen';
 import { getFileCategory } from '@/lib/file-category';
+import { useFilesStore } from '@/stores/files-store';
+import { showSnackbar } from '@/stores/snackbar-store';
 import { ArchiveViewer } from './archive-viewer';
 import { AudioViewer } from './audio-viewer';
 import { BinaryViewer } from './binary-viewer';
@@ -32,6 +35,20 @@ export function FileContentViewer({ filePath, source }: Props) {
   const category = getFileCategory(filePath);
   const onlyOfficeUrl = useOnlyOfficeUrl();
   const canUseOnlyOffice = previewSource.kind === 'file' && !!onlyOfficeUrl;
+
+  // Line navigation is the text editor's alone. Deciding that here, where the
+  // viewer is chosen, keeps a competing file-type table out of the markdown
+  // parser — and a line meant for a PDF must not drift into a page number.
+  const honoursLine = category === 'code' && previewSource.kind === 'file';
+  const pendingLine = useFilesStore((s) => s.pendingLine);
+  const clearPendingLine = useFilesStore((s) => s.clearPendingLine);
+  useEffect(() => {
+    if (pendingLine === null || honoursLine) return;
+    // Consumed rather than left standing, so it cannot latch onto whichever
+    // text file the user opens next.
+    clearPendingLine();
+    showSnackbar(t('Line navigation is not available for this file type'), 'info');
+  }, [pendingLine, honoursLine, clearPendingLine, t]);
 
   if ((category === 'docx' || category === 'xlsx' || category === 'pptx') && canUseOnlyOffice) {
     return <OnlyOfficeViewer filePath={filePath} />;

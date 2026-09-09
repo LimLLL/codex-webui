@@ -25,6 +25,16 @@ export class FileReadResponseDto {
 
   @ApiProperty()
   size!: number;
+
+  /**
+   * Modification time captured with this content, as the write precondition.
+   *
+   * Paired with the body deliberately: a time taken from a separate metadata
+   * request can refresh independently of the content and end up vouching for a
+   * buffer it never described.
+   */
+  @ApiProperty()
+  mtime!: number;
 }
 
 /** File write request body. */
