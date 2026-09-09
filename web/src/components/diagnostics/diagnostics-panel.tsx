@@ -4,8 +4,14 @@ import { Download, RefreshCw, Copy } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { logsListLogsOptions } from '@/generated/api/@tanstack/react-query.gen';
-import type { LogEntryDto, LogsListLogsData } from '@/generated/api';
+import type {
+  LogEntryDto,
+  LogsExportResponseDto,
+  LogsListLogsData,
+} from '@/generated/api';
 import { logsExportDiagnostics } from '@/generated/api';
+import { copyTextToClipboard } from '@/lib/clipboard';
+import { showSnackbar } from '@/stores/snackbar-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +28,9 @@ export function DiagnosticsPanel() {
   const [level, setLevel] = useState<'' | LogLevel>('');
   const [source, setSource] = useState('');
   const [offset, setOffset] = useState(0);
+  /** Bundle fetched for a copy the browser then refused; see handleCopyExport. */
+  const [readyBundle, setReadyBundle] = useState<LogsExportResponseDto | null>(null);
+  const [copyPending, setCopyPending] = useState(false);
 
   const query = useQuery(
     logsListLogsOptions({
@@ -48,9 +57,48 @@ export function DiagnosticsPanel() {
     downloadJson(bundle, `codex-webui-diagnostics-${bundle.exportedAt}.json`);
   };
 
+  /**
+   * Copies the diagnostic bundle, retaining it when the copy itself fails.
+   *
+   * Off HTTPS the clipboard write falls back to `execCommand`, which browsers
+   * only honour while the originating click's user activation is still live —
+   * and building the bundle spends real time (it reads the rotated log files
+   * and shells out for the Codex version). Rather than pre-fetching on every
+   * visit, the bundle earned by a failed attempt is kept so the next click can
+   * copy from the click's own call stack, where the activation is guaranteed.
+   *
+   * A retained bundle is a snapshot, so it is surfaced on the button rather
+   * than held invisibly, and Refresh discards it along with the logs on screen.
+   * The button is disabled for the duration: two exports in flight can settle
+   * out of order and let a failed older one reinstate itself over a newer one
+   * that already copied.
+   */
   const handleCopyExport = async () => {
-    const { data: bundle } = await logsExportDiagnostics({ throwOnError: true });
-    await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
+    setCopyPending(true);
+    try {
+      let bundle = readyBundle;
+      if (!bundle) {
+        try {
+          const { data } = await logsExportDiagnostics({ throwOnError: true });
+          bundle = data;
+        } catch {
+          // The API client's error interceptor already reported this; a second
+          // snackbar would only stack the same message on top of itself.
+          return;
+        }
+      }
+
+      try {
+        await copyTextToClipboard(JSON.stringify(bundle, null, 2));
+        setReadyBundle(null);
+        showSnackbar(t('Copied!'), 'success');
+      } catch {
+        setReadyBundle(bundle);
+        showSnackbar(t('Copy failed. Click again to copy.'), 'warning');
+      }
+    } finally {
+      setCopyPending(false);
+    }
   };
 
   return (
@@ -94,15 +142,36 @@ export function DiagnosticsPanel() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void query.refetch()}
-          disabled={query.isFetching}
+          onClick={() => {
+            // Refreshing asks for current diagnostics, so a snapshot held over
+            // from a refused copy would contradict what the panel now shows.
+            setReadyBundle(null);
+            void query.refetch();
+          }}
+          // Also locked during a copy: clearing here cannot undo a copy already
+          // in flight, whose failure would reinstate the snapshot afterwards.
+          disabled={query.isFetching || copyPending}
         >
           <RefreshCw className="h-3.5 w-3.5" />
           {t('Refresh')}
         </Button>
-        <Button variant="outline" size="sm" onClick={() => void handleCopyExport()}>
+        <Button
+          variant="outline"
+          size="sm"
+          // `aria-disabled` rather than `disabled`: a disabled button cannot
+          // hold focus, and the fallback copy path hands focus back to whatever
+          // held it — which would be <body> if this button had been disabled
+          // out from under it, exactly when a refused copy asks for another
+          // click. The handler guards the press instead.
+          aria-disabled={copyPending}
+          className="aria-disabled:opacity-50"
+          onClick={() => {
+            if (copyPending) return;
+            void handleCopyExport();
+          }}
+        >
           <Copy className="h-3.5 w-3.5" />
-          {t('Copy export')}
+          {readyBundle ? t('Copy prepared export') : t('Copy export')}
         </Button>
         <Button size="sm" onClick={() => void handleExport()}>
           <Download className="h-3.5 w-3.5" />

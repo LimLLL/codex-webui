@@ -12,6 +12,7 @@ import { Copy, Check, FileText } from 'lucide-react';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { parseFileReference, type FileReference } from '@/lib/file-references';
 import {
   remarkFileReferences,
@@ -171,7 +172,7 @@ function CodeBlock({
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(children);
+      await copyTextToClipboard(children);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -181,12 +182,12 @@ function CodeBlock({
 
   return (
     <div className="group relative my-3 overflow-hidden rounded-lg border border-border/50 bg-[#0d1117]">
-      <div className="flex items-center justify-between border-b border-border/30 px-3 py-1">
-        <span className="text-xs text-muted-foreground">{lang || t('Code')}</span>
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-1">
+        <span className="text-xs text-gray-400">{lang || t('Code')}</span>
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-400 opacity-0 transition-opacity hover:text-gray-100 group-hover:opacity-100"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? t('Copied!') : t('Copy')}
@@ -198,7 +199,7 @@ function CodeBlock({
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className="m-0 overflow-auto p-3 text-sm leading-relaxed text-muted-foreground">
+        <pre className="m-0 overflow-auto p-3 text-sm leading-relaxed text-gray-300">
           <code>{children}</code>
         </pre>
       )}

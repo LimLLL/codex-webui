@@ -211,6 +211,8 @@ composer 高度随 textarea、附件 chips、goal 行、只读横幅变化，无
 
 `react-markdown` + `remark-gfm` + Shiki 语法高亮（懒加载，缓存）。agent 消息使用 `MarkdownRenderer` 组件，用户消息使用 `UserMessageBubble` 内的独立 Markdown 实例（含 remark-mentions 插件）。
 
+**代码块不跟随主题。** 容器底色写死 `#0d1117`，Shiki 以 `defaultColor: 'dark'` 输出内联色，且项目没有任何激活 `--shiki-light` 的 CSS —— 所以浅色主题下高亮内容仍是深色配色。据此，块内元素（语言标签、复制按钮、无高亮时的 `<pre>`、分隔线）必须用固定浅色而非 `text-muted-foreground` 等语义 token，否则浅色主题下它们会变成深灰贴在深色底上，几乎不可见。
+
 ### 生产构建注意
 
 Vite `cssTarget: ['chrome100', 'safari16', 'firefox100']`：防止 CSS minifier 将 `backdrop-filter` 剥离为仅 `-webkit-backdrop-filter`（后者在部分浏览器无法正确解析 `blur() saturate()` 组合值，导致玻璃态效果丢失）。
@@ -247,6 +249,28 @@ ChatInput 内两个同级 popover，共用 `use-active-model` 解析「下一轮
 ## 全局 Snackbar
 
 `showSnackbar(msg, severity?)` 任意位置可调。API 错误自动弹出（跳过 401/AbortError/silent）。
+
+## 复制到剪贴板
+
+一律走 `lib/clipboard.ts` 的 `copyTextToClipboard()`，不要直接调 `navigator.clipboard`。
+
+**Clipboard API 只在安全上下文可用**（HTTPS 或 localhost）。本项目常见的部署形态是 Docker + 局域网 HTTP 直连，此时 `navigator.clipboard` 为 `undefined`，直接调用必然失败。helper 在此回退到隐藏 `<textarea>` + `document.execCommand('copy')`，并在复制未成功时抛错（调用方各自弹 snackbar，不静默）。回退时会先记下当前焦点元素与选区的 anchor/focus 端点，复制后原样交还——不还的话焦点会掉到 `<body>`，而"复制失败请再点一次"恰恰要求键盘用户还能回到那个按钮；用 anchor/focus 而非单个 range 是为了不把反向选区翻成正向。
+
+**降级路径依赖点击授权，因此有调用时机约束。** 浏览器只在发起点击的 user activation 仍然有效时才执行 `execCommand('copy')`（Chrome 有约 5 秒的时效窗口，Safari 要求同一调用栈）。helper 把「API 不可用」这条回退路径整个放在自身第一个 `await` 之前，以留在调用方的调用栈内；但**调用方若先 `await` 一个网络请求再复制，这份授权可能已经耗尽**。
+
+注意两点不要误读：安全上下文只保证 API **可用**，不等于**无条件许可**——Safari 与 Firefox 对 Clipboard API 写入同样要求 activation；以及 `writeText()` 被拒后的那次回退**必然**发生在 await 之后，只能算尽力而为。
+
+因此约定：调用前把待复制内容准备好。做不到时参考两处既有形态：
+
+- **`DiagnosticsPanel`**：导出包要读轮转日志并 spawn `codex --version`，耗时不可控。复制失败时**保留已取到的包**，第二次点击直接在点击自身的调用栈里复制。保留态在按钮文案上显式可见（「复制已就绪的导出」），Refresh 会连同屏上日志一起丢弃它——否则用户会拿到与当前视图不符的旧快照。
+
+  两个并发点击的结果可能乱序落地：后发的复制成功并清空，先发的随后失败又把更旧的包写回。因此整个 handler 期间复制按钮不可再按，**Refresh 同样锁定**——Refresh 清不掉一个尚未被写回的包，只会被随后失败的那次复制复活。
+
+  这里用 `aria-disabled` 而非原生 `disabled`：**原生 disabled 的按钮无法持有焦点**，一旦在点击后被禁用，焦点就掉到 `<body>`，helper 事后"交还焦点"只会把焦点交还给 body——恰好在提示用户"请再点一次"的时刻让键盘用户够不着那个按钮。按下的拦截改由 handler 自己守卫。
+
+- **`McpsTab`**：弹窗被拦截时**不复制**，直接把授权 URL 留在界面上给出「打开授权页」链接——用户亲自点击的导航根本不需要剪贴板，旁边的「复制链接」按钮才走 helper，且由用户点击直接触发。原先在此自动复制，一旦失败 URL 就丢了，再点 Login 只会重复同一次失败。
+
+  该 URL 必须在**服务端报告已登录**时释放：行组件按 server name 复用、生命周期长于任何一次登录尝试，不释放的话下一次登出会让这条陈旧链接重新出现，指向一个没人发起过的授权流程。复制或打开链接都不构成登录完成的证据，不能据此清除。
 
 ## i18n
 
