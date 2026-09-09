@@ -5,6 +5,8 @@ import { useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  Copy,
+  ExternalLink,
   Loader2,
   LogIn,
   RefreshCw,
@@ -136,14 +138,34 @@ interface McpRow {
 function McpServerRow({ row }: { row: McpRow }) {
   const { t } = useTranslation();
   const [loggingIn, setLoggingIn] = useState(false);
+  /** Authorization URL the popup blocker kept us from opening; see below. */
+  const [blockedAuthUrl, setBlockedAuthUrl] = useState<string | null>(null);
 
   const StatusIcon =
     row.status === 'failed' ? AlertCircle :
     row.status === 'starting' ? Loader2 :
     CheckCircle2;
 
+  const needsLogin = row.authStatus === 'notLoggedIn';
+
+  // The row is keyed by server name and outlives any one login attempt, so a
+  // retained URL has to be released when authentication actually succeeds.
+  // Otherwise a later logout re-reveals the stale link, which points at a flow
+  // nobody started. Copying or opening the link proves nothing on its own —
+  // only the server reporting itself logged in does.
+  //
+  // Adjusted during render rather than in an effect: the release is derived
+  // from a prop transition, and an effect would paint the stale link once
+  // before clearing it.
+  const [loginWasNeeded, setLoginWasNeeded] = useState(needsLogin);
+  if (loginWasNeeded !== needsLogin) {
+    setLoginWasNeeded(needsLogin);
+    if (!needsLogin) setBlockedAuthUrl(null);
+  }
+
   const handleOauthLogin = async () => {
     setLoggingIn(true);
+    setBlockedAuthUrl(null);
     // Open blank tab synchronously to avoid popup blocker
     const loginTab = window.open('about:blank', '_blank');
 
@@ -157,9 +179,14 @@ function McpServerRow({ row }: { row: McpRow }) {
         loginTab.opener = null;
         loginTab.location.href = data.authorizationUrl;
       } else if (data?.authorizationUrl) {
-        // Popup was blocked — copy to clipboard as fallback
-        await copyTextToClipboard(data.authorizationUrl);
-        showSnackbar(t('Popup blocked. Auth URL copied to clipboard.'), 'warning');
+        // Popup blocked. Surface the URL for the user to act on rather than
+        // copying it here: off HTTPS the clipboard falls back to a command
+        // that needs the click's user activation, which the request above may
+        // already have spent — and a copy that failed used to discard the URL
+        // outright, leaving Login as the only recourse and failing the same
+        // way again. A link the user activates needs no clipboard at all.
+        setBlockedAuthUrl(data.authorizationUrl);
+        showSnackbar(t('Popup blocked. Use the authorization link below.'), 'warning');
       }
     } catch (err) {
       loginTab?.close();
@@ -169,7 +196,16 @@ function McpServerRow({ row }: { row: McpRow }) {
     }
   };
 
-  const needsLogin = row.authStatus === 'notLoggedIn';
+  /** Copies the retained URL from the user's own click, where activation holds. */
+  const handleCopyAuthUrl = async () => {
+    if (!blockedAuthUrl) return;
+    try {
+      await copyTextToClipboard(blockedAuthUrl);
+      showSnackbar(t('Copied!'), 'success');
+    } catch {
+      showSnackbar(t('Copy failed'), 'error');
+    }
+  };
 
   return (
     <div className="rounded-lg border border-border/50 p-3">
@@ -212,6 +248,32 @@ function McpServerRow({ row }: { row: McpRow }) {
             {loggingIn ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
             {t('Login')}
           </Button>
+
+          {blockedAuthUrl && (
+            <div className="mt-2 space-y-1.5 rounded-md border border-border/50 bg-muted/40 p-2">
+              <p className="text-xs text-muted-foreground">
+                {t('Your browser blocked the login tab. Open the authorization page yourself:')}
+              </p>
+              <p className="break-all font-mono text-[11px] text-foreground">{blockedAuthUrl}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" asChild>
+                  <a href={blockedAuthUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink className="h-3 w-3" />
+                    {t('Open authorization page')}
+                  </a>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1 text-xs"
+                  onClick={() => void handleCopyAuthUrl()}
+                >
+                  <Copy className="h-3 w-3" />
+                  {t('Copy link')}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
