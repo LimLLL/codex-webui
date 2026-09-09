@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { logsListLogsOptions } from '@/generated/api/@tanstack/react-query.gen';
 import type { LogEntryDto, LogsListLogsData } from '@/generated/api';
 import { logsExportDiagnostics } from '@/generated/api';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,7 +51,7 @@ export function DiagnosticsPanel() {
 
   const handleCopyExport = async () => {
     const { data: bundle } = await logsExportDiagnostics({ throwOnError: true });
-    await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
+    await copyTextToClipboard(JSON.stringify(bundle, null, 2));
   };
 
   return (

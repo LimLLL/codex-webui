@@ -27,6 +27,7 @@ import { useMcpStore, type McpServerRuntimeStatus } from '@/stores/mcp-store';
 import { cn } from '@/lib/utils';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { copyTextToClipboard } from '@/lib/clipboard';
 
 export function McpsTab() {
   const { t } = useTranslation();
@@ -157,7 +158,7 @@ function McpServerRow({ row }: { row: McpRow }) {
         loginTab.location.href = data.authorizationUrl;
       } else if (data?.authorizationUrl) {
         // Popup was blocked — copy to clipboard as fallback
-        await navigator.clipboard.writeText(data.authorizationUrl);
+        await copyTextToClipboard(data.authorizationUrl);
         showSnackbar(t('Popup blocked. Auth URL copied to clipboard.'), 'warning');
       }
     } catch (err) {
