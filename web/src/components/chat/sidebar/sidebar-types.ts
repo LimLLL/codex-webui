@@ -6,7 +6,19 @@ import type { ThreadDto } from '@/generated/api';
 export type { SidebarViewState as SidebarView } from '@/stores/layout-store';
 
 export type ConfirmAction =
-  | { type: 'archive'; thread: ThreadDto }
+  | {
+      type: 'archive';
+      thread: ThreadDto;
+      /**
+       * Branch members captured when the action was raised.
+       *
+       * Archival applies to the whole tree, but the row that names that tree can
+       * disappear before the user confirms — a refetch or leaving the view drops
+       * it. Carrying membership with the pending action keeps cleanup and
+       * neighbour selection working off what was actually archived.
+       */
+      memberThreadIds: readonly string[];
+    }
   | { type: 'compact'; thread: ThreadDto }
   | null;
 

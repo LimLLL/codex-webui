@@ -21,7 +21,7 @@ import {
   threadsUnarchiveThreadMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { ThreadDto } from '@/generated/api';
-import type { ThreadOverviewRowDto } from '@/generated/api/types.gen';
+import { selectSidebarRows } from '@/lib/sidebar-rows';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useLayoutStore } from '@/stores/layout-store';
 import { cn } from '@/lib/utils';
@@ -105,15 +105,31 @@ export function ThreadSidebar() {
   // first was rendered, so a single delete visibly reshuffled the list twice.
   // Debouncing could not fix that: it coalesces repeats of one query, not the
   // gap between two.
+  //
+  // The two home-view queries are gated on the home view actually being shown.
+  // Overview and detail replace one another in the tree below, but these ran
+  // unconditionally, so sitting in a workspace kept refetching two projections
+  // nothing was rendering. The backend now serves warm requests from a shared
+  // metadata collection, so this no longer enumerates the stored list per
+  // request — but each projection still collapses whole branch trees, and a
+  // refetch nothing renders is still work spent on a view that is not on screen.
+  //
+  // Gating is safe for painting — TanStack Query keeps the last data for a
+  // disabled query, so returning to the home view paints immediately and
+  // refetches in the background. That retained data must not be read as though
+  // it were current: see `displayedRows` below.
+  const isHomeView = sidebarView.type === 'overview';
   const overviewThreadsQuery = useQuery({
     ...threadsListOverviewOptions({
       query: { archived: false, limit: 100, sortKey: 'updated_at' },
     }),
+    enabled: isHomeView,
   });
   const overviewArchivedQuery = useQuery({
     ...threadsListOverviewOptions({
       query: { archived: true, limit: 5, sortKey: 'updated_at' },
     }),
+    enabled: isHomeView,
   });
   const detailQuery = useQuery({
     ...threadsListOverviewOptions({
@@ -145,29 +161,11 @@ export function ThreadSidebar() {
     }),
     [overviewThreadsQuery.data, overviewArchivedQuery.data, detailQuery.data],
   );
-  const rowByThreadId = useMemo(() => {
-    const index = new Map<string, ThreadOverviewRowDto>();
-    for (const row of [
-      ...rowsByView.active,
-      ...rowsByView.archived,
-      ...rowsByView.detail,
-    ]) {
-      index.set(row.thread.id, row);
-    }
-    return index;
-  }, [rowsByView]);
-
-  // Every hidden member maps to the row that stands for it, so a deep link to a
-  // branch still lights up the row the user can see.
-  const displayThreadIdByMember = useMemo(() => {
-    const index = new Map<string, string>();
-    for (const row of rowByThreadId.values()) {
-      for (const memberId of row.memberThreadIds) {
-        index.set(memberId, row.thread.id);
-      }
-    }
-    return index;
-  }, [rowByThreadId]);
+  // Which views may contribute, and why, is enforced in `selectSidebarRows`.
+  const { rowByThreadId, displayThreadIdByMember, visibleThreads } = useMemo(
+    () => selectSidebarRows(rowsByView, isHomeView),
+    [rowsByView, isHomeView],
+  );
 
   const activeThreads = useMemo(
     () => rowsByView.active.map((row) => row.thread),
@@ -240,11 +238,9 @@ export function ThreadSidebar() {
    * "am I on the row that was archived" — the user may be sitting on a branch
    * that has no row of its own.
    */
-  const switchAfterArchive = (archivedId: string) => {
+  const switchAfterArchive = (archivedId: string, memberThreadIds: readonly string[]) => {
     const current = useTimelineStore.getState();
-    const archivedTree = new Set(
-      rowByThreadId.get(archivedId)?.memberThreadIds ?? [archivedId],
-    );
+    const archivedTree = new Set(memberThreadIds);
     if (
       !current.threadId ||
       !archivedTree.has(current.threadId) ||
@@ -252,10 +248,10 @@ export function ThreadSidebar() {
     ) {
       return;
     }
-    const idx = activeThreads.findIndex((th) => th.id === archivedId);
+    const idx = visibleThreads.findIndex((th) => th.id === archivedId);
     const next =
-      activeThreads.slice(idx + 1).find((th) => !archivedTree.has(th.id)) ??
-      activeThreads.slice(0, idx).find((th) => !archivedTree.has(th.id));
+      visibleThreads.slice(idx + 1).find((th) => !archivedTree.has(th.id)) ??
+      visibleThreads.slice(0, idx).find((th) => !archivedTree.has(th.id));
     if (next) openLiveThread(next);
     else { clearThread(); void navigate({ to: '/' }); }
   };
@@ -273,12 +269,19 @@ export function ThreadSidebar() {
 
   const archiveThread = useMutation({
     ...threadsArchiveThreadMutation(),
-    onSuccess: (_res, vars) => {
-      const treeIds = rowByThreadId.get(vars.path.threadId)?.memberThreadIds ?? [
-        vars.path.threadId,
-      ];
+    // Carry the confirmation's membership into this mutation's context. A
+    // refetch can remove the row while the dialog or the HTTP request is open.
+    onMutate: (vars) => {
+      const pending =
+        confirmAction?.type === 'archive' ? confirmAction.memberThreadIds : null;
+      const treeIds = [...(pending ?? [vars.path.threadId])];
+      setConfirmAction(null);
+      return { treeIds };
+    },
+    onSuccess: (_res, vars, context) => {
+      const treeIds = context!.treeIds;
       for (const id of treeIds) useTimelineStore.getState().unsubscribeThread(id);
-      switchAfterArchive(vars.path.threadId);
+      switchAfterArchive(vars.path.threadId, treeIds);
     },
     // Whole-tree archival can fail partway through, leaving some members
     // archived; the list is stale either way, so refresh on settled.
@@ -359,7 +362,11 @@ export function ThreadSidebar() {
   };
   const confirmCurrentAction = () => {
     if (!confirmAction) return;
-    if (confirmAction.type === 'archive') archiveThread.mutate({ path: { threadId: confirmAction.thread.id } });
+    if (confirmAction.type === 'archive') {
+      archiveThread.mutate({ path: { threadId: confirmAction.thread.id } });
+      // onMutate transfers the pending action before dismissing its dialog.
+      return;
+    }
     if (confirmAction.type === 'compact') compactThread.mutate({ path: { threadId: confirmAction.thread.id } });
     setConfirmAction(null);
   };
@@ -422,7 +429,7 @@ export function ThreadSidebar() {
         hasBranchDescendants={Boolean(row?.hasBranchDescendants)}
         onOpen={() => { if (archived) void openArchivedThread(thread); else openLiveThread(thread); }}
         onRename={() => startRename(thread)}
-        onArchive={() => setConfirmAction({ type: 'archive', thread })}
+        onArchive={() => setConfirmAction({ type: 'archive', thread, memberThreadIds: [...(row?.memberThreadIds ?? [thread.id])] })}
         onUnarchive={() => unarchiveThread.mutate({ path: { threadId: thread.id } })}
         onCompact={() => setConfirmAction({ type: 'compact', thread })}
         onFork={() => void fork.requestFork(thread.id)}
