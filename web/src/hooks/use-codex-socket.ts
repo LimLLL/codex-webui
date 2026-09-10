@@ -34,14 +34,51 @@ export function useCodexSocket(enabled = true) {
 
     const socket = getSocket();
 
+    /**
+     * Re-reads the open thread after a delivery gap.
+     *
+     * Socket.IO only delivers events emitted while connected; a suspended tab
+     * or a dropped socket therefore misses every notification in between and
+     * the transcript stays frozen at its last snapshot. Resubscribing restores
+     * future events but never back-fills the gap, so the open thread has to be
+     * re-read from the server. `recordActive: false` keeps the active-branch
+     * pointer naming what the user last chose.
+     */
+    let resyncing = false;
+    const resyncSelectedThread = () => {
+      const store = useTimelineStore.getState();
+      const threadId = store.threadId;
+      if (!threadId || resyncing) return;
+      if (!store.getThreadRuntime(threadId)?.hydrated) return;
+
+      resyncing = true;
+      void threadsResumeThread({
+        path: { threadId },
+        query: { recordActive: false },
+      })
+        .then(({ data }) => {
+          if (data) applyOpenResponse(data);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          resyncing = false;
+        });
+    };
+
     const handleConnect = () => {
       setConnected(true);
       useTimelineStore.getState().resubscribeAll();
+      resyncSelectedThread();
     };
     const handleDisconnect = () => setConnected(false);
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') resyncSelectedThread();
+    };
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const ctx: NotificationContext = {
       threadId: null,
@@ -262,6 +299,7 @@ export function useCodexSocket(enabled = true) {
     return () => {
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       socket.off('codex.notification', handleCodexNotification);
       socket.off('codex.lifecycle', handleCodexLifecycle);
       socket.off('codex.serverRequest', handleCodexServerRequest);
