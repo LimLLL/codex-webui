@@ -157,13 +157,14 @@ function TokenBreakdown({
   t: (key: string) => string;
 }) {
   const { last, total, modelContextWindow } = usage;
+  const hasWindow = modelContextWindow != null && modelContextWindow > 0;
   return (
     <div className="space-y-1 text-xs">
       <div className="font-medium">{t('Context Usage')}</div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
         <span className="text-muted-foreground">{t('Context')}</span>
         <span>{formatTokens(last.inputTokens)}</span>
-        {modelContextWindow != null && modelContextWindow > 0 && (
+        {hasWindow && (
           <>
             <span className="text-muted-foreground">{t('Window')}</span>
             <span>{formatTokens(modelContextWindow)}</span>
@@ -172,6 +173,21 @@ function TokenBreakdown({
         <span className="mt-1 text-muted-foreground">{t('Thread Total')}</span>
         <span className="mt-1 font-medium">{formatTokens(total.totalTokens)}</span>
       </div>
+      {/*
+        The window is whatever app-server reports, and it routinely differs from
+        `model_context_window` in config.toml: Codex clamps that setting to the
+        model's `max_context_window` and then reserves headroom. Saying so here
+        is cheaper than letting every user rediscover it. The auto-compaction
+        threshold is deliberately not shown — the protocol does not expose it,
+        and re-deriving it client-side would silently drift from upstream.
+      */}
+      {hasWindow && (
+        <p className="max-w-[15rem] pt-1 text-[10px] leading-snug text-muted-foreground">
+          {t(
+            'Effective window reported by Codex. It can be smaller than model_context_window in config.toml, which is capped by the model.',
+          )}
+        </p>
+      )}
     </div>
   );
 }

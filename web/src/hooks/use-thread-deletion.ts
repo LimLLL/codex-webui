@@ -20,6 +20,7 @@ import {
 } from '@/lib/query-invalidation';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
+import { forgetThreadPolicy } from '@/stores/thread-policy-store';
 
 /**
  * Reads the exact cascade a delete would perform.
@@ -183,6 +184,10 @@ export function useDeleteThread({
         }
       }
 
+      // Not left to the `thread/deleted` notification: that arrives only if the
+      // socket is up, and the observation plus its confirmation timer would
+      // otherwise survive the conversation that owned them.
+      for (const threadId of removed) forgetThreadPolicy(threadId);
       useTimelineStore.getState().forgetThreads([...removed]);
 
       // Write the server's own post-delete view of the tree straight into the

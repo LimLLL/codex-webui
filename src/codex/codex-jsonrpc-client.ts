@@ -38,6 +38,7 @@ import type {
   ServerRequest,
 } from './codex-schema';
 import { CodexRpcError } from './codex-errors';
+import { CodexAcceptedWork } from './codex-accepted-work';
 
 /** Wire-level JSON-RPC message (jsonrpc field omitted per Codex protocol). */
 interface JsonRpcRequest {
@@ -61,6 +62,7 @@ type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
 interface PendingRequest {
   method: string;
+  params: unknown;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -84,6 +86,8 @@ function createJsonlStream(): WriteStream {
 }
 
 export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
+  /** Generation-local work ledger, populated only by this connection's outgoing requests. */
+  readonly acceptedWork = new CodexAcceptedWork();
   private readonly logger = new Logger(CodexJsonRpcClient.name);
   private nextId = 1;
   private readonly pending = new Map<RequestId, PendingRequest>();
@@ -133,6 +137,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
 
     const id = this.nextId++;
     const message: JsonRpcRequest = { method, id, params };
+    this.acceptedWork.dispatch(id, method, params);
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -142,13 +147,21 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
 
       this.pending.set(id, {
         method,
+        params,
         resolve: resolve,
         reject,
         timer,
       });
 
-      this.writeJsonl('out', message);
-      this.send(message);
+      try {
+        this.writeJsonl('out', message);
+        this.send(message);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        // A transport exception cannot establish that none of the request reached Core.
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -240,6 +253,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
     });
 
     this.process.on('close', (code, signal) => {
+      this.acceptedWork.processExited();
       this.closed = true;
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timer);
@@ -278,6 +292,15 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
     if ('id' in message && ('result' in message || 'error' in message)) {
       const response = message;
       const pending = this.pending.get(response.id);
+      // Handle even late responses after timeout, before exposing a result to callers.
+      if (response.error) {
+        if (response.error.code === -32600 || response.error.code === -32602)
+          this.acceptedWork.refused(response.id);
+      } else {
+        this.acceptedWork.response(response.id, response.result);
+        if (pending?.method === 'thread/queue/delete')
+          this.acceptedWork.queueDeleted(pending.params, response.result);
+      }
       if (!pending) return;
 
       this.pending.delete(response.id);
@@ -304,6 +327,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
 
     // Server notification (has method, no id)
     if ('method' in message && !('id' in message)) {
+      this.acceptedWork.notification(message.method, message.params);
       this.emit('notification', message as unknown as ServerNotification);
       return;
     }

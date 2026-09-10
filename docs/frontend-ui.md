@@ -100,14 +100,87 @@ Mobile/Tablet (< lg):
 
 `ChatTimeline` 使用 `@tanstack/react-virtual`：
 - `useVirtualizer` + `measureElement` 动态高度
-- Smart auto-scroll：流式输出跟随底部，上翻不打断
 - `overscan: 5`，TurnBlock 使用 plain `div`（不用 Framer Motion 避免 recycling 重动画）
 
-### 更早历史：显式按钮，不做无限滚动
+### 跟随与「回到最新」：末端锚定负责保持，追加由本项目补一次定位
 
-打开线程只取最近一页 turns，更早的历史需要往前翻。正常打开与 resume 失败后的归档/不可恢复只读降级都遵守这一规则；降级路径不会在服务端聚合全部页面。列表顶部给一个「加载更早的消息」按钮，而不是滚动到顶自动加载 —— 更早的内容是**向上插入**的，而虚拟列表用的是估算行高，自动前插会让用户正在读的内容位移。做成按钮至少保证这个位移是用户主动触发的。
+| 选项 | 作用 |
+|---|---|
+| `anchorTo: 'end'` | 以末端为保持不变的边。前插历史时保住阅读位置；流式回合在**折叠线以下**长高时不移动视口；本就在末端时，行长高会同步补偿 `scrollTop`——**跟随流式输出靠的就是这一条** |
+| `scrollEndThreshold` | 「算作在末端」的容差（`AT_END_THRESHOLD_PX`），与「回到最新」按钮的显隐共用同一个阈值，避免按钮在仍在跟随时出现 |
+| `getItemKey` | 稳定行标识，见下 |
+| `paddingStart` | 「加载更早」控件的预留空间，**常量**，见下 |
 
-`historyCursor` 为 null 时按钮不渲染（历史已完整）。
+这一段曾经是手写的：一个 `shouldAutoScroll` 布尔量 + 每次 timeline 变化都 `scrollToIndex(last)`（追加时 `smooth`，其余 `auto`）。它**在原理上就不可能正确**——虚拟列表自己也会写 `scrollTop`，组件里的布尔量只能拦住*我们自己*的滚动：
+
+- `scrollToIndex` 留下的 `scrollState` 会在 rAF 里持续重算目标、最长 5 秒（`MAX_RECONCILE_MS`）。流式期间最后一行每帧变高 ⇒ 目标每帧变化 ⇒ 每帧强制回底。
+- 行高变化时的补偿。旧版判据是「行起点在折叠线之上」，而一整个回合就是一行，读到中段时下方新增的输出照样触发。
+
+升级到 `virtual-core` 3.17.9 后，**第二条**由上游修掉：重新测量的判据改成「整行都在折叠线之上**且**不在向上滚动」（对应上游 issue #1218）；注意首次测量走的是另一条分支，仍按「行起点在折叠线之上」补偿——估算到实测的差值必须修正，与滚动方向无关。
+
+**第一条上游没有修，而且不是只有我们自己会踩**：`scrollToEnd()` 在 3.17.9 里仍然委托给 `scrollToIndex(count-1, {align:'end'})`，而 `followOnAppend` 的实现正是调 `scrollToEnd()`（`index.js:507`）。也就是说只要开着 `followOnAppend`，**库自己**会在每次追加条目时种下那个追 5 秒的 indexed target——把自己的调用点全改成 `scrollToOffset` 并不能证明「没有东西在追」。
+
+所以 `followOnAppend` **不开**，追加时的定位由 `use-transcript-follow.ts` 用一次 `scrollToOffset` 完成：
+
+- 只在**条目数增长**时写。流式 delta 只是把某一行改长，`anchorTo: 'end'` 的尺寸补偿已经把末端摁住了，不需要额外的写入。
+- 判据读的是 `atEndRef` 而不是 `atEnd` state。依赖 state 会让「读者从上方滚回阈值内」这件事本身触发 effect，把剩下那几十像素一把抽走——那是同一个拽人 bug 的小尺度版本，还会跟缓慢上滑打架。
+- 必须补这一次的原因：新行以 `estimateSize`（80px）进场，此时距末端正好等于阈值，尺寸补偿只会把这个差值**维持住**而不会消除；不补则下一次追加距离变成 160px、超出阈值，跟随就此彻底断掉。
+
+所有主动滚动都走 `scrollToOffset`——它的 `scrollState.index` 为 `null`，`reconcileScroll` 比对固定的 `lastTargetOffset`，不重算目标，因此既不会追着长高的会话跑，也不会跟已经滚开的读者抢。**不要改回 `scrollToEnd()`，也不要打开 `followOnAppend`。**
+
+已验证的版本组合是 `@tanstack/react-virtual` **3.14.11** / `virtual-core` **3.17.9**；降级会静默退化，同系列其它补丁版未逐一验证。
+
+「回到最新」浮动按钮定位在滚动容器**之外**（`bottom: bottomInset + 12`），所以它的出现不会改变 scroll height。显隐状态由 `use-transcript-follow.ts` 从**实时 DOM 几何**算出，而不是 `virtualizer.isAtEnd()`：React 的 `onScroll` prop 早于虚拟列表注册在同一元素上的监听器执行，此时库缓存的 offset 还是上一次的，用它会让按钮停在错误状态直到下一次滚动。
+
+两个「末端距离」必须同坐标系才能共用一个阈值：库用 `getTotalSize()`，DOM 用 `scrollHeight`。因此滚动容器内**不允许存在虚拟列表没测量的元素**——「加载更早」控件被放进 `paddingStart` 预留的空间里正是为此，否则两者会差出一个控件高度，按钮会在库仍在跟随时就冒出来。
+
+**`paddingStart` 用常量 `HISTORY_HEADER_PX`，且不论控件是否显示都一直预留。** `paddingStart` 会平移每一行的 `start`，但它的变化**不在**库会做位置还原的那类变化里（还原只认条目数与首尾 key 的变化）。所以按实测高度动态设置会让内容在读者眼皮底下跳两次：控件首次测量时跳一次，游标耗尽移除控件时再跳一次。代价是顶部恒定留出一条空白，换来的是这类位移被机制性消除。控件高度因此必须锁死在这个常量内（`whitespace-nowrap` + 固定高度容器）。
+
+按钮**只有一种状态**。issue #18-3 要的是「用户主动上滑后显示查看新消息入口」——这颗按钮本身就是那个入口，只要脱离末端就在。曾经在它上面叠过第二态（判断这期间有没有新输出，有就换文案 + 加圆点），已移除：
+
+- 想判准就必须知道一次 timeline 替换的**来源**。store 的标志位给不出来：`prependHistoryForThread` 在同一次更新里既换掉 timeline 又把 `historyLoading` 清成 false；「有正在运行的 turn」也不行，子 agent 的活动允许在 `turn/completed` 之后才落地。
+- 退而求其次的结构性判断（新旧 timeline 末端对齐倒着比引用）能认出前插，但认不出「用户点开一个旧回合、items 被就地补齐」——那和「输出落进那个回合」完全同形，会误报成有新内容。
+- 要做到零误报得在 store 里加一个只由实时通知递增的计数器（约十处 mutator）。issue 没有要求区分这两态，为一个装饰性状态引入这条数据通路不划算。
+
+发送/steer **不靠推断**：composer 通过 `onSubmitted` 显式上报「真的派发出去了」的发送（被守卫吞掉的提交、被 slash 命令消费的提交都不报），路由计数后经 `scrollToLatestSignal` 传下来恢复跟随。
+
+打开会话的落位是按导航记下的一次性请求：加载态渲染的是**另一个**没有 scroller 的容器，虚拟列表在没有 scroll element 时会跳过末端相关判断，事后挂上也不会补算，所以要等内容与 scroller 都就位后兑现一次。落位与追加跟随同在一个 `useLayoutEffect` 里，顺序因此是确定的——写在各自的 effect 里，会话切换与它请求的落位之间就会有执行顺序依赖。
+
+**两处不发滚动事件的几何变化必须单独接住**，否则跟随者会被静默甩出阈值、而「回到最新」按钮还不出现：
+
+- composer 长高改变了滚动范围但没有移动 `scrollTop`（`bottomInset` 变化时处理）。
+- 视口、分栏或在流式布局中的 composer 会改变**滚动容器自身的高度**，`bottomInset` 完全不变（`ResizeObserver` 只看容器 border-box 高度，内容长高不管——那是虚拟列表的事，在这里响应等于每个 delta 都重新粘底）。
+
+两者都是同一处理：本来在末端就重新粘底，否则只刷新一下报告出来的距离。
+
+### 更早历史：接近顶部自动加载
+
+打开线程只取最近一页 turns，更早的历史需要往前翻。正常打开与 resume 失败后的归档/不可恢复只读降级都遵守这一规则；降级路径不会在服务端聚合全部页面。
+
+这里**曾经**是纯手动按钮，理由是前插会把正在读的内容顶走。末端锚定 + 稳定 `getItemKey` 正是消除这一点的机制（库在数据变化前记住可见条目、变化后按同一 key 找回并修正偏移），所以该理由已不成立，改为滚动到距顶 `PREFETCH_OLDER_PX` 时自动拉取下一页。
+
+判据在 `lib/history-prefetch.ts`，除了「接近顶部」还要求**向上移动**。本客户端所有主动写入——打开落位、回到最新、追加跟随、前插后的锚点还原——都只会让 offset 变大或不变；缺了方向判断，一个能滚但很短的会话会在每一次这类写入上都拉一页，「回到最新」也会顺手把没人要的历史翻出来。
+
+控件保留，承担两件事：会话内容不足一屏、滚不动因而永远触发不了自动加载时的入口；以及加载中状态的显示。`useLoadOlderHistory` 同步读 store 并在 `await` 之前就占住 `historyLoading`，所以一次滚动爆发产生的多次调用会塌缩成一个请求。
+
+`historyCursor` 为 null 时控件不渲染（历史已完整），但预留空间仍在——见上文 `paddingStart` 为何是常量。
+
+行标识必须稳定，否则前插会让缓存行高与末端锚点落到错误的条目上：`getItemKey` 用 `kind + turnId + 组内序号`。序号是必要的——用户消息在 `turn/started` 之前没有 turnId，多条系统消息可以共享一个 turnId。前插不会打乱序号，因为前插进来的都是已持久化的 turn，永远不会落进「尚无 turnId 的实时条目」那一组。
+
+`getItemKey` 这个函数本身也必须稳定：它是虚拟列表测量选项的一部分，每次渲染换一个新函数会重建全部测量——流式期间就是每个 delta 一次。key 数组因此先算成一个 join 后的签名再拆回来，序列没变时数组保持同一引用。**不能**改成读 ref 的可变函数：库靠比较 `prevOptions.getItemKey` 与新的 `getItemKey` 来判断首尾条目是否变了，共用一个可变函数会让这个判断永远返回「没变」。
+
+### 空回合不撑气泡：显示判据
+
+`item/started` 会在任何 delta 到达之前就插入一个 `content: ''` 的 agent 消息。外壳若只看「有没有 item」，就会围着一个什么都不渲染的 renderer 画出头像 + 玻璃气泡——这就是用户报的那条白条。
+
+`lib/turn-item-display.ts` 给出纯函数判据，**外壳的空判定与实际渲染的列表共用同一套**，两者不会再各说各话：
+
+- 只有 `reasoning`（镜像其 `!item.content` 的 null 返回）和 `agentMessage`（正文非空白 **或** 有 questions）是有条件的
+- 其余项从创建那刻起就可见：运行中的命令有命令行与运行指示、在途工具调用有名字与参数、输出卡片会明说「输出为空」
+- 判据对**内部** item union 穷尽：往这个 union 加成员是**编译错误**，而不是日后某个空白气泡。协议侧的未知类型不走这条穷尽——normalizer 先把它们折成 `unknownActivity`，渲染成明确的「不支持的活动」标记
+- 正在跑但暂无可见内容的回合显示已有的 `Thinking...` 占位（该分支此前因为被更早的 `return null` 挡住而实际不可达）；已完成且无可见内容的回合不渲染任何表面
+- 挂着审批卡/用户输入卡的 item **不会**被滤掉——卡片渲染在 item 体旁边，滤掉会把可交互的审批一并带走
+- 回合级的 plan 与 diff 同样按渲染器的真实条件判断（`PlanPanel` 要求 plan 文本或 steps，diff 要求非空串），而不是判断字段是否存在。plan 文本**合并为一处呈现**：流式 delta 与从历史读回的文本是同一段散文，此前分成 explanation 段落与「临时 delta」`<pre>` 两块，会让同一个 plan 在刷新前后长得不一样——而持久化的 plan 恰恰一点也不「临时」
 
 ### 删除进行中的反馈
 
@@ -149,6 +222,31 @@ Mobile/Tablet (< lg):
 - **GitDiffPanel** (`turn-items/git-diff-panel.tsx`)：封装 DiffView，集中处理 Shiki 懒加载（模块级单例）、theme（从 `useThemeStore` 读取）、Unified/Split 切换、parse 失败 raw fallback（DiffRenderBoundary error boundary）。
 - **file-change-item**：completed 时展开区域用 GitDiffPanel（`showToolbar=false`，因卡片 header 已有文件名）；流式阶段保留 `<pre>` 原始渲染。
 - **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST。蓝色边框(pending) / 灰色(resolved)。
+
+## 审批呈现
+
+命令审批**内联在 command item 内部**，与 fileChange 的既有做法一致；此前它是兄弟卡片，会把同一条命令重画第二遍，策略修正案区块再重画第三遍。
+
+规则不是「审批区绝不显示命令」，而是**只去掉同一动作的重复表示**：
+
+| 情况 | 呈现 |
+|------|------|
+| 与宿主同一动作 | 命令只由 command item 画一次；审批区只加 reason / cwd / 请求的额外权限 / 状态 / 操作 |
+| 子命令或 stdin 写入 | 授权对象与宿主显示的不是同一个东西，审批区显示它自己的那份文本 |
+| 申请了额外沙箱权限 | 显式展示文件系统条目与网络请求 —— 这是 command item 结构上不可能显示的内容 |
+| 纯网络审批 | 协议 + 主机即完整授权对象，协议允许此类请求不带 `command`/`cwd` |
+| 一个宿主多个请求 | 按 requestId 分段，各自独立作用域与操作 |
+| 无同轮宿主 | 保留自包含卡片（`approval-item.tsx`）；跨轮 stdin 回调即属此类 |
+| 已决议 | 收成紧凑状态条。**`resolved` 保持中性**——服务端在 turn 开始/结束/中断的生命周期清理中也会 resolve，不等于用户接受过 |
+
+关键约束：
+
+- 比较用**原始命令**，不用 `stripShellWrapper` 剥壳后的显示形式——后者是为可读性重写过的，拿它判等会把两条不同的命令认成同一条。
+- 待审批时授权文本**强制可见**，不受输出折叠状态影响；不能让人给看不见的命令授权。
+- 策略修正案授权的是**未来**匹配的命令，作用域比当前这一次更宽，因此收在独立的展开区内，但接受按钮之前必须先看到确切提案。
+- 权限缺失 = **未指定**，不等于不受限；`networkEnabled` 为三态，`null` 不渲染成「禁止联网」。
+- 文件系统条目保留访问类型与路径语义（`path` / `glob` / `special`，以及 `deny`），不压平成模糊路径列表。**`special` 在钉住 schema 里是对象联合而非字符串**（`root` / `minimal` / `project_roots`+subpath / `tmpdir` / `slash_tmp` / `unknown`+path），按字符串判断等于把它整类丢掉——而只含一条 special 的权限浮层会因此整体变 null，从卡片上消失。作用域标签本身就是安全信息（`root` 与 `tmpdir` 授权的东西完全不同），因此展示的是它的 scope 而不是「special」这个词。
+- 决议后**不丢上下文**：状态条只替换掉操作按钮，命令、reason、cwd 与权限浮层继续渲染——事后要能看清当时到底授权了什么。
 - **diff-viewer** (turn-level)：按 `diff --git` 分段拆分聚合 diff，每个文件渲染一个 GitDiffPanel（竖排列表，非 tab）。
 - **diff-utils.ts**：`ensureDiffHeaders` 为 Codex 裸 hunk（无 `---`/`+++` 头）补充文件头；`stripGitPathPrefix` 去除 `a/`/`b/` 前缀。
 
@@ -232,6 +330,25 @@ ChatInput 内两个同级 popover，共用 `use-active-model` 解析「下一轮
 
 推理强度与速度档位都是**逐模型 advertise** 的（`supportedReasoningEfforts` / `serviceTiers`），必须按目录顺序原样渲染，不要自行推导或排序；切换模型时两个 override 一并重置，否则可能选中新模型根本没有的档位。`DEFAULT_EFFORTS` 仅在识别不出当前模型时兜底，且刻意不带说明文案。
 
+### 隐藏模型
+
+`use-active-model` 以 `includeHidden: true` 请求 `model/list`，再把结果拆成默认列表与折叠在开关后的隐藏列表，**不是过滤掉**。目录会把不少真实可选的模型标成隐藏（钉住版本 11 个里有 6 个），先前无条件 `filter(!hidden)` 造成两个后果：配置里指定的隐藏模型在 UI 上无名可显，且一旦切走就再也切不回来。
+
+因此**当前生效模型若本身是隐藏的，始终出现在列表里**，与开关状态无关——用户必须能看到自己在跑什么。隐藏条目带 `hidden` 角标。
+
+## 模型目录编辑器
+
+设置 → Codex 下方的独立区块，详见 [model-catalog.md](model-catalog.md#前端)。UI 层需要知道的几点：
+
+- **修复入口不能依赖被修复的东西**。写坏 catalog 会让 app-server 无法启动，`config/read` 随之失败。因此目录区块故意不复用 `CodexSettings` 的 config 查询、作为其兄弟节点渲染（`CodexSettings` 失败时只渲染错误提示，不抛出）；裸 TOML 编辑器抽成独立的 `raw-config-editor.tsx`——它原先只挂在成功分支的末尾，等于把修复工具锁在了它要修复的故障后面。
+- **组件位置本身就是状态的一部分**。上一条只做到"错误分支里也渲染"是不够的：按 loading / error / success 分别 early-return，会让编辑器在每次查询状态切换时卸载重挂，**丢掉用户正在写的 TOML**——而这恰好发生在读取失败、最需要它的时候。正确做法是单一 return，让**结构化区块**成为条件渲染的那一半，编辑器在所有状态下保持同一个树位置。凡是持有本地未保存状态的组件都适用这条。
+- **能解除某个状态的动作，必须和该状态一起出现**。通过裸配置改掉 catalog 指针后 child 完全健康，却仍需重启才生效；把「重启 Codex」只挂在启动失败块里，就会出现「提示你去点一个不存在的按钮」。
+- 表单字段**从打开时的条目与模板派生**而非硬编码，也不取自实时草稿。上游 `ModelInfo` 约四十个字段且随 CLI 升级增加，写死清单会静默漏掉新字段，往返时丢弃未知字段等于悄悄改坏模型；而按实时草稿推导会让「清空一个字符串」把该字段的编辑器在编辑途中变成 JSON。
+- **受控表单必须保留中途输入的原文**。半个数字、写到一半的对象都还不能解析，此时回退渲染上一份已解析的值会撤销这次按键——JSON 和数字字段因此完全无法逐字符编辑。
+- 列表项按 **slug** 而非对象身份定位：文档每次渲染都重新 `JSON.parse`，对话框持有的条目和列表里的永远不是同一个对象。
+- 「保存草稿」与「应用并重启」是两个按钮。目录只在 app-server 启动时读取一次，应用必然伴随重启，因此草稿写入的文件永远不是运行中进程加载的那个。
+- 「已配置」与「正在运行」是两件事（`configuredPointer` vs `pointerApplied`），「本后端托管」又是第三件（`managed`，决定是否提供「使用默认目录」）。把三者混为一谈会让 UI 对外部手写的指针给出后端必然拒绝的动作。
+
 ## 分支图
 
 `@xyflow/react` + `d3-hierarchy`，详见 [conversation-branches.md](conversation-branches.md#branch-graph)。UI 层需要知道的两点：
@@ -288,3 +405,5 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
   - generating（active 无 blocking flags）：Loader2 + `animate-spin`
   - idle：灰色 MessageSquare
 - **Approval count badge**：hydrated pending approvals > 1 时显示数字（9+ 封顶），半透明黄色圆角背景
+
+策略读取失败时，SecurityPolicyBadge 弹层显示「最后已知」说明（含中文翻译）。闭合徽章与发送按钮不因 stale 单独改变；确认中的用户策略选择仍按原有规则等待。

@@ -1,7 +1,7 @@
 /**
  * REST controller for model listing.
  */
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, ParseBoolPipe, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiExtraModels,
@@ -27,14 +27,18 @@ export class ModelsController {
   @ApiOperation({ summary: 'List available models' })
   @ApiQuery({ name: 'cursor', required: false })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'includeHidden', required: false, type: Boolean })
   @ApiOkResponse({ type: ModelListResponseDto })
   async listModels(
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
+    @Query('includeHidden', new ParseBoolPipe({ optional: true }))
+    includeHidden?: boolean,
   ) {
     return this.modelsService.listModels({
       cursor,
       limit: limit ? Number(limit) : undefined,
+      includeHidden,
     });
   }
 }

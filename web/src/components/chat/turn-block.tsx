@@ -29,6 +29,10 @@ import {
   WebSearchItem,
 } from './turn-items/rich-activity-items';
 import { useTurnItemsTopUp } from '@/hooks/use-turn-items-topup';
+import {
+  isPlanDisplayable,
+  isTurnItemDisplayable,
+} from '@/lib/turn-item-display';
 import { DiffViewer } from './turn-items/diff-viewer';
 import { ToolCallGroup } from './turn-items/tool-call-group';
 import { ApprovalItem } from './turn-items/approval-item';
@@ -137,15 +141,13 @@ function ItemWithRequests({
     case 'commandExecution':
       return (
         <>
-          <CommandItem item={item} />
-          {approvals
-            .filter((approval) => approval.kind !== 'fileChange')
-            .map((approval) => (
-              <ApprovalItem
-                key={String(approval.requestId)}
-                approval={approval}
-              />
-            ))}
+          {/* Approvals go INSIDE the command card. Rendering them as siblings
+              is what printed the same command twice — three times once the
+              policy-amendment section repeated it as well. */}
+          <CommandItem
+            item={item}
+            approvals={approvals.filter((approval) => approval.kind !== 'fileChange')}
+          />
           {inputCard}
         </>
       );
@@ -247,6 +249,7 @@ function ItemWithRequests({
 export function TurnBlock({ entry }: Props) {
   const { t } = useTranslation();
   const userInputRequests = useTimelineStore((s) => s.userInputRequests);
+  const activeTurnId = useTimelineStore((s) => s.activeTurnId);
   // Select this turn's approvals, not the whole map: approvals are keyed by
   // request id, so subscribing to the map would rerender every mounted turn
   // whenever any approval anywhere changed.
@@ -288,16 +291,57 @@ export function TurnBlock({ entry }: Props) {
     else approvalsByItemId.set(approval.itemId, [approval]);
   }
 
-  // A summary turn holds an entry purely so the top-up above can be mounted,
-  // and a turn whose only item was the user message stays empty even after it.
-  // Rendering the shell anyway would leave a bare assistant avatar with nothing
-  // in it. The hook still ran, so bailing out here does not prevent the fetch.
+  // Which items actually paint something. Counting raw items instead was what
+  // produced the blank bubble: `item/started` inserts an assistant message
+  // before its first delta, so the shell rendered an avatar and a glass surface
+  // around a renderer emitting nothing.
+  //
+  // An invisible body still counts when a blocking request card hangs off it —
+  // the card renders beside the body, so filtering the item would take an
+  // interactive approval prompt down with it.
+  const inputRequestItemIds = new Set(
+    Object.values(userInputRequests)
+      .filter((req) => req.turnId === entry.turnId)
+      .map((req) => req.itemId),
+  );
+  const visibleItems = entry.items.filter(
+    (item) =>
+      isTurnItemDisplayable(item) ||
+      (approvalsByItemId.get(item.itemId)?.length ?? 0) > 0 ||
+      inputRequestItemIds.has(item.itemId),
+  );
+  // Both mirror their renderers, which refuse an empty plan and an empty diff
+  // string; testing the fields for mere presence would readmit both.
+  const planVisible = isPlanDisplayable(entry.plan);
+  const diffVisible = Boolean(entry.diff);
+
+  // A turn that is genuinely running, with nothing to show yet, gets the
+  // streaming placeholder — informative, unlike the empty surface it replaces.
+  // A completed turn with nothing to show renders no surface at all: a summary
+  // turn holds an entry purely so the top-up above can be mounted, and a turn
+  // whose only item was the user message stays empty even after it. The hook
+  // still ran, so bailing out here does not prevent the fetch.
+  //
+  // `!completed` alone is not "running". A conversation deleted elsewhere keeps
+  // its in-flight entry while clearing the active turn, and restored entries
+  // can arrive incomplete with nothing running — both would spin forever. The
+  // active turn is the authoritative signal. Pending request cards are excluded
+  // too: the agent is waiting on the user then, not thinking.
+  const isRunning = activeTurnId === entry.turnId;
+  const showPlaceholder =
+    isRunning &&
+    visibleItems.length === 0 &&
+    !planVisible &&
+    !diffVisible &&
+    unattachedApprovals.length === 0 &&
+    unattachedInputs.length === 0;
   const hasContent =
-    entry.items.length > 0 ||
-    Boolean(entry.plan) ||
-    entry.diff !== undefined ||
+    visibleItems.length > 0 ||
+    planVisible ||
+    diffVisible ||
     unattachedApprovals.length > 0 ||
-    unattachedInputs.length > 0;
+    unattachedInputs.length > 0 ||
+    showPlaceholder;
   if (!hasContent) return null;
 
   return (
@@ -309,9 +353,11 @@ export function TurnBlock({ entry }: Props) {
       </Avatar>
 
       <div className="glass-1 min-w-0 flex-1 space-y-2 rounded-2xl px-4 py-3">
-        {entry.plan && <PlanPanel plan={entry.plan} completed={entry.completed} />}
+        {planVisible && entry.plan && (
+          <PlanPanel plan={entry.plan} completed={entry.completed} />
+        )}
 
-        {groupConsecutiveToolCalls(entry.items).map((group) => {
+        {groupConsecutiveToolCalls(visibleItems).map((group) => {
           if (group.kind === 'single') {
             return (
               <ItemWithRequests
@@ -351,7 +397,7 @@ export function TurnBlock({ entry }: Props) {
 
         {entry.completed && <TurnTokenFooter turnId={entry.turnId} />}
 
-        {!entry.completed && entry.items.length === 0 && !entry.plan && (
+        {showPlaceholder && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t('Thinking...')}

@@ -5,6 +5,7 @@ import { AuthService } from '../auth/auth.service';
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
+import { permissionApprovalFixture } from '../pending-approvals/pending-approvals.testing';
 
 describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
@@ -84,6 +85,19 @@ describe('ThreadsGateway', () => {
     expect(client.join).toHaveBeenCalledWith('thread:t1');
     expect(mockActiveThreads.subscribe).toHaveBeenCalledWith('c1', 't1');
     expect(result).toEqual({ ok: true });
+  });
+
+  it('forwards network-only context and structured additional permissions intact', () => {
+    const request = permissionApprovalFixture();
+    listeners.serverRequest(request);
+    expect(mockPendingApprovals.recordServerRequest).toHaveBeenCalledWith(
+      request,
+    );
+    expect(mockServer.emit).toHaveBeenCalledWith(
+      'codex.serverRequest',
+      request,
+    );
+    expect(request.params).not.toHaveProperty('additionalPermissions.network');
   });
 
   it('should leave room on unsubscribe', () => {

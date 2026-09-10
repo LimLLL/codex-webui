@@ -15,8 +15,11 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { CatalogStorageService } from './catalog/catalog-storage.service';
+import { CatalogService } from './catalog/catalog.service';
+import { catalogPointer, readToml, writeAtomic } from './catalog/catalog-files';
+import { CodexProcessManager } from './codex-process-manager.service';
 import { toJsonSafe, type JsonSafeValue } from '../common/json-safe';
 import { ApiErrorResponseDto } from '../common/dto/api-responses.dto';
 import { CodexRpcError } from './codex-errors';
@@ -48,6 +51,9 @@ export class CodexConfigController {
   constructor(
     private readonly codex: CodexService,
     private readonly codexStatusService: CodexStatusService,
+    private readonly storage: CatalogStorageService,
+    private readonly catalogs: CatalogService,
+    private readonly manager: CodexProcessManager,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -90,7 +96,9 @@ export class CodexConfigController {
     }
     this.codexStatusService.invalidateCache();
 
-    return this.readConfig();
+    const result = await this.readConfig();
+    result.warnings = await this.catalogs.configWarnings(result.config);
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -101,12 +109,11 @@ export class CodexConfigController {
   @Get('raw')
   @ApiOperation({ summary: 'Read raw user config.toml' })
   @ApiOkResponse({ type: RawConfigResponseDto })
-  async readRawConfig(): Promise<RawConfigResponseDto> {
-    const filePath = await this.getUserConfigPath();
-    if (!existsSync(filePath)) {
-      return { filePath, content: '' };
-    }
-    return { filePath, content: readFileSync(filePath, 'utf8') };
+  readRawConfig(): RawConfigResponseDto {
+    return {
+      filePath: this.storage.paths.configFile,
+      content: this.storage.config(),
+    };
   }
 
   /** Replaces raw user config.toml content and hot-reloads into loaded threads. */
@@ -126,20 +133,46 @@ export class CodexConfigController {
       );
     }
 
-    const filePath = await this.getUserConfigPath();
-
-    this.logger.log(`Writing raw config.toml (${body.content.length} bytes)`);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, body.content, 'utf8');
-
-    // Trigger hot-reload with an empty edit batch
-    await this.codex.request('config/batchWrite', {
-      edits: [],
-      reloadUserConfig: true,
-    } satisfies v2.ConfigBatchWriteParams);
+    const filePath = this.storage.paths.configFile;
+    const before = this.storage.config();
+    if (body.expectedContent !== undefined && before !== body.expectedContent) {
+      throw BusinessException.conflict(
+        ErrorCode.codex.writeFailed,
+        'Config changed; reload before saving',
+      );
+    }
+    await this.catalogs.validateRawConfig(body.content);
+    if (before !== this.storage.config())
+      throw BusinessException.conflict(
+        ErrorCode.codex.writeFailed,
+        'Config changed during validation',
+      );
+    // Compared against what the child actually loaded, not against the previous
+    // file. A pointer edited and then left alone still differs from the running
+    // catalog, and diffing successive writes would report the second, unrelated
+    // save as needing no restart while the child still serves the old list.
+    const nextPointer = catalogPointer(body.content);
+    const restartRequired =
+      !this.manager.getClient() ||
+      !this.storage.matchesRunningCatalog(nextPointer);
+    this.manager.suspendRetries();
+    mkdirSync(this.storage.paths.home, { recursive: true });
+    writeAtomic(filePath, body.content);
+    let reloaded = false;
+    if (this.manager.getClient() && !restartRequired) {
+      await this.codex.request('config/batchWrite', {
+        edits: [],
+        reloadUserConfig: true,
+      } satisfies v2.ConfigBatchWriteParams);
+      reloaded = true;
+    }
     this.codexStatusService.invalidateCache();
-
-    return { filePath };
+    return {
+      filePath,
+      restartRequired,
+      reloaded,
+      warnings: await this.catalogs.configWarnings(readToml(body.content)),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -226,27 +259,6 @@ export class CodexConfigController {
     return (
       (data as Record<string, unknown>).config_write_error_code ===
       'configValidationError'
-    );
-  }
-
-  /**
-   * Resolves the user-level config.toml path from config/read layers.
-   * The user layer has `{ type: 'user', file: AbsolutePathBuf }`.
-   */
-  private async getUserConfigPath(): Promise<string> {
-    const response = await this.readConfigFromAppServer();
-    for (const layer of response.layers ?? []) {
-      if (layer.name.type === 'user') {
-        const { file } = layer.name as { file: string };
-        if (typeof file === 'string' && file.trim()) return file;
-      }
-    }
-    this.logger.error(
-      'Codex user config.toml path was not reported by config/read',
-    );
-    throw BusinessException.internal(
-      ErrorCode.codex.writeFailed,
-      'Codex user config.toml path was not reported by config/read',
     );
   }
 }

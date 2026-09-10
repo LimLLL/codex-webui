@@ -1,3 +1,6 @@
+import { CatalogStorageService } from './catalog/catalog-storage.service';
+import { CatalogService } from './catalog/catalog.service';
+import { CodexProcessManager } from './codex-process-manager.service';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { ErrorCode } from '../common/error-codes';
 import { CodexRpcError } from './codex-errors';
@@ -19,6 +22,12 @@ describe('CodexConfigController', () => {
     moduleRef = await Test.createTestingModule({
       controllers: [CodexConfigController],
       providers: [
+        { provide: CatalogStorageService, useValue: {} },
+        {
+          provide: CatalogService,
+          useValue: { configWarnings: vi.fn().mockResolvedValue([]) },
+        },
+        { provide: CodexProcessManager, useValue: {} },
         { provide: CodexService, useValue: codexService },
         { provide: CodexStatusService, useValue: codexStatusService },
       ],

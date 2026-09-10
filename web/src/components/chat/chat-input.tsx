@@ -28,6 +28,7 @@ import { SlashPopover } from './slash-popover';
 import { SlashDialogs } from './slash-dialogs';
 import { GoalProgressRow } from './goal-progress-row';
 import { PlanModeBadge } from './plan-mode-badge';
+import { useThreadSecurityPolicy } from '@/hooks/use-thread-security-policy';
 import { SecurityPolicyBadge } from './security-policy-badge';
 import { ModelSelector } from './model-selector';
 import { ServiceTierSelector } from './service-tier-selector';
@@ -50,10 +51,20 @@ interface Props {
   className?: string;
   /** Reports the composer's rendered height whenever it changes. */
   onHeightChange?: (height: number) => void;
+  /**
+   * Fired only when a send or steer is actually accepted and dispatched.
+   *
+   * Deliberately not fired for submits swallowed by a guard, or consumed by a
+   * slash command: the transcript uses this to resume following the latest
+   * output, and that is a decision only an explicit send may make. Inferring it
+   * from an appended timeline entry instead would also resume following for
+   * output the user never asked to be pulled to.
+   */
+  onSubmitted?: () => void;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
-  { panelOpen, onTogglePanel, className, onHeightChange },
+  { panelOpen, onTogglePanel, className, onHeightChange, onSubmitted },
   ref,
 ) {
   const footerRef = useRef<HTMLElement>(null);
@@ -87,6 +98,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // full transcript, so nothing else about them looks read-only.
   const readOnly =
     threadMode === 'readOnly' || readOnlyReason !== null || deletedRemotely;
+  // True while a security-policy selection is awaiting confirmation that it is
+  // actually in force. Read here rather than inside the badge because the badge
+  // is a sibling of the send button, and it is the send that must wait.
+  const policySettling = useThreadSecurityPolicy(threadId).isSettling;
   const hasActiveTurn = Boolean(threadId && activeTurnId && !readOnly);
   const canSteer = hasActiveTurn && !hasPendingApproval;
 
@@ -192,6 +207,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const handleSend = useCallback(() => {
     const input = buildInput();
     if (input.length === 0 || !threadId || loading || readOnly) return;
+    // A requested security policy that the server has not yet reported as
+    // effective would not apply to this turn. Sending anyway is how someone
+    // ends up believing they granted full access and then being asked to
+    // approve — so the draft is kept and the send waits instead. The composer
+    // disables the button for the same reason; this guards the keyboard path.
+    if (policySettling) return;
     // Collect image paths for timeline display
     const imageAttachments = attachmentsRef.current
       .filter((a): a is import('@/types/attachments').ChatImageAttachment => a.type === 'localImage')
@@ -213,7 +234,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         }),
       },
     });
-  }, [buildInput, threadId, loading, readOnly, attachmentsRef, addUserMessage, clearAfterSend, startTurn]);
+    onSubmitted?.();
+  }, [buildInput, threadId, loading, readOnly, policySettling, attachmentsRef, addUserMessage, clearAfterSend, startTurn, onSubmitted]);
 
   const handleSteer = useCallback(() => {
     const input = buildInput();
@@ -223,7 +245,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       path: { threadId, turnId: activeTurnId },
       body: { input: input as never },
     });
-  }, [buildInput, clearAfterSend, canSteer, threadId, activeTurnId, steer]);
+    onSubmitted?.();
+  }, [buildInput, clearAfterSend, canSteer, threadId, activeTurnId, steer, onSubmitted]);
 
   const handleStop = useCallback(() => {
     if (!threadId || !activeTurnId || interruptTurn.isPending) return;
@@ -378,7 +401,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 disabled={!threadId || readOnly}
                 onToggle={slashDispatch.togglePlanMode}
               />
-              <SecurityPolicyBadge />
+              <SecurityPolicyBadge threadId={threadId} readOnly={readOnly} />
               <McpStatusBadge />
               <SkillSelector
                 cwd={threadCwd}
@@ -427,7 +450,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 <Button
                   size="icon"
                   className="h-7 w-7 rounded-lg transition-transform duration-200 hover:scale-105 active:scale-95"
-                  disabled={!threadId || !hasContent || loading || readOnly}
+                  disabled={!threadId || !hasContent || loading || readOnly || policySettling}
                   onClick={handleSubmit}
                 >
                   <Send className="h-3.5 w-3.5" />

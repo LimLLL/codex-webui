@@ -15,6 +15,7 @@ import { sectionLabel } from './setting-helpers';
 import { GeneralSettings } from './general-settings';
 import { AccountSettings } from './account/account-settings';
 import { CodexSettings } from './codex-settings';
+import { CatalogSettings } from './catalog/catalog-settings';
 import { TerminalSettings } from './terminal-settings';
 import { FilesSettings } from './files-settings';
 import { SecuritySettings } from './security-settings';
@@ -93,7 +94,12 @@ export function SettingsPage() {
           />
         )}
         {section === 'account' && <AccountSettings />}
-        {section === 'codex' && <CodexSettings />}
+        {section === 'codex' && (
+          <>
+            <CodexSettings />
+            <CatalogSettings />
+          </>
+        )}
         {section === 'terminal' && <TerminalSettings />}
         {section === 'files' && <FilesSettings />}
         {section === 'security' && <SecuritySettings />}

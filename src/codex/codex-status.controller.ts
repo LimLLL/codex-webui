@@ -75,10 +75,10 @@ export class CodexStatusController {
     return this.codexStatusService.getStatus();
   }
 
-  /** Updates approval policy via config/batchWrite and hot-reloads into loaded threads. */
+  /** Updates the global approval default for new threads; loaded policies are unchanged. */
   @Post('approval-policy')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Update approval policy (hot-reloads all threads)' })
+  @ApiOperation({ summary: 'Update approval policy default for new threads' })
   @ApiBadRequestResponse({ type: ApiErrorResponseDto })
   @ApiNoContentResponse()
   async updateApprovalPolicy(
@@ -108,10 +108,10 @@ export class CodexStatusController {
     this.codexStatusService.invalidateCache();
   }
 
-  /** Updates sandbox mode via config/batchWrite and hot-reloads into loaded threads. */
+  /** Updates the global sandbox default for new threads; loaded policies are unchanged. */
   @Post('sandbox-mode')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Update sandbox mode (hot-reloads all threads)' })
+  @ApiOperation({ summary: 'Update sandbox mode default for new threads' })
   @ApiBadRequestResponse({ type: ApiErrorResponseDto })
   @ApiNoContentResponse()
   async updateSandboxMode(@Body() body: UpdateSandboxModeDto): Promise<void> {

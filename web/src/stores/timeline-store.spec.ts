@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ThreadDto, TurnDto } from '../generated/api';
 import type { ApprovalRequest } from '../types/approval';
+import type { ThreadTokenUsage } from '../types/codex-notifications';
 
 const emit = vi.fn();
 
@@ -45,6 +46,26 @@ beforeEach(() => {
   useTimelineStore.setState(pristine, true);
 });
 
+describe('recovery lifecycle ordering', () => {
+  it('does not reactivate a terminal turn from a delayed running header', () => {
+    const store = useTimelineStore.getState();
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [
+        answeredTurn('turn-1', 'finished while headers were in flight'),
+      ],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.settleTurnLifecycleForThread('t1', [
+      { id: 'turn-1', status: 'inProgress' },
+    ]);
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.activeTurnId).toBeNull();
+    expect(runtime.loading).toBe(false);
+  });
+});
+
 describe('history dedup', () => {
   it('does not re-insert a turn that only ever produced a user entry', () => {
     const store = useTimelineStore.getState();
@@ -81,7 +102,9 @@ describe('history dedup', () => {
       .getState()
       .prependHistoryForThread('t1', [userOnlyTurn('turn-1', 'first')], null);
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!.timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     expect(timeline.map((entry) => entry.turnId)).toEqual([
       'turn-1',
       'turn-2',
@@ -91,6 +114,26 @@ describe('history dedup', () => {
 });
 
 describe('reopening a thread', () => {
+  it('repairs a known turn even when the page introduces no new turn ids', () => {
+    const store = useTimelineStore.getState();
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [summaryTurn('turn-1', 'hello')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hello')],
+      historyCursor: 'newer',
+      readOnlyReason: null,
+    });
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(
+      runtime.timeline.find((entry) => entry.kind === 'turn')?.items,
+    ).toHaveLength(1);
+    expect(runtime.historyCursor).toBeNull();
+  });
   it('keeps paged history when the reopened page adds nothing new', () => {
     const store = useTimelineStore.getState();
     // Two pages already on screen: an older one paged in, plus the newest.
@@ -149,6 +192,142 @@ describe('reopening a thread', () => {
   });
 });
 
+describe('locally recorded datasets fill gaps but never overwrite live', () => {
+  // Token usage and turn diffs have no historical read on app-server; the rows
+  // come from this project's own database, written from the same notifications
+  // the browser already received. The recording is therefore never newer than
+  // live, and a hydrate that lands after one must not revert it.
+  it('keeps a token usage value that arrived while the read was in flight', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    const live = { totalTokens: 999 } as unknown as ThreadTokenUsage;
+    store.setTokenUsageForThread('t1', 'turn-1', live);
+
+    store.hydrateTokenUsageForThread('t1', [
+      {
+        turnId: 'turn-1',
+        usage: { totalTokens: 1 } as unknown as ThreadTokenUsage,
+      },
+      {
+        turnId: 'turn-0',
+        usage: { totalTokens: 2 } as unknown as ThreadTokenUsage,
+      },
+    ]);
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.tokenUsageByTurn['turn-1']).toBe(live);
+    // A turn live never reported is exactly what the recording is for.
+    expect(runtime.tokenUsageByTurn['turn-0']).toEqual({ totalTokens: 2 });
+    expect(runtime.latestTokenUsage).toBe(live);
+  });
+
+  it('keeps a turn diff that arrived while the read was in flight', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    // `updateTurnDiffForThread` only maps existing rows, so both turns need one.
+    const emptyPlan = { explanation: null, steps: [] };
+    store.updateTurnPlanForThread('t1', 'turn-1', emptyPlan);
+    store.updateTurnPlanForThread('t1', 'turn-2', emptyPlan);
+    store.updateTurnDiffForThread('t1', 'turn-1', 'live diff');
+
+    store.hydrateTurnDiffsForThread('t1', [
+      { turnId: 'turn-1', diff: 'recorded diff' },
+      { turnId: 'turn-2', diff: 'recorded diff 2' },
+    ]);
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const first = timeline.find(
+      (e) => e.kind === 'turn' && e.turnId === 'turn-1',
+    );
+    const second = timeline.find(
+      (e) => e.kind === 'turn' && e.turnId === 'turn-2',
+    );
+    expect(first?.kind === 'turn' && first.diff).toBe('live diff');
+    expect(second?.kind === 'turn' && second.diff).toBe('recorded diff 2');
+  });
+});
+
+describe('plan text recovery', () => {
+  it('keeps plan item text separate from the tool explanation on hydration and repair', () => {
+    const store = useTimelineStore.getState();
+    const items = [{ id: 'plan', type: 'plan', text: 'one copy' }];
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [
+        { ...summaryTurn('turn-1', 'hi'), items } as unknown as TurnDto,
+      ],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.applyRecoveredTurnItemsForThread('t1', 'turn-1', items, -1);
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan).toEqual({
+      explanation: null,
+      steps: [],
+      planTextByItemId: {
+        plan: { text: 'one copy', completed: true, observedSeq: undefined },
+      },
+    });
+  });
+
+  it('keeps plan text when a tool updates the structured steps', () => {
+    const store = useTimelineStore.getState();
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'plan text');
+    store.updateTurnPlanForThread('t1', 'turn-1', {
+      explanation: 'progress',
+      steps: [{ step: 'step', status: 'inProgress' }],
+    });
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'plan text',
+      completed: false,
+    });
+  });
+
+  it('refuses a plan delta that arrives after the terminal payload', () => {
+    const store = useTimelineStore.getState();
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'first half ');
+    store.setPlanTextForThread(
+      't1',
+      'turn-1',
+      'plan',
+      'first half second half',
+    );
+    // The terminal payload already contains what this delta carried; appending
+    // it would duplicate the tail and reopen a finished plan item.
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'second half');
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'first half second half',
+      completed: true,
+    });
+  });
+
+  it('accepts terminal plan text when all earlier events were missed', () => {
+    const store = useTimelineStore.getState();
+    store.setPlanTextForThread('t1', 'turn-1', 'plan', 'complete plan');
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'complete plan',
+      completed: true,
+    });
+  });
+});
+
 /** A summary-view turn: app-server withheld its reasoning and plan items. */
 function summaryTurn(id: string, text: string): TurnDto {
   return {
@@ -182,20 +361,20 @@ describe('on-demand turn item top-up', () => {
       readOnlyReason: null,
     });
 
-    useTimelineStore
-      .getState()
-      .applyFullTurnItemsForThread('t1', 'turn-1', [
-        { type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
-        { type: 'reasoning', id: 'r1', summary: ['thinking'] },
-        { type: 'plan', id: 'p1', text: '# the plan' },
-      ]);
+    useTimelineStore.getState().applyFullTurnItemsForThread('t1', 'turn-1', [
+      { type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+      { type: 'reasoning', id: 'r1', summary: ['thinking'] },
+      { type: 'plan', id: 'p1', text: '# the plan' },
+    ]);
 
     const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
     const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
     expect(turnEntry).toMatchObject({ itemsView: 'full' });
-    expect(turnEntry.kind === 'turn' && turnEntry.plan?.explanation).toContain(
-      'the plan',
-    );
+    // Keyed by item id rather than folded into one blob: that is what lets a
+    // persisted plan replace a fragment left behind by a dropped connection.
+    expect(
+      turnEntry.kind === 'turn' && turnEntry.plan?.planTextByItemId?.p1?.text,
+    ).toContain('the plan');
     expect(
       turnEntry.kind === 'turn' && turnEntry.items.map((i) => i.type),
     ).toEqual(['reasoning']);
@@ -455,9 +634,7 @@ describe('paged read-only history', () => {
       cwd: '/workspace',
     });
 
-    const runtime = useTimelineStore
-      .getState()
-      .getThreadRuntime('archived')!;
+    const runtime = useTimelineStore.getState().getThreadRuntime('archived')!;
     expect(runtime.threadMode).toBe('readOnly');
     expect(runtime.historyCursor).toBe('older-page');
     expect(runtime.timeline.map((entry) => entry.turnId)).toEqual([
@@ -480,7 +657,11 @@ describe('paged read-only history', () => {
     });
     useTimelineStore
       .getState()
-      .prependHistoryForThread('archived', [answeredTurn('turn-1', 'old')], null);
+      .prependHistoryForThread(
+        'archived',
+        [answeredTurn('turn-1', 'old')],
+        null,
+      );
 
     useTimelineStore.getState().setReadOnlyThread({
       id: 'archived',
@@ -498,10 +679,9 @@ describe('paged read-only history', () => {
 
     const runtime = useTimelineStore.getState().getThreadRuntime('archived')!;
     expect(runtime.threadMode).toBe('readOnly');
-    expect([...new Set(runtime.timeline.map((entry) => entry.turnId))]).toEqual([
-      'turn-1',
-      'turn-2',
-    ]);
+    expect([...new Set(runtime.timeline.map((entry) => entry.turnId))]).toEqual(
+      ['turn-1', 'turn-2'],
+    );
     // The pre-degrade cursor is already exhausted; adopting the fallback's
     // cursor would re-offer history that is on screen.
     expect(runtime.historyCursor).toBeNull();
@@ -568,5 +748,198 @@ describe('forgetThreads', () => {
   it('is a no-op for an empty list', () => {
     useTimelineStore.getState().forgetThreads([]);
     expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('failures hydrated before their turn was paged in', () => {
+  /** A failed turn that reports its own error on the paged-turn path. */
+  function failedTurn(id: string, text: string): TurnDto {
+    return {
+      id,
+      items: [{ type: 'userMessage', content: [{ type: 'text', text }] }],
+      status: 'failed',
+      error: { message: 'page-level failure' },
+    } as unknown as TurnDto;
+  }
+
+  /** Structured error row as auxiliary hydration delivers it. */
+  function errorRow(turnId: string, message: string) {
+    return {
+      turnId,
+      message,
+      errorCategory: 'misalignmentPolicyViolation',
+      additionalDetails: 'aux detail',
+      misalignmentErrorType: 'policy',
+      misalignmentExplanation: 'aux explanation',
+      createdAt: 1,
+    };
+  }
+
+  /**
+   * Seeds a conversation whose newest page is loaded, then hydrates an error
+   * for an older turn no page has reached yet. That failure has nowhere to sit,
+   * so it is parked at the end of the timeline.
+   */
+  function seedWithParkedFailure() {
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-new', 'newest')],
+      historyCursor: 'cursor-1',
+      readOnlyReason: null,
+    });
+    useTimelineStore
+      .getState()
+      .hydrateTurnErrorsForThread('t1', [errorRow('turn-old', 'aux failure')]);
+
+    const parked = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(parked).toHaveLength(1);
+  }
+
+  it('absorbs the parked failure instead of duplicating it', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const failures = timeline.filter(
+      (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
+    );
+    expect(failures).toHaveLength(1);
+    // The structured record wins the merge: it carries misalignment detail the
+    // paged turn's own error field does not.
+    expect(failures[0]).toMatchObject({
+      failure: {
+        message: 'aux failure',
+        misalignmentExplanation: 'aux explanation',
+      },
+    });
+  });
+
+  it('keeps the surviving failure next to its own turn', () => {
+    seedWithParkedFailure();
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const newestIndex = timeline.findIndex(
+      (entry) => entry.kind === 'user' && entry.turnId === 'turn-new',
+    );
+    // Nothing may remain parked below the newest turn. Asserting on the first
+    // match would pass even when a duplicate is still stranded down there,
+    // because the correctly placed copy is found first.
+    const strandedBelowNewest = timeline
+      .slice(newestIndex)
+      .filter((entry) => entry.kind === 'turnFailure');
+    expect(strandedBelowNewest).toHaveLength(0);
+  });
+
+  it('relocates a parked failure even when the page reports no error', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread('t1', [answeredTurn('turn-old', 'older')], null);
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const failureIndex = timeline.indexOf(failures[0]);
+    const oldTurnIndex = timeline.findIndex(
+      (entry) => entry.kind === 'turn' && entry.turnId === 'turn-old',
+    );
+    expect(oldTurnIndex).toBeGreaterThanOrEqual(0);
+    expect(failureIndex).toBe(oldTurnIndex + 1);
+  });
+
+  it('places the relocated failure immediately after its own turn', () => {
+    // A page carries several turns, so "below the newest turn" is not enough:
+    // the failure has to land against the right one, and before the turn that
+    // follows it.
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-mid', 'middle'), answeredTurn('turn-old', 'older')],
+        null,
+      );
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const at = timeline.indexOf(failures[0]);
+    expect(timeline[at - 1]).toMatchObject({
+      kind: 'turn',
+      turnId: 'turn-old',
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-mid',
+    });
+  });
+
+  it('relocates a failure whose turn arrived with only a user message', () => {
+    // A turn whose items all normalize away, and whose own error field is
+    // empty, contributes no `turn` entry at all. Reading the arriving turn ids
+    // off the entries would miss it and leave the failure parked forever.
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-mid', 'middle'), userOnlyTurn('turn-old', 'older')],
+        null,
+      );
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
+    expect(failures).toHaveLength(1);
+    const at = timeline.indexOf(failures[0]);
+    expect(timeline[at - 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-old',
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      kind: 'user',
+      turnId: 'turn-mid',
+    });
+  });
+
+  it('leaves a parked failure alone when its turn is not in this page', () => {
+    seedWithParkedFailure();
+
+    useTimelineStore
+      .getState()
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-other', 'other')],
+        null,
+      );
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const failures = timeline.filter(
+      (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
+    );
+    expect(failures).toHaveLength(1);
   });
 });

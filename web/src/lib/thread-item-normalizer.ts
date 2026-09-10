@@ -27,6 +27,39 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/**
+ * Item statuses that mean "this item will not change again".
+ *
+ * Deliberately an allowlist rather than `status !== 'inProgress'`. The two ways
+ * to be wrong are not symmetric: calling a still-streaming item terminal makes
+ * it reject its own remaining deltas and truncates content permanently, while
+ * calling a finished item non-terminal at worst leaves a spinner until the
+ * terminal payload arrives and replaces the body wholesale. An unrecognised
+ * future status therefore stays non-terminal.
+ */
+const TERMINAL_ITEM_STATUSES = new Set([
+  'completed',
+  'failed',
+  'declined',
+  'interrupted',
+  'cancelled',
+  'canceled',
+  'aborted',
+]);
+
+/**
+ * Reads an item's own view of whether it is finished.
+ *
+ * @param value - Raw protocol item from a notification or a persisted page
+ * @returns `true`/`false` when the item states a status, `null` when it carries
+ *   none and the caller's lifecycle knowledge has to decide instead
+ */
+export function readItemTerminality(value: unknown): boolean | null {
+  const status = asRecord(value)?.status;
+  if (typeof status !== 'string') return null;
+  return TERMINAL_ITEM_STATUSES.has(status);
+}
+
 function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
@@ -197,8 +230,14 @@ function normalizeWebResults(value: unknown): WebSearchResultPreview[] {
 /**
  * Normalizes one live or persisted ThreadItem without retaining unknown payloads.
  *
+ * The item's own `status` outranks `completed` whenever it states one. Callers
+ * only know the lifecycle of the *event* they are handling, and history callers
+ * pass `true` for a whole page — which would declare a still-running command
+ * finished purely because it arrived from history. An item that says
+ * `inProgress` is never overridden by "this came from a snapshot".
+ *
  * @param value - Raw item from history or an item lifecycle notification
- * @param completed - Lifecycle state supplied by the caller
+ * @param completed - Fallback lifecycle for items that carry no status of their own
  * @param fallbackItemId - Notification or page-local identity when `id` is absent
  */
 export function normalizeThreadItem(
@@ -209,6 +248,7 @@ export function normalizeThreadItem(
   const item = asRecord(value);
   if (!item || typeof item.type !== 'string') return { kind: 'invalid' };
   const itemId = stringValue(item.id, fallbackItemId);
+  const terminal = readItemTerminality(item) ?? completed;
 
   if (item.type === 'userMessage') {
     return {
@@ -225,7 +265,7 @@ export function normalizeThreadItem(
   }
   if (!itemId) return { kind: 'invalid' };
 
-  const base = { itemId, completed };
+  const base = { itemId, completed: terminal };
   switch (item.type) {
     case 'reasoning': {
       const summary = Array.isArray(item.summary)

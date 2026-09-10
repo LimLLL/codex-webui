@@ -39,10 +39,10 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 ## App-server 扩展能力
 
-部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
+部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。**schema 未导出 ≠ 运行时不可用**，判定属于哪一种要靠实测（`codex_probe/`，见 [README](../codex_probe/README.md)）——探针的 `requestRaw()` 就是为此保留的显式逃生口，它的调用点集合即「已知可用但未导出」的清单。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
 
 - `collaborationMode/list`：`ThreadCommandsService.listCollaborationModes()` 读取 preset 列表，返回 `data`/`modes` 两种已知列表包裹形态。
-- `thread/settings/update`：`ThreadCommandsService.setCollaborationMode()` 只写 `collaborationMode`，要求先从 app-server 观察到或从 start/resume/fork 响应缓存中解析出非空 model；`developer_instructions:null` 交给 app-server 使用内置 mode 指令。
+- `thread/settings/update`：两个调用方，各写各的窄字段集。`ThreadCommandsService.setCollaborationMode()` 只写 `collaborationMode`，要求先从 app-server 观察到或从 start/resume/fork 响应缓存中解析出非空 model；`developer_instructions:null` 交给 app-server 使用内置 mode 指令。`ThreadSecurityPolicyController` 只写 `approvalPolicy`/`sandboxPolicy`。**未知字段被静默忽略**（实测：拼错的字段返回 OK 且无任何效果），所以 REST 边界必须做白名单校验——否则一个拼写错误就是一次无声的空操作。已实测该方法接受 `approvalPolicy`/`sandboxPolicy`/`approvalsReviewer`/`cwd`/`model`/`modelProvider`/`serviceTier`/`effort`/`summary`/`personality`/`collaborationMode`，且改动会被**下一个真实模型轮次**消费。
 - `thread/fork.deferGoalContinuation`：`ThreadsService.forkThread()` 仅在 REST body 显式 `carryGoal:true` 时发送，且不支持 `ephemeral:true`。
 
 `ThreadSettingsObserverService` 监听 `thread/settings/updated` notification，并在 app-server generation ready 时清空缓存。由于 app-server 没有无副作用读取当前 collaboration mode 的接口，`GET /api/threads/:id/collaboration-mode` 在未观察到设置时返回 `observed:false`，不会通过写操作探测状态。
@@ -51,14 +51,18 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 - `nextId` 自增分配 request id
 - `pending` Map 存储 `{ resolve, reject, timer }`
+- `CodexAcceptedWork` 独立记录本 stdio 连接发送的工作；响应完成、超时、idle 查询不会释放。仅明确拒绝、可归属终态或真实 thread/process close 清理，补充目录重启活动检查，详见 [model-catalog.md](model-catalog.md)。
 - 默认 30s 超时，超时后自动 reject 并清理
 - `app/read` 与 `plugin/reconcile` 都走普通 request/response 路径；`plugin/reconcile` 不额外放宽 timeout，也不在 transport 层加锁。
 
 ## 进程管理 (CodexProcessManager)
 
-- `onModuleInit` 时 spawn `codex app-server --listen stdio://`
+- `onModuleInit` 先撤销未完成的 catalog activation，再 spawn `codex app-server --listen stdio://`
 - 执行 `initialize` → 等 response → 发 `initialized` notification
-- 进程退出时 3s 后自动重启
+- 健康进程意外退出时 3s 后尝试恢复；一次性的初始化失败同样按 3s 重试，否则卷挂载稍晚这类瞬时故障会变成永久宕机。三类明确不重试并保留 HTTP 修复入口和诊断：目录被拒（确定性失败）、pending 恢复失败（spawn 的前置条件）、旧 child 停止超时（可能仍存活，避免同一 Codex home 上跑两个 app-server）。第三类会把这次重试挂到该进程真正退出时补发一次，不至于因停止慢而彻底放弃自愈；离线修复的 `suspendRetries()` 会连这笔欠账一起清掉
+- 「意外退出」按 child 逐个记账，不读共享的 controlled 标志：受控重启在停止阶段超时会清掉该标志，之后旧 child 真正退出就会被误判为崩溃，从而在 activation 仍为 pending 时启动候选进程、绕过接受与回滚
+- 启动失败后的 `stop()` 超时不覆盖原始诊断（只记日志）：保留的 stderr 才是分类依据，顶替它会把确定性的目录拒绝重新变成重试循环
+- ready 在 initialize、config/read、model/list 检查及 catalog accepted 落盘后发出；受控重启与 rollback 见 [model-catalog.md](model-catalog.md)
 - `addListener()` 注册的事件监听会跨重启保留
 
 ## JSONL 审计日志
@@ -88,3 +92,7 @@ client → initialized {}  (notification, no id)
 - `process` 参数名与 Node.js 全局 `process` 冲突，日志相关代码用 `globalThis.process.cwd()`
 - WriteStream 用 append 模式，进程重启不覆盖
 - 进程 close 时清理所有 pending promise 并关闭 log stream
+
+## Settings freshness and item recovery
+
+`ThreadSettingsObserverService` retains complete effective-settings notifications. Start/resume/fork responses seed only unobserved threads; repeat opens project the current observation after their awaited reads. A queued mutation never becomes an invented effective-settings snapshot. Bounded item reads expose incomplete outcomes instead of silently returning truncated history. See [thread-policy-recovery.md](thread-policy-recovery.md) for the REST contract and measured durability limits.

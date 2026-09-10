@@ -1,0 +1,32 @@
+# Example probe config. Copy to `config.toml` (gitignored) and fill it in.
+#
+# The runner copies this file into a throwaway CODEX_HOME before every run, so
+# nothing here persists between probes and nothing codex writes lands in the
+# repository.
+#
+# Secrets belong in the environment, never in this file. `env_key` names an
+# environment variable the probe process must already have exported. config.toml
+# is gitignored, but a key pasted into the example — which IS committed — is
+# published.
+
+model = "your-model-slug"
+model_provider = "your-provider"
+
+# Probes read protocol behaviour, not prose. Low effort keeps runs cheap; raise
+# it only for a probe that is specifically about reasoning output.
+model_reasoning_effort = "low"
+model_reasoning_summary = "auto"
+
+# Off by default: a probe that can reach arbitrary hosts stops being
+# reproducible.
+web_search = "disabled"
+
+[model_providers.your-provider]
+name = "OpenAI"
+base_url = "https://api.example.com/v1"
+env_key = "YOUR_PROVIDER_API_KEY"
+wire_api = "responses"
+
+# Deliberately minimal. MCP servers, memories and plugins slow startup and add
+# state that makes one probe's result depend on what ran before it. Add a
+# section here only when the probe under test is actually about that subsystem.

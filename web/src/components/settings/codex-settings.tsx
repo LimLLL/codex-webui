@@ -5,27 +5,27 @@
  * 1. Structured editor — curated fields with per-field controls
  * 2. Raw editor — Monaco-based config.toml editing for power users
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
-import Editor, { type OnMount } from '@monaco-editor/react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, FileText, Save } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
 import {
   ApprovalReviewerControl,
+  ConfigSelectOverrideControl,
   ConfigSourceBadge,
   type OverrideSelectOption,
 } from '@/components/codex-config/config-override-controls';
-import { useThemeStore } from '@/stores/theme-store';
+import { RawConfigEditor } from './raw-config-editor';
 import {
+  catalogStateQueryKey,
   codexConfigReadConfigOptions,
-  codexConfigReadRawConfigOptions,
   codexConfigUpdateConfigMutation,
-  codexConfigUpdateRawConfigMutation,
   codexStatusGetStatusOptions,
   modelsListModelsOptions,
 } from '@/generated/api/@tanstack/react-query.gen';
-import type { ConfigEditDto } from '@/generated/api/types.gen';
+import type {
+  CatalogWarningDto,
+  ConfigEditDto,
+} from '@/generated/api/types.gen';
 import { showSnackbar } from '@/stores/snackbar-store';
 import {
   APPROVAL_REVIEWER_VALUES,
@@ -50,20 +50,40 @@ import {
 // Security read-only fields
 // ---------------------------------------------------------------------------
 
-const SECURITY_READONLY_KEYS = [
-  'approval_policy',
-  'sandbox_mode',
-  'sandbox_workspace_write',
-] as const;
+const SECURITY_READONLY_KEYS = ['sandbox_workspace_write'] as const;
 
 const SECURITY_FIELD_LABELS: Record<
   (typeof SECURITY_READONLY_KEYS)[number],
   string
 > = {
-  approval_policy: 'Approval Policy',
-  sandbox_mode: 'Sandbox Mode',
   sandbox_workspace_write: 'Sandbox Workspace Write',
 };
+
+/**
+ * Global defaults for conversations started from now on.
+ *
+ * These are editable here and nowhere else. The chat badge changes ONE
+ * conversation, which is a different thing — writing the global keys was
+ * measured not to reach a thread that is already loaded. Both controls existing
+ * is the point; for a while the badge pointed here for the default while this
+ * page pointed back at the badge, leaving no way to change it outside the raw
+ * TOML editor.
+ *
+ * The approval list is exactly the pinned config schema's: `untrusted` was
+ * retired from it and makes the app-server refuse to start, `on-failure` no
+ * longer exists, and the granular object form has no place in a two-choice
+ * picker. Offering a value the server rejects would break every future
+ * conversation from a settings page.
+ */
+const APPROVAL_POLICY_VALUES = ['on-request', 'never'] as const;
+type ApprovalPolicyValue = (typeof APPROVAL_POLICY_VALUES)[number];
+const isApprovalPolicyValue = (value: unknown): value is ApprovalPolicyValue =>
+  typeof value === 'string' && (APPROVAL_POLICY_VALUES as readonly string[]).includes(value);
+
+const SANDBOX_MODE_VALUES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+type SandboxModeValue = (typeof SANDBOX_MODE_VALUES)[number];
+const isSandboxModeValue = (value: unknown): value is SandboxModeValue =>
+  typeof value === 'string' && (SANDBOX_MODE_VALUES as readonly string[]).includes(value);
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -76,17 +96,15 @@ export function CodexSettings() {
 
   // ---- Queries ----
   const configQuery = useQuery(codexConfigReadConfigOptions());
-  const rawQuery = useQuery({
-    ...codexConfigReadRawConfigOptions(),
-    enabled: false, // only fetch when raw editor is expanded
-  });
 
   const config = configQuery.data?.config as ConfigRecord | undefined;
   const origins = configQuery.data?.origins as ConfigRecord | undefined;
 
   // ---- Drafts: same pattern as useCategorySettings ----
   // draftOverrides stores user edits; base values come from config via useMemo.
-  const [draftOverrides, setDraftOverrides] = useState<Record<string, string>>({});
+  const [draftOverrides, setDraftOverrides] = useState<Record<string, string>>(
+    {},
+  );
 
   const baseDrafts = useMemo(() => {
     if (!config) return {};
@@ -110,12 +128,9 @@ export function CodexSettings() {
     return keys;
   }, [draftOverrides, baseDrafts]);
 
-  const handleDraftChange = useCallback(
-    (key: string, value: string) => {
-      setDraftOverrides((prev) => ({ ...prev, [key]: value }));
-    },
-    [],
-  );
+  const handleDraftChange = useCallback((key: string, value: string) => {
+    setDraftOverrides((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
   // ---- Mutations ----
   const invalidate = useCallback(() => {
@@ -125,19 +140,26 @@ export function CodexSettings() {
     void queryClient.invalidateQueries({
       queryKey: codexStatusGetStatusOptions().queryKey,
     });
+    // A raw edit can move model_catalog_json, so the catalog panel's notion of
+    // configured vs running is stale the moment config.toml is written.
+    void queryClient.invalidateQueries({ queryKey: catalogStateQueryKey() });
   }, [queryClient]);
+
+  const [saveWarnings, setSaveWarnings] = useState<CatalogWarningDto[]>([]);
 
   const updateMutation = useMutation({
     ...codexConfigUpdateConfigMutation(),
     onSuccess: (data, variables) => {
       // Optimistically update the query cache with the returned config
       queryClient.setQueryData(codexConfigReadConfigOptions().queryKey, data);
+      // Held separately from the query: warnings are produced by the write, and
+      // the invalidation below refetches a read that does not carry them. This
+      // is where "the configured model is not in the catalog" surfaces at all.
+      setSaveWarnings(data.warnings ?? []);
       invalidate();
       showSnackbar(t('Config saved'), 'success');
       // Only clear drafts for saved keys, preserve other pending edits
-      const savedKeys = new Set(
-        variables.body.edits.map((e) => e.keyPath),
-      );
+      const savedKeys = new Set(variables.body.edits.map((e) => e.keyPath));
       setDraftOverrides((prev) => {
         const next = { ...prev };
         for (const key of savedKeys) delete next[key];
@@ -243,6 +265,33 @@ export function CodexSettings() {
     [config, origins],
   );
 
+  // Read from the same curated config the rest of this page uses, so the
+  // control shows what the server actually resolved rather than what this tab
+  // last wrote.
+  const globalApprovalPolicy = useMemo(
+    () =>
+      resolveConfigValue(
+        config,
+        origins,
+        ['approval_policy'],
+        'on-request' as ApprovalPolicyValue,
+        isApprovalPolicyValue,
+      ),
+    [config, origins],
+  );
+
+  const globalSandboxMode = useMemo(
+    () =>
+      resolveConfigValue(
+        config,
+        origins,
+        ['sandbox_mode'],
+        'read-only' as SandboxModeValue,
+        isSandboxModeValue,
+      ),
+    [config, origins],
+  );
+
   // ---- Group fields ----
   const groupedFields = useMemo(() => {
     const map = new Map<string, FieldDef[]>();
@@ -257,222 +306,169 @@ export function CodexSettings() {
     return map;
   }, []);
 
-  // ---- Raw editor (Monaco) ----
-  const dark = useThemeStore((s) => s.dark);
-  const [rawExpanded, setRawExpanded] = useState(false);
-  const [rawDraft, setRawDraft] = useState('');
-  const [rawDirty, setRawDirty] = useState(false);
-  const monacoRef = useRef<Parameters<OnMount>[0] | null>(null);
-
-  const handleMonacoMount: OnMount = useCallback((editor) => {
-    monacoRef.current = editor;
-  }, []);
-
-  const handleExpandRaw = useCallback(() => {
-    const next = !rawExpanded;
-    setRawExpanded(next);
-    if (next) {
-      void rawQuery.refetch().then((result) => {
-        if (result.data) {
-          setRawDraft(result.data.content);
-          setRawDirty(false);
-        }
-      });
-    }
-  }, [rawExpanded, rawQuery]);
-
-  const rawMutation = useMutation({
-    ...codexConfigUpdateRawConfigMutation(),
-    onSuccess: () => {
-      invalidate();
-      void rawQuery.refetch();
-      setRawDirty(false);
-      showSnackbar(t('Config file saved and reloaded'), 'success');
-    },
-    onError: (err) => {
-      showSnackbar(
-        t('Failed to save config file: {{msg}}', { msg: String(err) }),
-        'error',
-      );
-    },
-  });
-
-  // ---- Loading state ----
-  if (configQuery.isLoading) {
-    return (
-      <div className="rounded-lg border border-border bg-card/50 px-4 py-3 text-sm text-muted-foreground">
-        {t('Loading...')}
-      </div>
-    );
-  }
-
-  if (configQuery.isError || !config) {
-    return (
-      <div className="rounded-lg border border-destructive/30 bg-card/50 px-4 py-3 text-sm text-destructive">
-        {t('Failed to load Codex config')}
-      </div>
-    );
-  }
+  // The structured editor is what withdraws on a failed or pending read; the raw
+  // editor keeps ONE position in the tree across every state. Returning early
+  // per state would remount it, and a remount discards the unsaved TOML the user
+  // came here to write — which is most likely exactly when the read is failing.
+  const unavailable = configQuery.isLoading ? (
+    <div className="rounded-lg border border-border bg-card/50 px-4 py-3 text-sm text-muted-foreground">
+      {t('Loading...')}
+    </div>
+  ) : (
+    <div className="rounded-lg border border-destructive/30 bg-card/50 px-4 py-3 text-sm text-destructive">
+      {t('Failed to load Codex config')}
+    </div>
+  );
 
   return (
     <section className="space-y-6">
-      <div className="space-y-1">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          {t('Codex Configuration')}
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          {t(
-            'Manage Codex app-server settings. Changes are saved to user config.toml and hot-reloaded.',
-          )}
-        </p>
-      </div>
-
-      {/* Structured field groups */}
-      {GROUP_ORDER.map((group) => {
-        const fields = groupedFields.get(group);
-        if (!fields?.length) return null;
-        // Hide Profile group when no profiles are defined
-        if (group === 'Profile' && profileOptions.length === 0) return null;
-        return (
-          <div key={group} className="space-y-3">
-            <h3 className="text-sm font-medium text-muted-foreground">
-              {t(group)}
-            </h3>
-            {fields.map((def) => (
-              <ConfigFieldEditor
-                key={def.key}
-                def={def}
-                draft={drafts[def.key] ?? ''}
-                dirty={dirtyKeys.has(def.key)}
-                origin={originLabel(origins, def.key)}
-                overridden={isUserConfigOrigin(origins, def.key)}
-                saving={updateMutation.isPending}
-                profileOptions={def.key === 'profile' ? profileOptions : undefined}
-                serviceTierOptions={
-                  def.key === 'service_tier' ? serviceTierOptions : undefined
-                }
-                onDraftChange={handleDraftChange}
-                onSave={handleSaveField}
-                onClear={handleClearField}
-              />
-            ))}
-          </div>
-        );
-      })}
-
-      {/* Security read-only */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium text-muted-foreground">
-          {t('Security')}
-        </h3>
-        <p className="text-xs text-muted-foreground">
-          {t('Approval policy and sandbox mode are changed from the chat security badge.')}
-        </p>
-        <ApprovalReviewerControl
-          label={t('Approvals Reviewer')}
-          description={t('Default reviewer for approval requests.')}
-          effectiveValue={topLevelReviewer.value}
-          source={topLevelReviewer.source}
-          overridden={isUserConfigOrigin(origins, 'approvals_reviewer')}
-          saving={updateMutation.isPending}
-          options={reviewerOptions}
-          onCommit={(value) =>
-            updateMutation.mutate({
-              body: {
-                edits: [{ keyPath: 'approvals_reviewer', value }],
-              },
-            })
-          }
-        />
-        {SECURITY_READONLY_KEYS.map((key) => (
-          <div
-            key={key}
-            className="space-y-1 overflow-hidden rounded-lg border border-border bg-card/50 px-4 py-3"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">
-                {t(SECURITY_FIELD_LABELS[key])}
-              </span>
-              {isNonEnglish && (
-                <code className="text-xs text-muted-foreground">{key}</code>
+      {!config || configQuery.isError || configQuery.isLoading ? (
+        unavailable
+      ) : (
+        <>
+          <div className="space-y-1">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {t('Codex Configuration')}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                'Manage Codex app-server settings. Changes are saved to user config.toml and hot-reloaded.',
               )}
-              <ConfigSourceBadge source={originLabel(origins, key)} />
-            </div>
-            <p className="break-all text-xs text-muted-foreground">
-              {formatConfigValue(config[key])}
             </p>
           </div>
-        ))}
-      </div>
 
-      {/* Raw config.toml editor */}
-      <div className="space-y-3 border-t border-border pt-4">
-        <button
-          type="button"
-          onClick={handleExpandRaw}
-          className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {rawExpanded ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
+          {saveWarnings.length > 0 && (
+            <ul className="space-y-1 text-xs text-amber-500">
+              {saveWarnings.map((warning, index) => (
+                <li key={index}>
+                  {warning.model ? `${warning.model}: ` : ''}
+                  {warning.message}
+                </li>
+              ))}
+            </ul>
           )}
-          <FileText className="h-4 w-4" />
-          {t('Edit config.toml')}
-          {rawQuery.data?.filePath && (
-            <span className="ml-1 text-xs font-normal text-muted-foreground">
-              ({rawQuery.data.filePath})
-            </span>
-          )}
-        </button>
 
-        {rawExpanded && (
-          <div className="space-y-2">
-            <div className="overflow-hidden rounded-md border border-border">
-              <Editor
-                value={rawDraft}
-                language="ini"
-                theme={dark ? 'vs-dark' : 'vs'}
-                height="400px"
-                onMount={handleMonacoMount}
-                onChange={(value) => {
-                  const v = value ?? '';
-                  setRawDraft(v);
-                  setRawDirty(v !== (rawQuery.data?.content ?? ''));
-                }}
-                options={{
-                  readOnly: rawMutation.isPending,
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  wordWrap: 'on',
-                  padding: { top: 8 },
-                }}
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                disabled={!rawDirty || rawMutation.isPending}
-                onClick={() => {
-                  // Read latest value from Monaco editor
-                  const content = monacoRef.current?.getValue() ?? rawDraft;
-                  rawMutation.mutate({ body: { content } });
-                }}
-              >
-                <Save className="mr-1.5 h-3.5 w-3.5" />
-                {t('Save & Reload')}
-              </Button>
-              {rawDirty && (
-                <span className="text-xs text-amber-500">
-                  {t('Unsaved changes')}
-                </span>
+          {/* Structured field groups */}
+          {GROUP_ORDER.map((group) => {
+            const fields = groupedFields.get(group);
+            if (!fields?.length) return null;
+            // Hide Profile group when no profiles are defined
+            if (group === 'Profile' && profileOptions.length === 0) return null;
+            return (
+              <div key={group} className="space-y-3">
+                <h3 className="text-sm font-medium text-muted-foreground">
+                  {t(group)}
+                </h3>
+                {fields.map((def) => (
+                  <ConfigFieldEditor
+                    key={def.key}
+                    def={def}
+                    draft={drafts[def.key] ?? ''}
+                    dirty={dirtyKeys.has(def.key)}
+                    origin={originLabel(origins, def.key)}
+                    overridden={isUserConfigOrigin(origins, def.key)}
+                    saving={updateMutation.isPending}
+                    profileOptions={
+                      def.key === 'profile' ? profileOptions : undefined
+                    }
+                    serviceTierOptions={
+                      def.key === 'service_tier'
+                        ? serviceTierOptions
+                        : undefined
+                    }
+                    onDraftChange={handleDraftChange}
+                    onSave={handleSaveField}
+                    onClear={handleClearField}
+                  />
+                ))}
+              </div>
+            );
+          })}
+
+          {/* Security read-only */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-muted-foreground">
+              {t('Security')}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                'Defaults for new conversations. Changing them does not affect a conversation already open — use its security badge for that.',
               )}
-            </div>
+            </p>
+            <ConfigSelectOverrideControl
+              label={t('Approval Policy')}
+              description={t('When Codex asks before running a command.')}
+              effectiveValue={globalApprovalPolicy.value}
+              source={globalApprovalPolicy.source}
+              overridden={isUserConfigOrigin(origins, 'approval_policy')}
+              saving={updateMutation.isPending}
+              options={APPROVAL_POLICY_VALUES.map((value) => ({
+                value,
+                label: t(value),
+              }))}
+              onCommit={(value) =>
+                updateMutation.mutate({
+                  body: { edits: [{ keyPath: 'approval_policy', value }] },
+                })
+              }
+            />
+            <ConfigSelectOverrideControl
+              label={t('Sandbox Mode')}
+              description={t('What a command may reach by default.')}
+              effectiveValue={globalSandboxMode.value}
+              source={globalSandboxMode.source}
+              overridden={isUserConfigOrigin(origins, 'sandbox_mode')}
+              saving={updateMutation.isPending}
+              options={SANDBOX_MODE_VALUES.map((value) => ({
+                value,
+                label: t(value),
+              }))}
+              onCommit={(value) =>
+                updateMutation.mutate({
+                  body: { edits: [{ keyPath: 'sandbox_mode', value }] },
+                })
+              }
+            />
+            <ApprovalReviewerControl
+              label={t('Approvals Reviewer')}
+              description={t('Default reviewer for approval requests.')}
+              effectiveValue={topLevelReviewer.value}
+              source={topLevelReviewer.source}
+              overridden={isUserConfigOrigin(origins, 'approvals_reviewer')}
+              saving={updateMutation.isPending}
+              options={reviewerOptions}
+              onCommit={(value) =>
+                updateMutation.mutate({
+                  body: {
+                    edits: [{ keyPath: 'approvals_reviewer', value }],
+                  },
+                })
+              }
+            />
+            {SECURITY_READONLY_KEYS.map((key) => (
+              <div
+                key={key}
+                className="space-y-1 overflow-hidden rounded-lg border border-border bg-card/50 px-4 py-3"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">
+                    {t(SECURITY_FIELD_LABELS[key])}
+                  </span>
+                  {isNonEnglish && (
+                    <code className="text-xs text-muted-foreground">{key}</code>
+                  )}
+                  <ConfigSourceBadge source={originLabel(origins, key)} />
+                </div>
+                <p className="break-all text-xs text-muted-foreground">
+                  {formatConfigValue(config[key])}
+                </p>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      <RawConfigEditor onSaved={invalidate} />
     </section>
   );
 }

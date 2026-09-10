@@ -97,10 +97,10 @@ redact paths: `Authorization`, `cookie`, `req.query.access_token`, `set-cookie`,
 
 ## 策略切换
 
-SecurityPolicyBadge (ChatInput popover):
-- `POST /api/codex/approval-policy` → `config/batchWrite` + `reloadUserConfig:true`
-- `POST /api/codex/sandbox-mode` → 同上
-- 显示网络访问状态，危险选项红色高亮
+- `GET /api/threads/:threadId/security-policy` 读取会话已观察到的下轮策略；未知值为 null，不用全局配置冒充。
+- `PATCH /api/threads/:threadId/security-policy` 校验 approvalPolicy/sandboxPolicy 后排队更新，返回 HTTP 202 `{status:"accepted"}`；必须再观察到匹配的 effective settings 才能发送下一轮，当前轮与已有审批不变。
+- `POST /api/codex/approval-policy` 与 `/api/codex/sandbox-mode` 只编辑新会话的全局默认。实测 `reloadUserConfig:true` 不改变已加载会话的这两项策略，不能宣称对所有配置字段均如此。
+- 写入端点不会自动 resume 获取所有权，也不会在失败时回退到全局配置。完整契约见 [thread-policy-recovery.md](thread-policy-recovery.md)。
 
 ## 审批卡片
 

@@ -259,6 +259,69 @@ describe('CodexStatusService', () => {
     expect(status.runtime.reasons).not.toContain('unknownProviderEnvKey');
   });
 
+  it('should stay ready when the provider authenticates with an inline bearer token', async () => {
+    mockCodex.request.mockImplementation((method: string) => {
+      switch (method) {
+        case 'account/read':
+          return Promise.resolve(
+            accountResponse({ account: null, requiresOpenaiAuth: true }),
+          );
+        case 'config/read':
+          return Promise.resolve(
+            configResponse({
+              model_provider: 'gateway',
+              model_providers: {
+                // Shape as returned by `config/read`: an inline token leaves
+                // `env_key` null even though the provider is credentialed.
+                gateway: {
+                  base_url: 'https://gateway.example.com/v1',
+                  env_key: null,
+                  experimental_bearer_token: 'token-value',
+                },
+              },
+            }),
+          );
+        case 'model/list':
+          return Promise.resolve(modelListResponse());
+        default:
+          return Promise.reject(new Error(`Unexpected method: ${method}`));
+      }
+    });
+
+    const status = await service.getStatus();
+
+    expect(status.provider).toMatchObject({ id: 'gateway', envKey: null });
+    expect(status.runtime.reasons).not.toContain('unknownProviderEnvKey');
+    expect(status.runtime.status).toBe('ready');
+  });
+
+  it('should report unknownProviderEnvKey when the provider declares no credential', async () => {
+    mockCodex.request.mockImplementation((method: string) => {
+      switch (method) {
+        case 'account/read':
+          return Promise.resolve(accountResponse());
+        case 'config/read':
+          return Promise.resolve(
+            configResponse({
+              model_provider: 'gateway',
+              model_providers: {
+                gateway: { base_url: 'https://gateway.example.com/v1' },
+              },
+            }),
+          );
+        case 'model/list':
+          return Promise.resolve(modelListResponse());
+        default:
+          return Promise.reject(new Error(`Unexpected method: ${method}`));
+      }
+    });
+
+    const status = await service.getStatus();
+
+    expect(status.runtime.reasons).toContain('unknownProviderEnvKey');
+    expect(status.runtime.status).toBe('degraded');
+  });
+
   it('should return degraded when account/read fails but config and models work', async () => {
     mockCodex.request.mockImplementation((method: string) => {
       switch (method) {

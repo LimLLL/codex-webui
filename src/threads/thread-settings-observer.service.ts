@@ -8,20 +8,25 @@ import type {
   v2,
 } from '../codex/codex-schema';
 import type { ThreadCollaborationModeStateDto } from './dto/threads.dto';
+import type { ThreadSecurityPolicyDto } from './dto/thread-security-policy.dto';
 
-export type ThreadSettingsObservationSource = 'notification' | 'accepted';
-
-interface CachedThreadSettings {
-  source: ThreadSettingsObservationSource;
-  model: string;
-  /**
-   * Thread-level effective effort, tracked separately from the collaboration
-   * mode's own effort. Switching to a preset that does not select an effort
-   * must not clear what the user already had.
-   */
-  effort: ReasoningEffort | null;
-  collaborationMode: CollaborationMode;
+/** A seed does not contain every field exposed by the full notification. */
+export interface ObservedThreadSettings {
+  source: 'response' | 'notification';
+  settings: Partial<v2.ThreadSettings>;
 }
+
+type SettingsSeed = Pick<
+  v2.ThreadResumeResponse,
+  | 'cwd'
+  | 'model'
+  | 'modelProvider'
+  | 'serviceTier'
+  | 'reasoningEffort'
+  | 'approvalPolicy'
+  | 'approvalsReviewer'
+  | 'sandbox'
+>;
 
 /**
  * Effort displaced by entering a preset that dictates its own (Plan forces
@@ -37,7 +42,7 @@ interface DisplacedEffort {
 @Injectable()
 export class ThreadSettingsObserverService {
   private readonly logger = new Logger(ThreadSettingsObserverService.name);
-  private readonly cache = new Map<string, CachedThreadSettings>();
+  private readonly cache = new Map<string, ObservedThreadSettings>();
   /**
    * Kept out of `cache` deliberately. Observed settings describe one
    * app-server generation and are dropped on restart, but the effort Plan mode
@@ -66,7 +71,7 @@ export class ThreadSettingsObserverService {
   /** Returns the currently observed collaboration mode, or an explicit unknown. */
   readCollaborationMode(threadId: string): ThreadCollaborationModeStateDto {
     const cached = this.cache.get(threadId);
-    if (!cached) {
+    if (!cached?.settings.collaborationMode) {
       return {
         observed: false,
         source: 'unknown',
@@ -82,7 +87,11 @@ export class ThreadSettingsObserverService {
   readObservedModel(threadId: string): string | null {
     const cached = this.cache.get(threadId);
     if (!cached) return null;
-    return cached.model || cached.collaborationMode.settings.model || null;
+    return (
+      cached.settings.model ??
+      cached.settings.collaborationMode?.settings.model ??
+      null
+    );
   }
 
   /**
@@ -93,7 +102,7 @@ export class ThreadSettingsObserverService {
    * treats as clearing the effort rather than leaving it untouched.
    */
   readObservedEffort(threadId: string): ReasoningEffort | null {
-    return this.cache.get(threadId)?.effort ?? null;
+    return this.cache.get(threadId)?.settings.effort ?? null;
   }
 
   /**
@@ -122,29 +131,70 @@ export class ThreadSettingsObserverService {
     this.displacedEffort.delete(threadId);
   }
 
+  /** Returns the latest observation without loading or changing a thread. */
+  readSettings(threadId: string): ObservedThreadSettings | undefined {
+    return this.cache.get(threadId);
+  }
+
   /**
-   * Records a successful WebUI-initiated collaboration mode update.
-   *
-   * App-server may omit `thread/settings/updated` when the effective settings
-   * did not change, so the accepted request is still useful observable state.
+   * Seeds settings missing from observations using a start/resume/fork response.
+   * Notifications can arrive before that response resolves; their fields always
+   * win. Seeds never invent collaboration mode, personality, or profile identity.
+   */
+  seedResponse(threadId: string, response: SettingsSeed): void {
+    // A complete notification or an earlier seed already supplies these leaves.
+    // Keeping its identity also preserves in-flight mutation observation guards.
+    if (this.cache.has(threadId)) return;
+    this.cache.set(threadId, {
+      source: 'response',
+      settings: {
+        cwd: response.cwd,
+        model: response.model,
+        modelProvider: response.modelProvider,
+        serviceTier: response.serviceTier,
+        effort: response.reasoningEffort,
+        approvalPolicy: response.approvalPolicy,
+        approvalsReviewer: response.approvalsReviewer,
+        sandboxPolicy: response.sandbox,
+      },
+    });
+  }
+
+  /** Returns observed security settings; null means unknown, never a default. */
+  readSecurityPolicy(threadId: string): ThreadSecurityPolicyDto {
+    const cached = this.cache.get(threadId);
+    const settings = cached?.settings;
+    return {
+      observed:
+        settings?.approvalPolicy !== undefined &&
+        settings.sandboxPolicy !== undefined,
+      source: cached?.source ?? 'unknown',
+      approvalPolicy: settings?.approvalPolicy ?? null,
+      sandboxPolicy: settings?.sandboxPolicy ?? null,
+      approvalsReviewer: settings?.approvalsReviewer ?? null,
+    };
+  }
+
+  /**
+   * Records effort displaced by an accepted mode request, not effective settings.
+   * The empty RPC acknowledgement only queues the change. If a newer observation
+   * already left the requested mode, do not resurrect its displaced-effort state.
+   * @param before - Observation captured immediately before submitting the RPC
+   * @returns The actual observed mode, which may still be unknown or unchanged
    */
   recordAcceptedCollaborationMode(
     threadId: string,
     collaborationMode: CollaborationMode,
     displaced: DisplacedEffort | null,
+    before?: ObservedThreadSettings,
   ): ThreadCollaborationModeStateDto {
-    this.cache.set(threadId, {
-      source: 'accepted',
-      model: collaborationMode.settings.model,
-      // The mode we just wrote becomes the thread's effective effort; a later
-      // notification carrying the full settings still overwrites this.
-      effort:
-        collaborationMode.settings.reasoning_effort ??
-        this.cache.get(threadId)?.effort ??
-        null,
-      collaborationMode,
-    });
-    this.recordDisplacedEffort(threadId, displaced);
+    const current = this.cache.get(threadId);
+    if (
+      current === before ||
+      current?.settings.collaborationMode?.mode === collaborationMode.mode
+    ) {
+      this.recordDisplacedEffort(threadId, displaced);
+    }
     return this.readCollaborationMode(threadId);
   }
 
@@ -154,6 +204,10 @@ export class ThreadSettingsObserverService {
    * call site so the cache cannot outlive the thread it describes.
    */
   observeNotification(notification: ServerNotification): void {
+    if (notification.method === 'thread/closed') {
+      this.cache.delete(notification.params.threadId);
+      return;
+    }
     if (notification.method === 'thread/deleted') {
       this.forget(notification.params.threadId);
       return;
@@ -172,9 +226,7 @@ export class ThreadSettingsObserverService {
   ): void {
     this.cache.set(threadId, {
       source: 'notification',
-      model: threadSettings.model,
-      effort: threadSettings.effort ?? null,
-      collaborationMode: threadSettings.collaborationMode,
+      settings: threadSettings,
     });
     // Something outside this client — the TUI, the desktop app, another tab —
     // can leave the effort-dictating mode without going through us. Once the
@@ -187,15 +239,15 @@ export class ThreadSettingsObserverService {
   }
 
   private toState(
-    cached: CachedThreadSettings,
+    cached: ObservedThreadSettings,
   ): ThreadCollaborationModeStateDto {
+    const mode = cached.settings.collaborationMode!;
     return {
       observed: true,
-      source: cached.source,
-      mode: cached.collaborationMode.mode,
-      model: cached.collaborationMode.settings.model,
-      reasoningEffort:
-        cached.collaborationMode.settings.reasoning_effort ?? null,
+      source: 'notification',
+      mode: mode.mode,
+      model: mode.settings.model,
+      reasoningEffort: mode.settings.reasoning_effort ?? null,
     };
   }
 }

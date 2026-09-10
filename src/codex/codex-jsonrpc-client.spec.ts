@@ -160,3 +160,53 @@ describe('CodexJsonRpcClient', () => {
     await expect(promise).rejects.toThrow('Client destroyed');
   });
 });
+
+/** These cases exercise transport ordering, not just the standalone ledger. */
+describe('CodexJsonRpcClient accepted work', () => {
+  let proc: ChildProcess;
+  let client: CodexJsonRpcClient;
+  const receive = (value: unknown) =>
+    proc.stdout!.push(JSON.stringify(value) + '\n');
+  beforeEach(() => {
+    proc = createMockProcess();
+    client = new CodexJsonRpcClient(proc, 20);
+  });
+  afterEach(() => {
+    client.destroy();
+    proc.emit('close', 0, null);
+  });
+  it('keeps an ambiguous timeout until a late response and correlated completion arrive', async () => {
+    const request = client.request('turn/start', { threadId: 't' });
+    await expect(request).rejects.toThrow('timed out');
+    expect(client.acceptedWork.blockers()).toHaveLength(1);
+    const terminal = new Promise((resolve) =>
+      client.once('notification', resolve),
+    );
+    receive({ id: 1, result: { turn: { id: 'turn', status: 'inProgress' } } });
+    receive({
+      method: 'turn/completed',
+      params: { threadId: 't', turn: { id: 'turn', status: 'completed' } },
+    });
+    await terminal;
+    expect(client.acceptedWork.blockers()).toEqual([]);
+  });
+  it('distinguishes explicit refusal from an uncertain internal error', async () => {
+    const refused = client.request('turn/start', { threadId: 't' });
+    receive({ id: 1, error: { code: -32600, message: 'refused' } });
+    await expect(refused).rejects.toThrow('refused');
+    expect(client.acceptedWork.blockers()).toEqual([]);
+    const uncertain = client.request('turn/start', { threadId: 't' });
+    receive({ id: 2, error: { code: -32603, message: 'internal' } });
+    await expect(uncertain).rejects.toThrow('internal');
+    expect(client.acceptedWork.blockers()).toHaveLength(1);
+  });
+  it('does not clear work on a kill request, only on actual exit', async () => {
+    const request = client.request('thread/compact/start', { threadId: 't' });
+    receive({ id: 1, result: {} });
+    await request;
+    client.destroy();
+    expect(client.acceptedWork.blockers()).toHaveLength(1);
+    proc.emit('close', 0, null);
+    expect(client.acceptedWork.blockers()).toEqual([]);
+  });
+});

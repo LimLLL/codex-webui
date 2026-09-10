@@ -2,6 +2,7 @@
  * Model and reasoning effort selector for the chat input area.
  * Displays current model + effort as a compact badge, opens a popover to change.
  */
+import { useState } from 'react';
 import { Bot, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -55,7 +56,17 @@ export function ModelSelector() {
     selectedThreadId ? s.observedEffortByThread[selectedThreadId] : null,
   );
 
-  const { models, activeModelId, activeModel, configModel } = useActiveModel();
+  const { models, hiddenModels, activeModelId, activeModel, configModel } =
+    useActiveModel();
+  const [showHidden, setShowHidden] = useState(false);
+  // A hidden model that is already active is always listed: the user has to be
+  // able to see what they are running, and to switch back to it.
+  const listedModels =
+    showHidden || !activeModel?.hidden
+      ? showHidden
+        ? [...models, ...hiddenModels]
+        : models
+      : [...models, activeModel];
   // An explicit user choice wins; otherwise show what app-server reports for
   // this thread, which is how Plan mode's imposed effort becomes visible.
   const activeEffort =
@@ -120,22 +131,47 @@ export function ModelSelector() {
             {t('Model')}
           </div>
           <div className="max-h-56 space-y-0.5 overflow-y-auto">
-            {models.map((model) => (
+            {listedModels.map((model) => (
               <OptionRow
                 key={model.id}
                 active={model.model === activeModelId}
-                badge={model.isDefault ? t('default') : undefined}
+                badge={
+                  model.isDefault
+                    ? t('default')
+                    : model.hidden
+                      ? t('hidden')
+                      : undefined
+                }
                 description={catalogCopy(model.description)}
                 label={modelLabel(model)}
                 onSelect={() => handleModelSelect(model)}
               />
             ))}
-            {models.length === 0 && (
+            {listedModels.length === 0 && (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
                 {t('No models available')}
               </p>
             )}
           </div>
+          {/*
+            The catalog hides models that are still perfectly selectable, and
+            one of them may already be the configured model. Offering them
+            behind a toggle keeps the default list short without making a
+            hidden model unreachable.
+          */}
+          {hiddenModels.length > 0 && (
+            <button
+              type="button"
+              className="w-full px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setShowHidden((value) => !value)}
+            >
+              {showHidden
+                ? t('Hide hidden models')
+                : t('Show hidden models ({{count}})', {
+                    count: hiddenModels.length,
+                  })}
+            </button>
+          )}
         </div>
 
         {/* Reasoning effort — always shown, falls back to standard options */}

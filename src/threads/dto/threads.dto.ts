@@ -4,11 +4,7 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import type { ModeKind, ReasoningEffort, v2 } from '../../codex/codex-schema';
-import {
-  approvalPolicySchema,
-  threadItemSchema,
-  userInputSchema,
-} from '../../codex/dto/v2';
+import { approvalPolicySchema, userInputSchema } from '../../codex/dto/v2';
 import {
   NULLABLE_STRING_SCHEMA,
   REASONING_EFFORT_VALUES,
@@ -322,20 +318,7 @@ export class ThreadTurnsListQueryDto {
   itemsView?: 'notLoaded' | 'summary' | 'full';
 }
 
-/**
- * Full persisted items for a single turn.
- *
- * Used to top a turn up to full detail after it was fetched in the cheaper
- * `summary` view, which app-server returns without `reasoning` or `plan`.
- */
-export class ThreadTurnItemsResponseDto {
-  @ApiProperty({
-    type: 'array',
-    items: threadItemSchema(false) as Record<string, unknown>,
-    description: 'Items belonging to the turn, oldest first.',
-  })
-  items!: unknown[];
-}
+export { ThreadTurnItemsResponseDto } from './thread-turn-items.dto';
 
 /** One page of turn history returned without materializing a whole thread. */
 export class ThreadTurnsPageDto {

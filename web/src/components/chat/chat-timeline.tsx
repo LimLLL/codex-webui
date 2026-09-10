@@ -2,10 +2,9 @@
  * Virtualized scrollable message timeline.
  * Uses TanStack Virtual for efficient rendering of long conversations.
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bot, Loader2, Lock, Pencil } from 'lucide-react';
+import { ArrowDown, Bot, Loader2, Lock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertDialog,
@@ -18,14 +17,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
-import {
   useCreateMessageBranch,
   useMessageVersions,
-  type MessageVersions,
 } from '@/hooks/use-message-branches';
 import {
   adoptionBlockReason,
@@ -36,21 +29,58 @@ import {
   useDeleteThread,
 } from '@/hooks/use-thread-deletion';
 import { useLoadOlderHistory } from '@/hooks/use-thread-open';
+import {
+  AT_END_THRESHOLD_PX,
+  useTranscriptFollow,
+} from '@/hooks/use-transcript-follow';
 import { DeleteConversationDialog } from '@/components/branches/delete-conversation-dialog';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { shouldPrefetchOlder } from '@/lib/history-prefetch';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { TimelineEntry } from '@/types/timeline';
-import { MessageVersionSwitcher } from './message-version-switcher';
-import { TurnBlock } from './turn-block';
-import { UserMessageBubble } from './user-message-bubble';
-import { TurnFailureCard } from './turn-failure-card';
+import { TimelineEntryRow } from './timeline-entry-row';
 
 /** Stable empty set, so "nothing is being deleted" is referentially constant. */
 const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set<string>();
 
-/** Returns true if the scroll container is near the bottom. */
-function isNearBottom(el: HTMLElement, threshold = 120): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+/**
+ * Leading space reserved for the "load earlier" control, in px.
+ *
+ * A constant rather than the control's measured height, and reserved whether or
+ * not the control is showing. `paddingStart` shifts every row's computed start,
+ * but changing it is not one of the changes the virtualizer restores scroll
+ * position across — that restoration is keyed to the item count and the edge
+ * item keys. So a padding change moves the content under the reader by its own
+ * delta: once when the control is first measured, and again when exhausting the
+ * cursor removes it. Reserving a fixed amount forever costs a strip of leading
+ * whitespace and removes the shift entirely.
+ */
+const HISTORY_HEADER_PX = 48;
+
+/** Joins entry keys into a comparable signature; cannot occur inside a key. */
+const KEY_SEPARATOR = '\u0000';
+
+/**
+ * Derives a stable virtualizer key for every timeline entry.
+ *
+ * Index keys cannot survive `Load earlier messages`: prepending shifts every
+ * existing entry by the page size, so cached row heights — and the end anchor
+ * the virtualizer restores position from — would be attributed to the wrong
+ * entries. Turn ids are the natural identity, but a user message has none until
+ * `turn/started` arrives, and several system messages can share one turn. Both
+ * are disambiguated by their ordinal within their own group, which prepending
+ * cannot disturb: prepended history is always persisted turns, so it never
+ * lands in the group an as-yet unidentified live entry is counted in.
+ */
+function deriveEntryKeys(timeline: TimelineEntry[]): string[] {
+  const counts = new Map<string, number>();
+  return timeline.map((entry) => {
+    const turnId = 'turnId' in entry ? entry.turnId : undefined;
+    const group = `${entry.kind}:${turnId ?? 'pending'}`;
+    const ordinal = counts.get(group) ?? 0;
+    counts.set(group, ordinal + 1);
+    return `${group}:${ordinal}`;
+  });
 }
 
 /**
@@ -86,9 +116,18 @@ interface Props {
    * over it. Zero when the composer sits in flow below the timeline.
    */
   bottomInset?: number;
+  /**
+   * Increments when the composer dispatches a send or steer. Following resumes
+   * on the change, not on the value, so the route only has to count sends.
+   */
+  scrollToLatestSignal?: number;
 }
 
-export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
+export function ChatTimeline({
+  onEditMessage,
+  bottomInset = 0,
+  scrollToLatestSignal = 0,
+}: Props) {
   'use no memo'; // TanStack Virtual is incompatible with React Compiler memoization
   const { t } = useTranslation();
   const timeline = useTimelineStore((s) => s.timeline);
@@ -158,55 +197,42 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
 
   // ── Virtualizer ─────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
-  const prevCountRef = useRef(timeline.length);
-  const shouldAutoScroll = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  /** Virtual-list count readable from timers without re-arming the pin. */
-  const timelineCountRef = useRef(timeline.length);
-  /** Thread whose entry-pin has already been armed. */
-  const pinnedThreadRef = useRef<string | null>(null);
-  /** Timestamp until which the entry-pin keeps re-anchoring the bottom. */
-  const pinUntilRef = useRef(0);
-  const pinTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    timelineCountRef.current = timeline.length;
-  }, [timeline.length]);
+  // Derived through its own joined form so the array keeps its identity across
+  // renders that did not change the key sequence — which is most of them, since
+  // a streaming delta replaces one entry without renaming anything. The
+  // extractor is part of the virtualizer's measurement options, and a fresh one
+  // rebuilds every measurement; it also cannot be made mutably stable, because
+  // the library compares the previous options' extractor against the new one to
+  // detect that the first or last entry changed.
+  const keySignature = useMemo(
+    () => deriveEntryKeys(timeline).join(KEY_SEPARATOR),
+    [timeline],
+  );
+  const entryKeys = useMemo(
+    () => (keySignature === '' ? [] : keySignature.split(KEY_SEPARATOR)),
+    [keySignature],
+  );
+  const getItemKey = useCallback(
+    (index: number) => entryKeys[index] ?? index,
+    [entryKeys],
+  );
 
-  /** Stops the entry-pin loop (user interacted, or the window expired). */
-  const stopBottomPin = useCallback(() => {
-    pinUntilRef.current = 0;
-    if (pinTimerRef.current !== null) {
-      window.clearInterval(pinTimerRef.current);
-      pinTimerRef.current = null;
-    }
-  }, []);
+  const showHistoryHeader = historyCursor !== null;
 
-  // A user gesture means they chose a scroll position; stop fighting it.
-  useEffect(() => {
-    const userEvents = ['touchstart', 'touchmove', 'pointerdown', 'wheel', 'keydown'];
-    const onUserInteraction = () => stopBottomPin();
-    for (const event of userEvents) {
-      document.addEventListener(event, onUserInteraction, {
-        capture: true,
-        passive: true,
-      });
-    }
-    return () => {
-      for (const event of userEvents) {
-        document.removeEventListener(event, onUserInteraction, { capture: true });
-      }
-      stopBottomPin();
-    };
-  }, [stopBottomPin]);
-
-  // Reset the pin when switching threads; the arm effect below runs after this
-  // one on the same commit, so the new thread gets a fresh pin.
-  useEffect(() => {
-    pinnedThreadRef.current = null;
-    stopBottomPin();
-  }, [threadId, stopBottomPin]);
-
+  // `anchorTo: 'end'` makes the tail the edge the virtualizer preserves: it
+  // holds the reader's position when older history prepends, and it declines to
+  // shift the viewport when the streaming turn grows *below* the fold rather
+  // than above it. It also holds the end itself as the last row grows, which is
+  // what following a stream actually consists of.
+  //
+  // `followOnAppend` is deliberately left off. Its implementation follows
+  // through `scrollToIndex`, which installs a target the library re-derives
+  // every frame for up to five seconds and re-applies whenever it moves — and
+  // during streaming it moves constantly, so a reader who scrolls up inside
+  // that window is dragged back down. Appends are followed in
+  // `useTranscriptFollow` with a fixed-offset write instead.
+  //
   // `paddingEnd` grows the scrollable range so the last entry can clear the
   // floating composer; `scrollPaddingEnd` keeps auto-scroll from parking that
   // entry underneath it. Both are needed — the first alone lets the list scroll
@@ -215,89 +241,58 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
   const virtualizer = useVirtualizer({
     count: timeline.length,
     getScrollElement: () => scrollRef.current,
+    getItemKey,
     estimateSize: () => 80,
     overscan: 5,
+    anchorTo: 'end',
+    scrollEndThreshold: AT_END_THRESHOLD_PX,
+    paddingStart: HISTORY_HEADER_PX,
     paddingEnd: bottomInset,
     scrollPaddingEnd: bottomInset,
   });
 
-  // Track whether user is near bottom for auto-scroll decisions
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (el) {
-      shouldAutoScroll.current = isNearBottom(el);
-    }
-  }, []);
-
-  // Cleanup pending animation frames
-  useEffect(() => {
-    return () => {
-      if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
-    };
-  }, []);
-
-  // Keep bottom pinned during streaming (content changes) and new entries.
-  // Smooth scroll for appended entries; instant jump for hydration (0→many).
-  useEffect(() => {
-    const previousCount = prevCountRef.current;
-    const appended = timeline.length > previousCount;
-    prevCountRef.current = timeline.length;
-
-    if (timeline.length === 0 || !shouldAutoScroll.current) return;
-
-    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
-
-    scrollFrameRef.current = requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      virtualizer.scrollToIndex(timeline.length - 1, {
-        align: 'end',
-        behavior: previousCount > 0 && appended ? 'smooth' : 'auto',
-      });
+  const { atEnd, handleScroll, returnToLatest } =
+    useTranscriptFollow({
+      virtualizer,
+      scrollRef,
+      timeline,
+      threadId,
+      bottomInset,
+      scrollToLatestSignal,
     });
-  }, [timeline, virtualizer]);
 
-  // Scroll to bottom on initial load / thread switch
-  useEffect(() => {
-    if (timeline.length > 0) {
-      shouldAutoScroll.current = true;
-      virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' });
+  // Older history loads on approach instead of only on demand. It was a manual
+  // control because prepending into a virtualized list with estimated row
+  // heights moved the content being read; end anchoring plus stable item keys
+  // is exactly what removes that, so the reason no longer holds.
+  //
+  // The control stays: it is the affordance when the transcript is too short to
+  // scroll, and it is where the in-flight state is shown. `loadOlderHistory`
+  // reads the store and claims the loading flag synchronously, so the repeated
+  // calls a scroll burst produces collapse into one request.
+  // Keyed by conversation: the first scroll event after a switch has no
+  // meaningful predecessor, and comparing against the previous conversation's
+  // offset could read as an upward move and fetch a page nobody asked for.
+  const lastScrollRef = useRef({ threadId, scrollTop: 0 });
+  const handleTranscriptScroll = useCallback(() => {
+    handleScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    const last = lastScrollRef.current;
+    const previousScrollTop =
+      last.threadId === threadId ? last.scrollTop : el.scrollTop;
+    lastScrollRef.current = { threadId, scrollTop: el.scrollTop };
+    if (
+      shouldPrefetchOlder({
+        scrollTop: el.scrollTop,
+        previousScrollTop,
+        hasCursor: historyCursor !== null,
+        loading: historyLoading,
+      })
+    ) {
+      void loadOlderHistory();
     }
-    // Only on threadId change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
-
-  /**
-   * Entry pin.
-   *
-   * The virtualizer renders from estimated row heights, so the single
-   * `scrollToIndex` above lands short once the first rows are measured. Keep
-   * re-anchoring the bottom for a short window after a thread opens, and stop
-   * the moment the user touches the transcript so manual history browsing is
-   * never fought.
-   */
-  useEffect(() => {
-    if (!threadId || timeline.length === 0) return;
-    if (pinnedThreadRef.current === threadId) return;
-
-    pinnedThreadRef.current = threadId;
-    shouldAutoScroll.current = true;
-    pinUntilRef.current = Date.now() + 3500;
-
-    const scrollToLatest = () => {
-      const count = timelineCountRef.current;
-      if (count > 0) virtualizer.scrollToIndex(count - 1, { align: 'end' });
-    };
-
-    scrollToLatest();
-    if (pinTimerRef.current !== null) window.clearInterval(pinTimerRef.current);
-    pinTimerRef.current = window.setInterval(() => {
-      if (Date.now() > pinUntilRef.current) {
-        stopBottomPin();
-        return;
-      }
-      scrollToLatest();
-    }, 100);
-  }, [threadId, timeline.length, virtualizer, stopBottomPin]);
+  }, [handleScroll, historyCursor, historyLoading, loadOlderHistory, threadId]);
 
   const virtualItems = virtualizer.getVirtualItems();
 
@@ -334,71 +329,109 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
   return (
     <>
       {readOnlyReason !== null && <ReadOnlyBanner reason={readOnlyReason} />}
-      {/* `scrollbar-gutter` keeps the gutter reserved: switching versions swaps
-          the timeline through an empty state, and letting the scrollbar come and
-          go with it visibly shifts every message sideways. */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-      >
-        {/* Deliberately a button rather than infinite scroll. Opening a
-            conversation now fetches only its most recent page, so older turns
-            are inserted *above* what is rendered — and prepending into a
-            virtualized list with estimated row heights moves the content the
-            user is reading. An explicit control keeps that motion something
-            they asked for. */}
-        {historyCursor !== null && (
-          <div className="flex justify-center px-3 pt-3 sm:px-4 lg:px-6">
+      {/* Positions the return control against the viewport rather than the
+          scrolling content, so offering it never changes the scroll height. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* `scrollbar-gutter` keeps the gutter reserved: switching versions
+            swaps the timeline through an empty state, and letting the scrollbar
+            come and go with it visibly shifts every message sideways. */}
+        <div
+          ref={scrollRef}
+          onScroll={handleTranscriptScroll}
+          className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
+          <div
+            className="relative px-3 sm:px-4 lg:px-6"
+            style={{ height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {/* Older pages load on approach; this control is what makes the
+                fetch reachable when the transcript is too short to scroll, and
+                where the in-flight state is shown.
+
+                Positioned inside the leading space the virtualizer reserves for
+                it, so the scroller holds nothing the virtualizer has not
+                measured — otherwise `scrollHeight` and `getTotalSize()` would
+                differ by its height, and the end-distance the return control
+                reads would disagree with the one the library follows by. Its
+                height must stay within `HISTORY_HEADER_PX`, so the label is
+                kept on one line. */}
+            {showHistoryHeader && (
+              <div
+                className="absolute left-0 top-0 flex w-full items-center justify-center px-3 sm:px-4 lg:px-6"
+                style={{ height: HISTORY_HEADER_PX }}
+              >
+                <button
+                  type="button"
+                  disabled={historyLoading}
+                  onClick={() => void loadOlderHistory()}
+                  className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+                >
+                  {historyLoading && (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  )}
+                  {historyLoading
+                    ? t('Loading earlier messages…')
+                    : t('Load earlier messages')}
+                </button>
+              </div>
+            )}
+            <div
+              className="absolute left-0 top-0 w-full px-3 sm:px-4 lg:px-6"
+              style={{ transform: `translateY(${virtualItems[0]?.start ?? 0}px)` }}
+            >
+              {virtualItems.map((virtualItem) => {
+                const entry = timeline[virtualItem.index];
+                return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={virtualizer.measureElement}
+                    className="py-2"
+                  >
+                    <TimelineEntryRow
+                      entry={entry}
+                      threadCwd={threadCwd}
+                      threadId={threadId}
+                      canBranch={canBranch}
+                      versionsByTurnId={versionsByTurnId}
+                      deleteBlockedReason={deleteBlockedReason}
+                      deletingThreadIds={deletingThreadIds}
+                      onDeleteVersion={(threadId, siblingThreadIds) =>
+                        setDeleteTarget({ threadId, siblingThreadIds })
+                      }
+                      onEdit={setEditTarget}
+                      t={t}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Offered whenever the transcript is away from the end, whether or not
+            anything new arrived. Deliberately one state, not two: telling
+            "output landed" apart from "the reader expanded an older turn in
+            place" needs live-vs-hydration provenance the timeline does not
+            carry, and returning to the latest message is the affordance either
+            way. The row is click-through so it cannot swallow taps on the
+            transcript beside the button. */}
+        {!atEnd && (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3 sm:px-4 lg:px-6"
+            style={{ bottom: bottomInset + 12 }}
+          >
             <button
               type="button"
-              disabled={historyLoading}
-              onClick={() => void loadOlderHistory()}
-              className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              onClick={returnToLatest}
+              aria-label={t('Jump to latest')}
+              className="pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-md transition-colors hover:bg-accent hover:text-foreground"
             >
-              {historyLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-              {historyLoading
-                ? t('Loading earlier messages…')
-                : t('Load earlier messages')}
+              <ArrowDown className="h-3.5 w-3.5" />
+              {t('Jump to latest')}
             </button>
           </div>
         )}
-        <div
-          className="relative px-3 sm:px-4 lg:px-6"
-          style={{ height: `${virtualizer.getTotalSize()}px` }}
-        >
-          <div
-            className="absolute left-0 top-0 w-full px-3 sm:px-4 lg:px-6"
-            style={{ transform: `translateY(${virtualItems[0]?.start ?? 0}px)` }}
-          >
-            {virtualItems.map((virtualItem) => {
-              const entry = timeline[virtualItem.index];
-              return (
-                <div
-                  key={virtualItem.key}
-                  data-index={virtualItem.index}
-                  ref={virtualizer.measureElement}
-                  className="py-2"
-                >
-                  <TimelineEntryRow
-                    entry={entry}
-                    threadCwd={threadCwd}
-                    threadId={threadId}
-                    canBranch={canBranch}
-                    versionsByTurnId={versionsByTurnId}
-                    deleteBlockedReason={deleteBlockedReason}
-                    deletingThreadIds={deletingThreadIds}
-                    onDeleteVersion={(threadId, siblingThreadIds) =>
-                      setDeleteTarget({ threadId, siblingThreadIds })
-                    }
-                    onEdit={setEditTarget}
-                    t={t}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
 
       <AlertDialog open={editTarget !== null} onOpenChange={(open) => !open && setEditTarget(null)}>
@@ -449,103 +482,4 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
       />
     </>
   );
-}
-
-/** Renders a single timeline entry (user message, system message, or turn block). */
-function TimelineEntryRow({
-  entry,
-  threadCwd,
-  threadId,
-  canBranch,
-  versionsByTurnId,
-  deleteBlockedReason,
-  deletingThreadIds,
-  onDeleteVersion,
-  onEdit,
-  t,
-}: {
-  entry: TimelineEntry;
-  threadCwd: string | null;
-  threadId: string | null;
-  canBranch: boolean;
-  versionsByTurnId: Map<string, MessageVersions>;
-  deleteBlockedReason: string | null;
-  deletingThreadIds: ReadonlySet<string>;
-  onDeleteVersion: (threadId: string, siblingThreadIds: string[]) => void;
-  onEdit: (target: { turnId: string; content: string }) => void;
-  t: (key: string) => string;
-}) {
-  if (entry.kind === 'user') {
-    const turnId = entry.turnId;
-    const versions = turnId ? versionsByTurnId.get(turnId) : undefined;
-    return (
-      <div className="group/user flex flex-col items-end">
-        {/* A neutral tint, not an accent colour: the user's own message is the
-            one thing on screen they never need drawing to, and a saturated block
-            was the only high-chroma surface in an otherwise neutral palette.
-            Side and alignment already say who wrote it. */}
-        <div className="max-w-2xl overflow-hidden rounded-2xl border border-border/60 bg-muted px-4 py-3 text-foreground [&_a]:underline">
-          <UserMessageBubble
-            content={entry.content}
-            threadCwd={threadCwd}
-            threadId={threadId}
-            images={entry.images}
-          />
-        </div>
-        {/* Reserved even when empty so revealing the controls cannot shift layout. */}
-        <div className="mt-1 flex h-6 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">
-          {versions && (
-            <MessageVersionSwitcher
-              versions={versions}
-              deleteBlockedReason={deleteBlockedReason}
-              deletingThreadIds={deletingThreadIds}
-              onDeleteVersion={onDeleteVersion}
-            />
-          )}
-          {/* Rendered whenever the message has a turn, disabled rather than
-              removed — dropping it mid-switch would move the version switcher. */}
-          {turnId && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={t('Edit this message')}
-                  disabled={!canBranch}
-                  className="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-                  onClick={() => onEdit({ turnId, content: entry.content })}
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('Edit this message')}
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (entry.kind === 'system') {
-    const severity = entry.severity ?? 'error';
-    const colorMap = {
-      info: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-      warning: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
-      error: 'bg-destructive/10 text-destructive',
-    } as const;
-    return (
-      <div className="text-center">
-        <span className={`inline-block rounded-lg px-3 py-1.5 text-sm ${colorMap[severity]}`}>
-          {entry.content}
-        </span>
-      </div>
-    );
-  }
-
-  if (entry.kind === 'turnFailure') {
-    return <TurnFailureCard failure={entry.failure} />;
-  }
-
-  return <TurnBlock entry={entry} />;
 }

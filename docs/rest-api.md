@@ -27,7 +27,7 @@
 
 | Method | Path                | Controller            | 说明                                                                                                                                                                                                           |
 | ------ | ------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/codex/status` | CodexStatusController | 聚合状态：appServer/initialize/account/config/provider/models/runtime。30s TTL 缓存，5s unavailable。Runtime rollup: ready/degraded/unavailable + reasons。Provider env key 优先从 config.model_providers 读取 |
+| GET    | `/api/codex/status` | CodexStatusController | 聚合状态：appServer/initialize/account/config/provider/models/runtime。30s TTL 缓存，5s unavailable。Runtime rollup: ready/degraded/unavailable + reasons。Provider env key 优先从 config.model_providers 读取；`unknownProviderEnvKey` 只在 provider 完全没有凭据来源时上报——`experimental_bearer_token` / `auth` / `aws` / `requires_openai_auth` 都会让 `env_key` 为 null，不算缺失 |
 
 ### Codex Config
 
@@ -36,11 +36,19 @@
 | GET    | `/api/codex/config`     | CodexConfigController | 读取完整 Codex config + origins（includeLayers:true），bigint→number，敏感字段 redaction                                               |
 | PATCH  | `/api/codex/config`     | CodexConfigController | 结构化编辑 curated config 字段。Body: `{ edits: [{ keyPath, value }] }`。`value:null` 仅清除 allowlist 命中的 leaf key；写 user config.toml + reloadUserConfig |
 | GET    | `/api/codex/config/raw` | CodexConfigController | 读取 user config.toml 原始内容，返回 `{ filePath, content }`                                                                           |
-| PUT    | `/api/codex/config/raw` | CodexConfigController | 替换 user config.toml 内容并触发热加载。Body: `{ content }`                                                                            |
+| PUT    | `/api/codex/config/raw` | CodexConfigController | 独立 raw 修复。Body: `{ content, expectedContent? }`；返回 warnings、restartRequired、reloaded                                                                            |
 
 **Allowlist**: profile, model, review_model, model_provider, model_context_window, model_auto_compact_token_limit, instructions, developer_instructions, compact_prompt, model_reasoning_effort, model_reasoning_summary, model_verbosity, web_search, service_tier, approvals_reviewer；以及 leaf-only app paths：`apps._default.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode}`、`apps.<id>.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode,default_tools_enabled}`、`apps.<id>.tools.<tool>.{enabled,approval_mode}`。父级 table path 不开放，`apps.<id>.links.<link>` 不开放。
 
 `approvals_reviewer` 的 OpenAPI contract 包含 `user` / `auto_review` / `guardian_subagent`。具体 enum/value 校验由 app-server 的 `config/batchWrite` 执行；其结构化 `configValidationError` 会在单字段写入时转换为字段级 400。
+
+### Model Catalog
+
+`/api/codex/catalog` 提供 state、draft、effective、validate、seed、blockers、apply、default、restore、restart；完整请求契约与故障恢复语义见 [model-catalog.md](model-catalog.md)。
+目录变化只在显式应用并重启后生效。结构化和 raw config 保存返回 model/review_model 检查 warnings；raw read/write 不再依赖运行中的 app-server。
+`GET /api/codex/catalog` 的 `managed` 表示指针指向本后端拥有的槽位（`/default` 的前提）；`pointerApplied` 与 `PUT /api/codex/config/raw` 返回的 `restartRequired` 共用同一判据：拿配置当前指向的东西与**运行中 child 实际加载的**（`runningPaths`）比，而非与上一份文件比，否则两处会互相矛盾。无 child 时无从比较，返回 true。`runningPaths` 是关于实际加载内容的唯一陈述。
+
+`GET /api/codex/catalog/blockers` 返回 `scope:managedAppServer` 和 `limitations`；本连接保留工作含 `requestMethod` / `turnId`。`canApply` 不证明共享 Codex home 的外部客户端已空闲；压缩绑定到它自己开启的 turn（要求该 turn 在 ack 之后开始、压缩 item 是其首个 item、且该 turn 未被认领）并由该 turn 的 `turn/completed` 释放，`thread/shellCommand` 与已激活的 goal continuation 无法关联终态时继续拒绝。
 
 ### Codex Feedback
 
@@ -71,8 +79,10 @@
 | GET    | `/api/threads/:threadId`                         | ThreadsController         | metadata-only 读取单个 thread；历史统一走分页 turns/items 端点                                                       |
 | GET    | `/api/threads/:threadId/branch-state`            | ThreadsController         | 读取 compact guard 状态与持久化树成员。包含本地创建和启动期认领的拓扑，不做每请求 app-server 扫描                    |
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
-| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。未 materialized 的 pinned refusal 记 warning 后归一为 `[]`，不回退到 full turn pages |
-| GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification/成功写入暴露设置，返回 `observed:false` |
+| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list` 读单个 turn 的持久化 items（完成顺序），返回 `items/complete/nextCursor/incompleteReason`；可用 `cursor` 续读，达到上限或分页不可用时明确不完整，不 resume |
+| GET    | `/api/threads/:threadId/security-policy`        | ThreadSecurityPolicyController | 读取已观察到的下轮 approval/sandbox/reviewer；未知值不使用全局默认 |
+| PATCH  | `/api/threads/:threadId/security-policy`        | ThreadSecurityPolicyController | 严格校验 approvalPolicy/sandboxPolicy，HTTP 202 仅确认接受排队；不自动获取所有权 |
+| GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification 暴露设置，返回 `observed:false` |
 | PATCH  | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 设置 next-turn collaboration mode，不启动 turn；需要已解析出 thread 当前 model，否则 400。**不写 null effort**（会被 app-server 当作清空）；进入 Plan 时记录被顶掉的 effort，退出时还原 |
 | GET    | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 读取 thread 持久化 goal，未设置时 `{ goal:null }`                                                                      |
 | PATCH  | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 创建/更新 goal。Body 支持 `objective`（≤4000 字符）、`status`、`tokenBudget`；至少提供一个字段；仅 `tokenBudget` 接受显式 `null`（透传给 app-server 走默认预算重置），`objective`/`status` 传 null 会 400 |
@@ -106,7 +116,7 @@
 
 | Method | Path          | Controller       | 说明                                 |
 | ------ | ------------- | ---------------- | ------------------------------------ |
-| GET    | `/api/models` | ModelsController | 列出可用模型。Query: `cursor, limit` |
+| GET    | `/api/models` | ModelsController | 列出可用模型。Query: `cursor, limit, includeHidden`（boolean） |
 
 每个模型逐项 advertise `supportedReasoningEfforts` 与 `serviceTiers`（`{ id, name, description }`，按目录顺序），外加 `defaultServiceTier`。
 
@@ -240,3 +250,7 @@ Apps UI 的列表行保持紧凑，只保留启用状态和管理入口。Defaul
 
 - Fastify adapter 要求 POST 请求带 `Content-Type: application/json` 时 body 不能为空，即使没有参数也要传 `{}`
 - Query 参数均为 string，controller 内做类型转换 (如 `Number(limit)`, `archived === 'true'`)
+
+## Policy and recovery guarantees
+
+See [thread-policy-recovery.md](thread-policy-recovery.md) for queued-versus-observed policy semantics, settings freshness, explicit paging completeness, measured item durability/order, and approval payload preservation.
