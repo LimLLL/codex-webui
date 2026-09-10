@@ -96,9 +96,13 @@ export function UserInputCard({ request }: Props) {
   const handleSubmit = () => {
     if (!canSubmit) return;
     setSubmitting(true);
+    // `throwOnError` is required for the same reason as the approval controls:
+    // without it a refused submission resolves, `.then` clears the card, and the
+    // user's answers are gone while the agent is still waiting for them.
     void pendingApprovalsRespond({
       path: { requestId: String(request.requestId) },
       body: { result: { answers } },
+      throwOnError: true,
     })
       .then(() => resolveUserInputRequest(request.requestId))
       .catch(() => undefined)

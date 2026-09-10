@@ -174,6 +174,63 @@ describe('normalizeThreadItem', () => {
     expect(JSON.stringify(normalized)).not.toContain('ciphertext must stay opaque');
   });
 
+  // Measured on 0.153.2 (`codex_probe/probes/file-approval-context.ts`): one
+  // `fileChange` item — and therefore one approval — carried two files. Keeping
+  // only the first meant approving writes the user could not see.
+  it('keeps every file in a multi-file change set', () => {
+    const result = normalizeThreadItem(
+      {
+        type: 'fileChange',
+        id: 'exec-1',
+        status: 'inProgress',
+        changes: [
+          { path: '/w/alpha.txt', kind: { type: 'update', move_path: null }, diff: '--- a\n+++ b\n+ALPHA' },
+          { path: '/w/beta.txt', kind: { type: 'add' }, diff: '+BETA' },
+        ],
+      },
+      false,
+    );
+
+    expect(result.kind).toBe('render');
+    if (result.kind !== 'render' || result.item.type !== 'fileChange') return;
+    expect(result.item.fileChanges).toHaveLength(2);
+    expect(result.item.fileChanges?.map((change) => change.path)).toEqual([
+      '/w/alpha.txt',
+      '/w/beta.txt',
+    ]);
+    expect(result.item.fileChanges?.[1].changeKind).toBe('add');
+    // The legacy single-file fields still describe the first change so an older
+    // consumer keeps working rather than rendering nothing.
+    expect(result.item.filePath).toBe('/w/alpha.txt');
+  });
+
+  it('carries a rename destination, which lives only in the change kind', () => {
+    const result = normalizeThreadItem(
+      {
+        type: 'fileChange',
+        id: 'exec-2',
+        status: 'inProgress',
+        changes: [
+          {
+            path: '/w/old.txt',
+            kind: { type: 'update', move_path: '/w/new.txt' },
+            diff: '',
+          },
+        ],
+      },
+      false,
+    );
+
+    if (result.kind !== 'render' || result.item.type !== 'fileChange') {
+      throw new Error('expected a rendered fileChange');
+    }
+    expect(result.item.fileChanges?.[0]).toMatchObject({
+      path: '/w/old.txt',
+      changeKind: 'update',
+      movePath: '/w/new.txt',
+    });
+  });
+
   it('returns dedicated outcomes for user messages and plans', () => {
     expect(
       normalizeThreadItem(

@@ -1,6 +1,7 @@
 /** Pure normalization from app-server ThreadItem payloads to the UI timeline union. */
 import type {
   DynamicToolOutputPart,
+  FileChangeEntry,
   FunctionCallOutputPart,
   TurnItem,
   WebSearchAction,
@@ -62,6 +63,39 @@ export function readItemTerminality(value: unknown): boolean | null {
 
 function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+/**
+ * Maps a proposed change set, keeping every file rather than only the first.
+ *
+ * `kind` is an object union in the protocol — `{type:'add'|'delete'}` or
+ * `{type:'update', move_path}` — not a string, so a rename carries its
+ * destination there and nowhere else.
+ *
+ * @param value - The payload's `changes` field, of unknown shape
+ * @returns One entry per proposed file, skipping entries with no path
+ */
+function normalizeFileChanges(value: unknown): FileChangeEntry[] {
+  if (!Array.isArray(value)) return [];
+  const entries: FileChangeEntry[] = [];
+  for (const raw of value) {
+    const change = asRecord(raw);
+    const path = nullableString(change?.path);
+    if (!path) continue;
+    const kind = asRecord(change?.kind);
+    const kindType = nullableString(kind?.type);
+    entries.push({
+      path,
+      diff: nullableString(change?.diff) ?? '',
+      ...(kindType === 'add' || kindType === 'delete' || kindType === 'update'
+        ? { changeKind: kindType }
+        : {}),
+      ...(nullableString(kind?.move_path)
+        ? { movePath: nullableString(kind?.move_path)! }
+        : {}),
+    });
+  }
+  return entries;
 }
 
 function nullableString(value: unknown): string | null {
@@ -331,15 +365,19 @@ export function normalizeThreadItem(
         },
       };
     case 'fileChange': {
-      const first = Array.isArray(item.changes) ? asRecord(item.changes[0]) : null;
+      // Every change, not just the first. One item can propose several files,
+      // and an approval covers the whole set.
+      const fileChanges = normalizeFileChanges(item.changes);
+      const first = fileChanges[0];
       return {
         kind: 'render',
         item: {
           ...base,
           type: 'fileChange',
           content: stringValue(item.text),
-          filePath: nullableString(first?.path) ?? undefined,
-          fileDiff: nullableString(first?.diff) ?? '',
+          fileChanges,
+          filePath: first?.path,
+          fileDiff: first?.diff ?? '',
         },
       };
     }
@@ -542,6 +580,11 @@ export function mergeTurnItem(
         ? {
             ...incoming,
             content: incoming.content || existing.content,
+            // A payload that carries no changes must not erase the set already
+            // shown; a payload that carries them is authoritative for all of it.
+            fileChanges: incoming.fileChanges?.length
+              ? incoming.fileChanges
+              : existing.fileChanges,
             filePath: incoming.filePath ?? existing.filePath,
             fileDiff: incoming.fileDiff || existing.fileDiff,
           }

@@ -80,9 +80,28 @@ export interface CommandExecutionTurnItem extends TurnItemBase {
   exitCode?: number;
 }
 
+/**
+ * One file inside a proposed change set.
+ *
+ * Measured on 0.153.2: a single `fileChange` item — and therefore a single
+ * approval — can carry several of these. Anything that shows only one of them
+ * is asking the user to approve writes they cannot see.
+ */
+export interface FileChangeEntry {
+  path: string;
+  diff: string;
+  /** `add` / `delete` / `update`; absent when the payload omitted a known kind. */
+  changeKind?: 'add' | 'delete' | 'update';
+  /** Destination when the change also moves the file. */
+  movePath?: string;
+}
+
 export interface FileChangeTurnItem extends TurnItemBase {
   type: 'fileChange';
   content: string;
+  /** Every proposed file in this change set, in payload order. */
+  fileChanges?: FileChangeEntry[];
+  /** First change, retained for the collapsed single-file header. */
   filePath?: string;
   fileDiff?: string;
 }
