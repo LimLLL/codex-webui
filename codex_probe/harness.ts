@@ -106,6 +106,16 @@ export interface AppServerOptions {
   env?: Record<string, string>;
 }
 
+/**
+ * Returned by a responder to leave a server request deliberately unanswered.
+ *
+ * Answering immediately is right for probes that only need the turn to proceed,
+ * but it makes a whole class of question unmeasurable: anything about the state
+ * of the world *while* the agent is blocked. Reading history after replying
+ * measures the post-decision world and quietly answers a different question.
+ */
+export const HOLD: unique symbol = Symbol('hold');
+
 /** Answers approvals with `accept`, everything else with an empty result. */
 function defaultServerResponse(request: IncomingRequest): unknown {
   return request.method.endsWith('requestApproval')
@@ -126,10 +136,12 @@ export class AppServer {
   readonly notes: Note[] = [];
   /** Every server-initiated request received, oldest first. */
   readonly requests: IncomingRequest[] = [];
+  /** Requests a responder chose to hold, keyed by request id. */
+  private readonly heldById = new Map<string, IncomingRequest>();
 
   private constructor(
     child: ChildProcessWithoutNullStreams,
-    private readonly respond: (request: IncomingRequest) => unknown,
+    private respond: (request: IncomingRequest) => unknown,
   ) {
     this.child = child;
     this.child.stderr.on('data', (chunk: Buffer) => {
@@ -195,7 +207,14 @@ export class AppServer {
         params: (message.params ?? {}) as Record<string, unknown>,
       };
       this.requests.push(request);
-      this.send({ id, result: this.respond(request) });
+      const reply = this.respond(request);
+      // A held request stays unanswered until the probe releases it, which is
+      // what keeps the agent genuinely blocked while the probe observes.
+      if (reply === HOLD) {
+        this.heldById.set(String(id), request);
+        return;
+      }
+      this.send({ id, result: reply });
       return;
     }
     if (typeof id === 'number' && this.pending.has(id)) {
@@ -263,6 +282,64 @@ export class AppServer {
   /** Sends a notification, which has no reply. */
   notify(method: string, params: Record<string, unknown> = {}): void {
     this.send({ method, params });
+  }
+
+  /**
+   * Replaces the server-request policy after the connection is up.
+   *
+   * A probe usually only knows which requests it wants to hold once it has
+   * decided what it is measuring, which is after {@link start} has run.
+   *
+   * @param respond - Returns the result to send, or {@link HOLD} to withhold it
+   */
+  setServerResponder(respond: (request: IncomingRequest) => unknown): void {
+    this.respond = respond;
+  }
+
+  /**
+   * Waits until a server-initiated request satisfies a predicate.
+   *
+   * Separate from {@link waitFor} because requests and notifications are
+   * different streams; a request that never arrives means the fixture failed to
+   * provoke the thing under measurement, which is not the same as a timeout
+   * waiting for an event.
+   *
+   * @param predicate - Tested against every request from `from` onwards
+   * @param options - Where to start looking and how long to wait
+   * @returns The matching request, or undefined on timeout
+   */
+  async waitForRequest(
+    predicate: (request: IncomingRequest) => boolean,
+    options: { from?: number; timeoutMs?: number } = {},
+  ): Promise<IncomingRequest | undefined> {
+    const from = options.from ?? 0;
+    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    for (;;) {
+      const found = this.requests.slice(from).find(predicate);
+      if (found) return found;
+      if (Date.now() >= deadline) return undefined;
+      await delay(200);
+    }
+  }
+
+  /** Server requests currently held unanswered, in arrival order. */
+  held(): IncomingRequest[] {
+    return [...this.heldById.values()];
+  }
+
+  /**
+   * Answers a request that was held, unblocking the agent.
+   *
+   * @param id - Request id, as delivered
+   * @param result - The JSON-RPC result to send
+   * @throws Error when that id is not being held, so a probe cannot silently
+   *   believe it released something it never held
+   */
+  release(id: number | string, result: unknown): void {
+    const key = String(id);
+    if (!this.heldById.delete(key))
+      throw new Error(`Request ${key} is not held; nothing to release`);
+    this.send({ id, result });
   }
 
   /** Notifications received since a previously recorded mark. */

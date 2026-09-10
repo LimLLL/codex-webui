@@ -186,3 +186,39 @@ The probe validates response contents and treats missing required evidence as a
 failure. It does not use one warm resume to validate another cold-resume variant.
 Its held provider demonstrates dispatch, not successful model work or tool effects.
 Approval/input recovery and owner-controlled children remain outside this fixture.
+
+## file-approval-context
+
+Answers whether a client that did not receive a conversation's item stream can
+still review a file approval it is being asked to grant.
+
+The approval request carries only identities — `threadId`, `turnId`, `itemId`,
+plus an optional reason and grant root. The proposed changes live in
+`item/started`. So the question is whether history can supply them instead.
+
+Method: a real model is asked to edit two files through the patch tool under
+`on-request` / `read-only`, and the resulting approval is **held** rather than
+answered, so the agent stays genuinely blocked while history is read. Answering
+first and reading afterwards measures the world after the decision, which is a
+different question. Requires a configured provider and spends tokens.
+
+Measured on 0.153.2:
+
+- **One approval covered two files**, each with its own `path`, `kind` and
+  `diff`. A renderer that shows only the first change is asking the user to
+  approve writes they cannot see.
+- **The pending item was absent from `thread/items/list`** while the approval was
+  outstanding, though three other items from the same conversation were readable
+  through the same paging. The existing "persistence happens at item completion"
+  finding therefore holds for file changes too.
+- `kind` is an object union, not a string: `{type:'add'|'delete'}` or
+  `{type:'update', move_path}`. A rename's destination exists only there.
+
+Consequence: the approval subject cannot be recovered from history while it is
+pending, so any client that must present the approval has to be given the subject
+by the backend rather than fetch it. This is what makes backend retention a
+correctness requirement rather than an optimization.
+
+The fixture fails loudly when no file approval arrives — the model may use a
+shell tool or decline the task, and a run that provoked nothing must not print a
+verdict about the protocol.

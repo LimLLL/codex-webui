@@ -11,6 +11,7 @@ import { itemPersistence } from './probes/item-persistence';
 import { itemOrdering } from './probes/item-ordering';
 import { livePolicy } from './probes/live-policy';
 import { turnItemFinality } from './probes/turn-item-finality';
+import { fileApprovalContextProbe } from './probes/file-approval-context';
 
 const PROBES: Probe[] = [
   settingsUpdate,
@@ -18,6 +19,7 @@ const PROBES: Probe[] = [
   itemOrdering,
   turnItemFinality,
   livePolicy,
+  fileApprovalContextProbe,
 ];
 
 function list(): void {
