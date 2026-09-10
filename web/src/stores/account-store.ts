@@ -77,6 +77,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
       rateLimits: {
         rateLimits: snapshot,
         rateLimitsByLimitId: existing?.rateLimitsByLimitId ?? null,
+        ordinaryUsageAllowed: existing?.ordinaryUsageAllowed ?? null,
       },
     });
   },
