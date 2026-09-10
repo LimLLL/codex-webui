@@ -6,7 +6,16 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs', 'src/codex/codex-schema/**'],
+    // Flat config does not read .gitignore. The probe runner's scratch home and
+    // workspace hold whatever a real Codex run downloads there — marketplace
+    // plugin sources included — so linting them reports on other people's code
+    // and fails the gate for anyone who ran a probe before running lint.
+    ignores: [
+      'eslint.config.mjs',
+      'src/codex/codex-schema/**',
+      'codex_probe/home/**',
+      'codex_probe/workspace/**',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

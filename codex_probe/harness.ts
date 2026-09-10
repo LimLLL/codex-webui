@@ -16,6 +16,8 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
+import { delay } from './utils';
+export { delay, itemType, text } from './utils';
 import type {
   ClientRequest,
   ServerNotification,
@@ -72,6 +74,8 @@ export type KnownServerRequest = ServerRequest['method'];
 export interface Note {
   method: string;
   params: Record<string, unknown>;
+  /** Position on the single incoming wire; comparable with {@link IncomingRequest.arrival}. */
+  arrival: number;
 }
 
 /** A server-initiated request, which the client must answer. */
@@ -80,6 +84,15 @@ export interface IncomingRequest {
   /** Plain string for the same reason as {@link Note.method}. */
   method: string;
   params: Record<string, unknown>;
+  /**
+   * Position on the single incoming wire, shared with notifications.
+   *
+   * Notifications and requests are recorded in separate arrays, so "I found
+   * this notification in the log after the request arrived" says nothing about
+   * which came first. Anything that depends on one preceding the other has to
+   * compare these instead of assuming.
+   */
+  arrival: number;
 }
 
 /** Outcome of one turn driven to completion. */
@@ -138,6 +151,8 @@ export class AppServer {
   readonly requests: IncomingRequest[] = [];
   /** Requests a responder chose to hold, keyed by request id. */
   private readonly heldById = new Map<string, IncomingRequest>();
+  /** Shared arrival counter across both incoming kinds; see {@link IncomingRequest.arrival}. */
+  private arrivals = 0;
 
   private constructor(
     child: ChildProcessWithoutNullStreams,
@@ -205,6 +220,7 @@ export class AppServer {
         id,
         method,
         params: (message.params ?? {}) as Record<string, unknown>,
+        arrival: this.arrivals++,
       };
       this.requests.push(request);
       const reply = this.respond(request);
@@ -226,6 +242,7 @@ export class AppServer {
       this.notes.push({
         method,
         params: (message.params ?? {}) as Record<string, unknown>,
+        arrival: this.arrivals++,
       });
     }
   }
@@ -475,30 +492,4 @@ export class AppServer {
       }
     });
   }
-}
-
-/** Sleeps, for settling windows where no notification marks the boundary. */
-export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Reads an item's protocol type, which differs by view between snake and camel. */
-export function itemType(item: unknown): string {
-  const record = (item ?? {}) as Record<string, unknown>;
-  return text(record.item_type) || text(record.type) || 'unknown';
-}
-
-/**
- * Renders an unknown protocol value as text without stringifying an object.
- *
- * Probe output is read by a human comparing orders and statuses, and a stray
- * `[object Object]` in that list is indistinguishable from a real value.
- *
- * @param value - Any field read off an untyped protocol payload
- * @returns The value when it is a string or number, otherwise an empty string
- */
-export function text(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return String(value);
-  return '';
 }

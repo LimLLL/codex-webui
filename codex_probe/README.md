@@ -213,11 +213,28 @@ Measured on 0.153.2:
   finding therefore holds for file changes too.
 - `kind` is an object union, not a string: `{type:'add'|'delete'}` or
   `{type:'update', move_path}`. A rename's destination exists only there.
+  **This one came from the generated schema, not from that run** — the summary
+  helper read `kind` as a string and printed `null` for every change, so the run
+  said nothing either way. The helper now prints the value and the probe asserts
+  the union, which is what will make it a measurement the next time it runs.
+  Listing a schema-derived claim under "measured" is the failure this directory
+  exists to prevent, and it survived a review because the shape was right.
 
 Consequence: the approval subject cannot be recovered from history while it is
 pending, so any client that must present the approval has to be given the subject
 by the backend rather than fetch it. This is what makes backend retention a
 correctness requirement rather than an optimization.
+
+**Not established by the first run:** whether `item/started` *precedes* the
+approval on the wire. Notifications and requests were recorded in separate lists,
+and the first run only proved the item event existed by the time the request had
+arrived — the log is read after the fact, so it cannot order the two. Retention
+that captures the subject when the item starts depends on that ordering, so
+`Note`/`IncomingRequest` now carry a shared `arrival` counter and the probe
+reports `item-started-precedes-approval`. Until a run prints it, treat the
+ordering as unmeasured: the backend publishes a file approval with a null subject
+rather than withholding it, so a miss degrades review rather than stranding the
+agent.
 
 The fixture fails loudly when no file approval arrives — the model may use a
 shell tool or decline the task, and a run that provoked nothing must not print a

@@ -22,9 +22,11 @@
  * entry, so if a single approval can span several files, the user has been
  * approving writes they cannot see.
  */
+import { strict as assert } from 'node:assert';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import path from 'node:path';
-import { HOLD, itemType, type IncomingRequest } from '../harness';
+import { HOLD, itemType } from '../harness';
 import type { Probe } from '../run';
 
 /** Asks for a multi-file edit through the patch tool rather than a shell write. */
@@ -54,7 +56,7 @@ function describeChange(value: unknown): Record<string, unknown> {
   return {
     keys: Object.keys(change).sort(),
     path: typeof change.path === 'string' ? change.path : null,
-    kind: typeof change.kind === 'string' ? change.kind : null,
+    kind: change.kind ?? null,
     hasDiff: diff !== null,
     diffLength: diff?.length ?? 0,
   };
@@ -72,10 +74,8 @@ export const fileApprovalContextProbe: Probe = {
 
     // Hold file-change approvals; answer everything else normally so the turn
     // is blocked by exactly the request under measurement and nothing else.
-    let heldRequest: IncomingRequest | null = null;
     app.setServerResponder((request) => {
       if (request.method === 'item/fileChange/requestApproval') {
-        heldRequest = request;
         return HOLD;
       }
       return request.method.endsWith('requestApproval')
@@ -97,6 +97,7 @@ export const fileApprovalContextProbe: Probe = {
     const threadId = started.result.thread.id;
 
     const mark = app.mark();
+    const requestMark = app.requests.length;
     const turn = await app.request<{ turn: { id: string } }>({
       method: 'turn/start',
       params: {
@@ -104,12 +105,16 @@ export const fileApprovalContextProbe: Probe = {
         input: [{ type: 'text', text: TASK, text_elements: [] }],
       },
     });
-    if (turn.error)
-      throw new Error(`turn/start refused: ${JSON.stringify(turn.error)}`);
+    if (turn.error || !turn.result?.turn.id)
+      throw new Error(`turn/start failed: ${JSON.stringify(turn.error)}`);
+    const turnId = turn.result.turn.id;
 
     const request = await app.waitForRequest(
-      (candidate) => candidate.method === 'item/fileChange/requestApproval',
-      { timeoutMs: 180_000 },
+      (candidate) =>
+        candidate.method === 'item/fileChange/requestApproval' &&
+        candidate.params.threadId === threadId &&
+        candidate.params.turnId === turnId,
+      { from: requestMark, timeoutMs: 180_000 },
     );
     if (!request) {
       // No approval means nothing was measured. A probe that prints a verdict
@@ -119,101 +124,196 @@ export const fileApprovalContextProbe: Probe = {
           'or refused the task; this run measured nothing.',
       );
     }
-    heldRequest = request;
     const itemId = stringField(request.params, 'itemId');
 
-    // The live item event, which is what a subscribed browser would have seen.
-    const liveItem = app
-      .since(mark)
-      .filter((note) => note.method === 'item/started')
-      .map((note) => asRecord(note.params).item)
-      .find((item) => stringField(item, 'id') === itemId);
-    const liveChanges = Array.isArray(asRecord(liveItem).changes)
-      ? (asRecord(liveItem).changes as unknown[])
-      : [];
+    assert.ok(itemId, 'The held request must identify its file item');
+    /** A local HOLD alone does not prove upstream has not cancelled the request. */
+    const assertStillPending = () => {
+      assert.ok(
+        app.held().some((held) => held.id === request.id),
+        'Approval must remain held',
+      );
+      assert.ok(
+        !app
+          .since(mark)
+          .some(
+            (note) =>
+              note.params.threadId === threadId &&
+              ((note.method === 'serverRequest/resolved' &&
+                String(note.params.requestId) === String(request.id)) ||
+                (note.method === 'turn/completed' &&
+                  stringField(note.params.turn, 'id') === turnId)),
+          ),
+        'The target request resolved while history was being measured',
+      );
+    };
 
-    // The question: is that same item readable from history RIGHT NOW, while
-    // the agent is still blocked on the approval we are holding?
-    const pages: unknown[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 5; page++) {
-      const reply = await app.request<{
-        data: Array<{ turnId: string; item: unknown }>;
-        nextCursor: string | null;
-      }>({
-        method: 'thread/items/list',
-        params: { threadId, limit: 100, ...(cursor ? { cursor } : {}) },
-      });
-      if (reply.error || !reply.result)
-        throw new Error(
-          `thread/items/list failed: ${JSON.stringify(reply.error)}`,
+    try {
+      assertStillPending();
+      // The question: is that same item readable from history RIGHT NOW, while
+      // the agent is still blocked on the approval we are holding?
+      const pages: unknown[] = [];
+      let cursor: string | undefined;
+      let historyComplete = false;
+      for (let page = 0; page < 5; page++) {
+        const reply = await app.request<{
+          data: Array<{ turnId: string; item: unknown }>;
+          nextCursor: string | null;
+        }>({
+          method: 'thread/items/list',
+          params: {
+            threadId,
+            turnId,
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          },
+        });
+        if (reply.error || !reply.result)
+          throw new Error(
+            `thread/items/list failed: ${JSON.stringify(reply.error)}`,
+          );
+        // Entries wrap the item alongside its turn id; the item is what carries
+        // the proposed changes, so a malformed page must fail loudly rather than
+        // read as "history has nothing", which is the answer under measurement.
+        if (!Array.isArray(reply.result.data))
+          throw new Error('thread/items/list returned no item array');
+        for (const entry of reply.result.data) {
+          assert.equal(
+            entry.turnId,
+            turnId,
+            'History entry belongs to the target turn',
+          );
+          assert.ok(
+            stringField(entry.item, 'id'),
+            'History entry must wrap an identified item',
+          );
+          pages.push(entry.item);
+        }
+        const nextCursor = reply.result.nextCursor;
+        if (nextCursor === null) {
+          historyComplete = true;
+          break;
+        }
+        assert.ok(
+          typeof nextCursor === 'string' && nextCursor.length > 0,
+          'History cursor is malformed',
         );
-      // Entries wrap the item alongside its turn id; the item is what carries
-      // the proposed changes, so a malformed page must fail loudly rather than
-      // read as "history has nothing", which is the answer under measurement.
-      if (!Array.isArray(reply.result.data))
-        throw new Error('thread/items/list returned no item array');
-      pages.push(...reply.result.data.map((entry) => entry.item));
-      if (!reply.result.nextCursor) break;
-      cursor = reply.result.nextCursor;
-    }
-    const historyItem = pages.find(
-      (item) => stringField(item, 'id') === itemId,
-    );
-    const historyChanges = Array.isArray(asRecord(historyItem).changes)
-      ? (asRecord(historyItem).changes as unknown[])
-      : [];
-
-    console.log(
-      JSON.stringify(
-        {
-          approvalRequestParamKeys: Object.keys(
-            asRecord(request.params),
-          ).sort(),
-          itemId,
-          liveItemType: itemType(liveItem),
-          liveChangeCount: liveChanges.length,
-          liveChanges: liveChanges.map(describeChange),
-          historyItemPresentWhilePending: historyItem !== undefined,
-          historyItemStatus:
-            typeof asRecord(historyItem).status === 'string'
-              ? asRecord(historyItem).status
-              : null,
-          historyChangeCount: historyChanges.length,
-          historyChanges: historyChanges.map(describeChange),
-          totalHistoryItemsWhilePending: pages.length,
-        },
-        null,
-        2,
-      ),
-    );
-
-    const multiFile = liveChanges.length > 1;
-    const reviewableFromHistory =
-      historyItem !== undefined && historyChanges.length === liveChanges.length;
-    console.log(
-      `VERDICT multi-file-single-approval=${multiFile} readable-from-history-while-pending=${reviewableFromHistory}`,
-    );
-    if (!reviewableFromHistory) {
-      console.log(
-        'CONSEQUENCE: the approval subject is NOT recoverable from history while pending. A client that did not receive the item stream cannot review it, so the backend must retain the subject alongside the pending request.',
+        cursor = nextCursor;
+      }
+      assert.ok(
+        historyComplete,
+        'Incomplete paging cannot establish that the pending item is absent',
       );
-    }
-    if (multiFile) {
-      console.log(
-        'CONSEQUENCE: one approval can cover several files, so any renderer that shows only the first change is asking the user to approve writes they cannot see.',
-      );
-    }
+      assertStillPending();
 
-    // Decline rather than accept: the measurement is complete, and declining
-    // avoids leaving edits behind in the throwaway workspace.
-    app.release(request.id, { decision: 'decline' });
+      // Look after paging as well: an item may have arrived after the request.
+      // Only their shared wire counter establishes precedence, not lookup time.
+      const liveNote = app
+        .since(mark)
+        .find(
+          (note) =>
+            note.method === 'item/started' &&
+            note.params.threadId === threadId &&
+            note.params.turnId === turnId &&
+            stringField(note.params.item, 'id') === itemId,
+        );
+      const liveItem = asRecord(liveNote?.params).item;
+      const liveChanges = Array.isArray(asRecord(liveItem).changes)
+        ? (asRecord(liveItem).changes as unknown[])
+        : [];
+      const itemPrecedesApproval = liveNote
+        ? liveNote.arrival < request.arrival
+        : null;
+      const historyItem = pages.find(
+        (item) => stringField(item, 'id') === itemId,
+      );
+      const historyChanges = Array.isArray(asRecord(historyItem).changes)
+        ? (asRecord(historyItem).changes as unknown[])
+        : [];
+
+      console.log(
+        JSON.stringify(
+          {
+            approvalRequestParamKeys: Object.keys(
+              asRecord(request.params),
+            ).sort(),
+            itemId,
+            itemStartedArrival: liveNote?.arrival ?? null,
+            approvalArrival: request.arrival,
+            itemPrecedesApproval,
+            liveItemType: itemType(liveItem),
+            liveChangeCount: liveChanges.length,
+            liveChanges: liveChanges.map(describeChange),
+            historyItemPresentWhilePending: historyItem !== undefined,
+            historyItemStatus:
+              typeof asRecord(historyItem).status === 'string'
+                ? asRecord(historyItem).status
+                : null,
+            historyChangeCount: historyChanges.length,
+            historyChanges: historyChanges.map(describeChange),
+            totalHistoryItemsWhilePending: pages.length,
+          },
+          null,
+          2,
+        ),
+      );
+
+      assert.ok(
+        liveNote &&
+          itemType(liveItem) === 'fileChange' &&
+          liveChanges.length > 0,
+        'No complete live file subject was observed; comparison is inconclusive',
+      );
+      for (const change of liveChanges) {
+        assert.ok(
+          stringField(change, 'path') &&
+            typeof asRecord(change).diff === 'string',
+          'Malformed live file change',
+        );
+        assert.ok(
+          stringField(asRecord(change).kind, 'type'),
+          'Change kind must remain an object union',
+        );
+      }
+      const multiFile = liveChanges.length > 1;
+      const reviewableFromHistory =
+        historyItem !== undefined &&
+        itemType(historyItem) === 'fileChange' &&
+        isDeepStrictEqual(historyChanges, liveChanges);
+      console.log(
+        `VERDICT multi-file-single-approval=${multiFile} readable-from-history-while-pending=${reviewableFromHistory} item-started-precedes-approval=${itemPrecedesApproval}`,
+      );
+      if (!itemPrecedesApproval) {
+        console.log(
+          'CONSEQUENCE: the subject is NOT already on the wire when the approval arrives, so a backend that captures it from item/started has nothing to capture and must publish the approval without one rather than withhold it.',
+        );
+      }
+      if (!reviewableFromHistory) {
+        console.log(
+          'CONSEQUENCE: the approval subject is NOT recoverable from history while pending. A client that did not receive the item stream cannot review it, so the backend must retain the subject alongside the pending request.',
+        );
+      }
+      if (multiFile) {
+        console.log(
+          'CONSEQUENCE: one approval can cover several files, so any renderer that shows only the first change is asking the user to approve writes they cannot see.',
+        );
+      }
+
+      // Decline rather than accept: the measurement is complete, and declining
+      // avoids leaving edits behind in the throwaway workspace.
+    } finally {
+      if (app.held().some((held) => held.id === request.id))
+        app.release(request.id, { decision: 'decline' });
+    }
     const settled = await app.waitFor(
-      (note) => note.method === 'turn/completed',
+      (note) =>
+        note.method === 'turn/completed' &&
+        note.params.threadId === threadId &&
+        stringField(note.params.turn, 'id') === turnId,
       { from: mark, timeoutMs: 60_000 },
     );
     console.log(`turn settled after decline: ${Boolean(settled)}`);
-    if (heldRequest && app.held().length > 0)
+    if (app.held().length > 0)
       throw new Error('A held request was never released');
   },
 };
