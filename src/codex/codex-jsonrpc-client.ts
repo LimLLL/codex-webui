@@ -61,6 +61,7 @@ interface JsonRpcResponse {
 type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
 interface PendingRequest {
+  observationSequence: number;
   method: string;
   params: unknown;
   resolve: (result: unknown) => void;
@@ -69,6 +70,16 @@ interface PendingRequest {
 }
 
 export interface CodexJsonRpcClientEvents {
+  /** Successful correlated responses, observed before the caller is resolved. */
+  response: [
+    {
+      method: string;
+      params: unknown;
+      result: unknown;
+      requestSequence: number;
+      responseSequence: number;
+    },
+  ];
   notification: [ServerNotification];
   serverRequest: [ServerRequest];
   error: [Error];
@@ -90,6 +101,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
   readonly acceptedWork = new CodexAcceptedWork();
   private readonly logger = new Logger(CodexJsonRpcClient.name);
   private nextId = 1;
+  private observationSequence = 0;
   private readonly pending = new Map<RequestId, PendingRequest>();
   private buffer = '';
   private closed = false;
@@ -146,6 +158,7 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
       }, timeoutMs ?? this.requestTimeoutMs);
 
       this.pending.set(id, {
+        observationSequence: this.observationSequence,
         method,
         params,
         resolve: resolve,
@@ -287,7 +300,13 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
     }
   }
 
+  /** Current wire observation order, used to reject stale asynchronous settings evidence. */
+  getObservationSequence(): number {
+    return this.observationSequence;
+  }
+
   private handleMessage(message: JsonRpcMessage): void {
+    this.observationSequence++;
     // Response to a client-initiated request
     if ('id' in message && ('result' in message || 'error' in message)) {
       const response = message;
@@ -314,6 +333,13 @@ export class CodexJsonRpcClient extends EventEmitter<CodexJsonRpcClientEvents> {
           }),
         );
       } else {
+        this.emit('response', {
+          method: pending.method,
+          params: pending.params,
+          result: response.result,
+          requestSequence: pending.observationSequence,
+          responseSequence: this.observationSequence,
+        });
         pending.resolve(response.result);
       }
       return;
