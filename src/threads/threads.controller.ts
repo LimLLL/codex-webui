@@ -281,12 +281,19 @@ export class ThreadsController {
     summary: "Read one turn's full persisted items without resuming",
   })
   @ApiOkResponse({ type: ThreadTurnItemsResponseDto })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+    description: 'Continue an incomplete item read after its page cap.',
+  })
   @ApiBadRequestResponse({ type: ApiErrorResponseDto })
   listTurnItems(
     @Param('threadId') threadId: string,
     @Param('turnId') turnId: string,
+    @Query('cursor') cursor?: string,
   ) {
-    return this.threadsService.listTurnItems(threadId, turnId);
+    return this.threadsService.listTurnItems(threadId, turnId, cursor);
   }
 
   @Get(':threadId/turns')

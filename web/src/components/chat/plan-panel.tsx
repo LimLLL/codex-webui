@@ -30,12 +30,19 @@ function statusIcon(status: TurnPlanStepStatus) {
 export function PlanPanel({ plan, completed }: Props) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(!completed);
-  const deltaText = Object.values(plan.planTextByItemId ?? {})
-    .map((text) => text.trim())
+  // One body of prose, whether it arrived as deltas or was read back from
+  // history. Keeping them in separate blocks made the same plan look different
+  // before and after a refresh, now that persisted plan text is stored per item
+  // so a fragment lost to a disconnect can be replaced by its whole value.
+  const planText = [
+    plan.explanation,
+    ...Object.values(plan.planTextByItemId ?? {}),
+  ]
+    .map((text) => text?.trim())
     .filter(Boolean)
     .join('\n\n');
   const hasStructuredPlan = plan.steps.length > 0;
-  const hasContent = Boolean(plan.explanation || hasStructuredPlan || deltaText);
+  const hasContent = Boolean(planText || hasStructuredPlan);
 
   if (!hasContent) return null;
 
@@ -64,9 +71,9 @@ export function PlanPanel({ plan, completed }: Props) {
 
       {open && (
         <div className="space-y-3 border-t border-border/40 px-3 py-2">
-          {plan.explanation && (
+          {planText && (
             <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-              {plan.explanation}
+              {planText}
             </p>
           )}
 
@@ -89,11 +96,6 @@ export function PlanPanel({ plan, completed }: Props) {
             </ol>
           )}
 
-          {deltaText && (
-            <pre className="m-0 whitespace-pre-wrap rounded-md border border-border/40 bg-background/40 px-3 py-2 font-sans text-xs leading-relaxed text-muted-foreground">
-              {deltaText}
-            </pre>
-          )}
         </div>
       )}
     </div>

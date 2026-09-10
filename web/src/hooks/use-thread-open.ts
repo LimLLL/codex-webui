@@ -25,6 +25,7 @@ import type {
   ThreadReadResponseDto,
   ThreadTurnsPageDto,
 } from '@/generated/api/types.gen';
+import { recoverTurnItems } from '@/lib/thread-recovery';
 import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
@@ -140,8 +141,32 @@ export function applyOpenResponse(response: ThreadOpenResponseDto): void {
   const activeTurn = response.initialTurnsPage.data.find(
     (turn) => turn.status === 'inProgress',
   );
-  store.setActiveTurnIdForThread(threadId, activeTurn?.id ?? null);
-  store.setLoadingForThread(threadId, Boolean(activeTurn));
+  // A page that names no running turn is not proof there is none. It was built
+  // when the request was served, and a turn started since — or started while
+  // this was in flight — will not be in it. Only clear the pointer when this
+  // page actually covers the turn it names and reports it finished; otherwise
+  // the live lifecycle events remain the better-informed source.
+  const known = store.getThreadRuntime(threadId)?.activeTurnId ?? null;
+  const pageCoversKnownTurn =
+    known !== null &&
+    response.initialTurnsPage.data.some((turn) => turn.id === known);
+  if (activeTurn) {
+    store.setActiveTurnIdForThread(threadId, activeTurn.id);
+  } else if (known === null || pageCoversKnownTurn) {
+    store.setActiveTurnIdForThread(threadId, null);
+  }
+  store.setLoadingForThread(
+    threadId,
+    Boolean(activeTurn) || (known !== null && !pageCoversKnownTurn),
+  );
+
+  // A running turn arrives empty: the page is fetched in the `summary` view,
+  // which carries only user messages and a turn's final assistant message, and
+  // a turn still running has no final message yet. Its finished items are
+  // durable all the same — persistence happens per item, not per turn — so
+  // they are read separately instead of leaving the transcript blank until the
+  // turn ends. The per-turn top-up cannot do this: it is gated on completion.
+  if (activeTurn) void recoverTurnItems(threadId, activeTurn.id);
 
   hydrateAuxiliaryData(threadId);
 }

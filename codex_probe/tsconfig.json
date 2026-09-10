@@ -1,0 +1,26 @@
+{
+  // Probes are real code and are typechecked as such: ts-node compiles them
+  // rather than stripping types, so a params shape that contradicts the
+  // generated protocol schema fails before the app-server is even spawned.
+  // That is the whole reason they are TypeScript — an untyped probe reports
+  // `-32600 invalid type: map, expected a sequence` at runtime instead.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // CommonJS, matching the compiled backend, so ts-node needs no ESM loader.
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    // Inherited from the root config, which is nodenext; node10 resolution
+    // rejects it.
+    "resolvePackageJsonExports": false,
+    // Nothing is emitted; ts-node compiles in memory.
+    "noEmit": true,
+    "incremental": false,
+    "declaration": false,
+    // No Vitest globals here: probes are scripts, not specs.
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": true
+  },
+  "include": ["**/*.ts", "../src/codex/codex-schema/**/*.ts"],
+  "exclude": ["home", "workspace"]
+}

@@ -179,7 +179,12 @@ describe('ThreadHistoryService', () => {
       ),
     );
 
-    await expect(service.listTurnItems('t1', 'turn-1')).resolves.toEqual([]);
+    await expect(service.listTurnItems('t1', 'turn-1')).resolves.toEqual({
+      entries: [],
+      complete: false,
+      nextCursor: null,
+      incompleteReason: 'pagingUnavailable',
+    });
     expect(mockCodex.request).toHaveBeenCalledTimes(1);
   });
 

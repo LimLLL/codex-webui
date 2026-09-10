@@ -1,3 +1,4 @@
+import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { CodexRpcError } from '../codex/codex-errors';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { ThreadHistoryService } from './thread-history.service';
@@ -11,6 +12,7 @@ describe('ThreadResumeRegistryService', () => {
   };
   const mockManager = {
     addLifecycleListener: vi.fn(),
+    addListener: vi.fn(),
     getGeneration: vi.fn(),
   };
   let service: ThreadResumeRegistryService;
@@ -22,6 +24,9 @@ describe('ThreadResumeRegistryService', () => {
     service = new ThreadResumeRegistryService(
       mockHistory as unknown as ThreadHistoryService,
       mockManager as unknown as CodexProcessManager,
+      new ThreadSettingsObserverService(
+        mockManager as unknown as CodexProcessManager,
+      ),
     );
   });
 

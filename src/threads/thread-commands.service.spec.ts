@@ -15,6 +15,7 @@ describe('ThreadCommandsService', () => {
   const deletionRegistry = { assertMutable: vi.fn() };
   const settingsObserver = {
     readCollaborationMode: vi.fn(),
+    readSettings: vi.fn(),
     readObservedModel: vi.fn(),
     readObservedEffort: vi.fn(),
     readDisplacedEffort: vi.fn(),
@@ -212,7 +213,12 @@ describe('ThreadCommandsService', () => {
 
     expect(
       settingsObserver.recordAcceptedCollaborationMode,
-    ).toHaveBeenCalledWith('t1', expect.anything(), { value: 'xhigh' });
+    ).toHaveBeenCalledWith(
+      't1',
+      expect.anything(),
+      { value: 'xhigh' },
+      undefined,
+    );
   });
 
   it('restores the displaced effort when leaving the mode', async () => {

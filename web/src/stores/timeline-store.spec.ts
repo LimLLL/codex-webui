@@ -45,6 +45,26 @@ beforeEach(() => {
   useTimelineStore.setState(pristine, true);
 });
 
+describe('recovery lifecycle ordering', () => {
+  it('does not reactivate a terminal turn from a delayed running header', () => {
+    const store = useTimelineStore.getState();
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [
+        answeredTurn('turn-1', 'finished while headers were in flight'),
+      ],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.settleTurnLifecycleForThread('t1', [
+      { id: 'turn-1', status: 'inProgress' },
+    ]);
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.activeTurnId).toBeNull();
+    expect(runtime.loading).toBe(false);
+  });
+});
+
 describe('history dedup', () => {
   it('does not re-insert a turn that only ever produced a user entry', () => {
     const store = useTimelineStore.getState();
@@ -81,7 +101,9 @@ describe('history dedup', () => {
       .getState()
       .prependHistoryForThread('t1', [userOnlyTurn('turn-1', 'first')], null);
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!.timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     expect(timeline.map((entry) => entry.turnId)).toEqual([
       'turn-1',
       'turn-2',
@@ -91,6 +113,26 @@ describe('history dedup', () => {
 });
 
 describe('reopening a thread', () => {
+  it('repairs a known turn even when the page introduces no new turn ids', () => {
+    const store = useTimelineStore.getState();
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [summaryTurn('turn-1', 'hello')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hello')],
+      historyCursor: 'newer',
+      readOnlyReason: null,
+    });
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(
+      runtime.timeline.find((entry) => entry.kind === 'turn')?.items,
+    ).toHaveLength(1);
+    expect(runtime.historyCursor).toBeNull();
+  });
   it('keeps paged history when the reopened page adds nothing new', () => {
     const store = useTimelineStore.getState();
     // Two pages already on screen: an older one paged in, plus the newest.
@@ -149,6 +191,55 @@ describe('reopening a thread', () => {
   });
 });
 
+describe('plan text recovery', () => {
+  it('keeps plan item text separate from the tool explanation on hydration and repair', () => {
+    const store = useTimelineStore.getState();
+    const items = [{ id: 'plan', type: 'plan', text: 'one copy' }];
+    store.hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [
+        { ...summaryTurn('turn-1', 'hi'), items } as unknown as TurnDto,
+      ],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+    store.applyRecoveredTurnItemsForThread('t1', 'turn-1', items, -1);
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan).toEqual({
+      explanation: null,
+      steps: [],
+      planTextByItemId: { plan: 'one copy' },
+    });
+  });
+
+  it('keeps plan text when a tool updates the structured steps', () => {
+    const store = useTimelineStore.getState();
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'plan text');
+    store.updateTurnPlanForThread('t1', 'turn-1', {
+      explanation: 'progress',
+      steps: [{ step: 'step', status: 'inProgress' }],
+    });
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId).toEqual({ plan: 'plan text' });
+  });
+
+  it('accepts terminal plan text when all earlier events were missed', () => {
+    const store = useTimelineStore.getState();
+    store.setPlanTextForThread('t1', 'turn-1', 'plan', 'complete plan');
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId).toEqual({ plan: 'complete plan' });
+  });
+});
+
 /** A summary-view turn: app-server withheld its reasoning and plan items. */
 function summaryTurn(id: string, text: string): TurnDto {
   return {
@@ -182,20 +273,20 @@ describe('on-demand turn item top-up', () => {
       readOnlyReason: null,
     });
 
-    useTimelineStore
-      .getState()
-      .applyFullTurnItemsForThread('t1', 'turn-1', [
-        { type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
-        { type: 'reasoning', id: 'r1', summary: ['thinking'] },
-        { type: 'plan', id: 'p1', text: '# the plan' },
-      ]);
+    useTimelineStore.getState().applyFullTurnItemsForThread('t1', 'turn-1', [
+      { type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+      { type: 'reasoning', id: 'r1', summary: ['thinking'] },
+      { type: 'plan', id: 'p1', text: '# the plan' },
+    ]);
 
     const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
     const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
     expect(turnEntry).toMatchObject({ itemsView: 'full' });
-    expect(turnEntry.kind === 'turn' && turnEntry.plan?.explanation).toContain(
-      'the plan',
-    );
+    // Keyed by item id rather than folded into one blob: that is what lets a
+    // persisted plan replace a fragment left behind by a dropped connection.
+    expect(
+      turnEntry.kind === 'turn' && turnEntry.plan?.planTextByItemId?.p1,
+    ).toContain('the plan');
     expect(
       turnEntry.kind === 'turn' && turnEntry.items.map((i) => i.type),
     ).toEqual(['reasoning']);
@@ -455,9 +546,7 @@ describe('paged read-only history', () => {
       cwd: '/workspace',
     });
 
-    const runtime = useTimelineStore
-      .getState()
-      .getThreadRuntime('archived')!;
+    const runtime = useTimelineStore.getState().getThreadRuntime('archived')!;
     expect(runtime.threadMode).toBe('readOnly');
     expect(runtime.historyCursor).toBe('older-page');
     expect(runtime.timeline.map((entry) => entry.turnId)).toEqual([
@@ -480,7 +569,11 @@ describe('paged read-only history', () => {
     });
     useTimelineStore
       .getState()
-      .prependHistoryForThread('archived', [answeredTurn('turn-1', 'old')], null);
+      .prependHistoryForThread(
+        'archived',
+        [answeredTurn('turn-1', 'old')],
+        null,
+      );
 
     useTimelineStore.getState().setReadOnlyThread({
       id: 'archived',
@@ -498,10 +591,9 @@ describe('paged read-only history', () => {
 
     const runtime = useTimelineStore.getState().getThreadRuntime('archived')!;
     expect(runtime.threadMode).toBe('readOnly');
-    expect([...new Set(runtime.timeline.map((entry) => entry.turnId))]).toEqual([
-      'turn-1',
-      'turn-2',
-    ]);
+    expect([...new Set(runtime.timeline.map((entry) => entry.turnId))]).toEqual(
+      ['turn-1', 'turn-2'],
+    );
     // The pre-degrade cursor is already exhausted; adopting the fallback's
     // cursor would re-offer history that is on screen.
     expect(runtime.historyCursor).toBeNull();
@@ -625,8 +717,9 @@ describe('failures hydrated before their turn was paged in', () => {
       .getState()
       .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const failures = timeline.filter(
       (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
     );
@@ -647,8 +740,9 @@ describe('failures hydrated before their turn was paged in', () => {
       .getState()
       .prependHistoryForThread('t1', [failedTurn('turn-old', 'older')], null);
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const newestIndex = timeline.findIndex(
       (entry) => entry.kind === 'user' && entry.turnId === 'turn-new',
     );
@@ -668,8 +762,9 @@ describe('failures hydrated before their turn was paged in', () => {
       .getState()
       .prependHistoryForThread('t1', [answeredTurn('turn-old', 'older')], null);
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
     expect(failures).toHaveLength(1);
     const failureIndex = timeline.indexOf(failures[0]);
@@ -694,8 +789,9 @@ describe('failures hydrated before their turn was paged in', () => {
         null,
       );
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
     expect(failures).toHaveLength(1);
     const at = timeline.indexOf(failures[0]);
@@ -723,8 +819,9 @@ describe('failures hydrated before their turn was paged in', () => {
         null,
       );
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const failures = timeline.filter((entry) => entry.kind === 'turnFailure');
     expect(failures).toHaveLength(1);
     const at = timeline.indexOf(failures[0]);
@@ -743,10 +840,15 @@ describe('failures hydrated before their turn was paged in', () => {
 
     useTimelineStore
       .getState()
-      .prependHistoryForThread('t1', [answeredTurn('turn-other', 'other')], null);
+      .prependHistoryForThread(
+        't1',
+        [answeredTurn('turn-other', 'other')],
+        null,
+      );
 
-    const timeline = useTimelineStore.getState().getThreadRuntime('t1')!
-      .timeline;
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
     const failures = timeline.filter(
       (entry) => entry.kind === 'turnFailure' && entry.turnId === 'turn-old',
     );

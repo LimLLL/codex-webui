@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ThreadSecurityPolicyController } from './thread-security-policy.controller';
 import { AuthModule } from '../auth/auth.module';
 import { ChatModule } from '../chat/chat.module';
 import { CodexModule } from '../codex/codex.module';
@@ -38,6 +39,7 @@ import { ThreadsService } from './threads.service';
     ThreadsController,
     ThreadsDeletionController,
     ThreadCommandsController,
+    ThreadSecurityPolicyController,
   ],
   providers: [
     ThreadsService,

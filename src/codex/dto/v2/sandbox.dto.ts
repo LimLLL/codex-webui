@@ -35,9 +35,6 @@ export class SandboxReadOnlyDto {
   @ApiProperty({ enum: ['readOnly'] })
   type!: 'readOnly';
 
-  @ApiProperty(readOnlyAccessSchema())
-  access!: ReadOnlyAccessRestrictedDto | ReadOnlyAccessFullAccessDto;
-
   @ApiProperty()
   networkAccess!: boolean;
 }
@@ -58,9 +55,6 @@ export class SandboxWorkspaceWriteDto {
 
   @ApiProperty({ type: 'array', items: ABSOLUTE_PATH_BUF_SCHEMA })
   writableRoots!: string[];
-
-  @ApiProperty(readOnlyAccessSchema())
-  readOnlyAccess!: ReadOnlyAccessRestrictedDto | ReadOnlyAccessFullAccessDto;
 
   @ApiProperty()
   networkAccess!: boolean;

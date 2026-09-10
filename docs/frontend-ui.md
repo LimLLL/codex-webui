@@ -180,7 +180,7 @@ Mobile/Tablet (< lg):
 - 判据对**内部** item union 穷尽：往这个 union 加成员是**编译错误**，而不是日后某个空白气泡。协议侧的未知类型不走这条穷尽——normalizer 先把它们折成 `unknownActivity`，渲染成明确的「不支持的活动」标记
 - 正在跑但暂无可见内容的回合显示已有的 `Thinking...` 占位（该分支此前因为被更早的 `return null` 挡住而实际不可达）；已完成且无可见内容的回合不渲染任何表面
 - 挂着审批卡/用户输入卡的 item **不会**被滤掉——卡片渲染在 item 体旁边，滤掉会把可交互的审批一并带走
-- 回合级的 plan 与 diff 同样按渲染器的真实条件判断（`PlanPanel` 要求 explanation/steps/文本三者之一，diff 要求非空串），而不是判断字段是否存在
+- 回合级的 plan 与 diff 同样按渲染器的真实条件判断（`PlanPanel` 要求 plan 文本或 steps，diff 要求非空串），而不是判断字段是否存在。plan 文本**合并为一处呈现**：流式 delta 与从历史读回的文本是同一段散文，此前分成 explanation 段落与「临时 delta」`<pre>` 两块，会让同一个 plan 在刷新前后长得不一样——而持久化的 plan 恰恰一点也不「临时」
 
 ### 删除进行中的反馈
 
@@ -222,6 +222,31 @@ Mobile/Tablet (< lg):
 - **GitDiffPanel** (`turn-items/git-diff-panel.tsx`)：封装 DiffView，集中处理 Shiki 懒加载（模块级单例）、theme（从 `useThemeStore` 读取）、Unified/Split 切换、parse 失败 raw fallback（DiffRenderBoundary error boundary）。
 - **file-change-item**：completed 时展开区域用 GitDiffPanel（`showToolbar=false`，因卡片 header 已有文件名）；流式阶段保留 `<pre>` 原始渲染。
 - **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST。蓝色边框(pending) / 灰色(resolved)。
+
+## 审批呈现
+
+命令审批**内联在 command item 内部**，与 fileChange 的既有做法一致；此前它是兄弟卡片，会把同一条命令重画第二遍，策略修正案区块再重画第三遍。
+
+规则不是「审批区绝不显示命令」，而是**只去掉同一动作的重复表示**：
+
+| 情况 | 呈现 |
+|------|------|
+| 与宿主同一动作 | 命令只由 command item 画一次；审批区只加 reason / cwd / 请求的额外权限 / 状态 / 操作 |
+| 子命令或 stdin 写入 | 授权对象与宿主显示的不是同一个东西，审批区显示它自己的那份文本 |
+| 申请了额外沙箱权限 | 显式展示文件系统条目与网络请求 —— 这是 command item 结构上不可能显示的内容 |
+| 纯网络审批 | 协议 + 主机即完整授权对象，协议允许此类请求不带 `command`/`cwd` |
+| 一个宿主多个请求 | 按 requestId 分段，各自独立作用域与操作 |
+| 无同轮宿主 | 保留自包含卡片（`approval-item.tsx`）；跨轮 stdin 回调即属此类 |
+| 已决议 | 收成紧凑状态条。**`resolved` 保持中性**——服务端在 turn 开始/结束/中断的生命周期清理中也会 resolve，不等于用户接受过 |
+
+关键约束：
+
+- 比较用**原始命令**，不用 `stripShellWrapper` 剥壳后的显示形式——后者是为可读性重写过的，拿它判等会把两条不同的命令认成同一条。
+- 待审批时授权文本**强制可见**，不受输出折叠状态影响；不能让人给看不见的命令授权。
+- 策略修正案授权的是**未来**匹配的命令，作用域比当前这一次更宽，因此收在独立的展开区内，但接受按钮之前必须先看到确切提案。
+- 权限缺失 = **未指定**，不等于不受限；`networkEnabled` 为三态，`null` 不渲染成「禁止联网」。
+- 文件系统条目保留访问类型与路径语义（`path` / `glob` / `special`，以及 `deny`），不压平成模糊路径列表。**`special` 在钉住 schema 里是对象联合而非字符串**（`root` / `minimal` / `project_roots`+subpath / `tmpdir` / `slash_tmp` / `unknown`+path），按字符串判断等于把它整类丢掉——而只含一条 special 的权限浮层会因此整体变 null，从卡片上消失。作用域标签本身就是安全信息（`root` 与 `tmpdir` 授权的东西完全不同），因此展示的是它的 scope 而不是「special」这个词。
+- 决议后**不丢上下文**：状态条只替换掉操作按钮，命令、reason、cwd 与权限浮层继续渲染——事后要能看清当时到底授权了什么。
 - **diff-viewer** (turn-level)：按 `diff --git` 分段拆分聚合 diff，每个文件渲染一个 GitDiffPanel（竖排列表，非 tab）。
 - **diff-utils.ts**：`ensureDiffHeaders` 为 Codex 裸 hunk（无 `---`/`+++` 头）补充文件头；`stripGitPathPrefix` 去除 `a/`/`b/` 前缀。
 

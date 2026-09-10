@@ -1,7 +1,12 @@
 /** Generation-scoped resume registry for non-idempotent thread/resume calls. */
 import { Injectable, Logger } from '@nestjs/common';
+import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
-import type { ReasoningEffort, v2 } from '../codex/codex-schema';
+import type {
+  ReasoningEffort,
+  ServerNotification,
+  v2,
+} from '../codex/codex-schema';
 import type { ThreadOpenResponseDto } from './dto/threads.dto';
 import { isThreadOwnershipConflictError } from './thread-errors';
 import {
@@ -35,7 +40,19 @@ export class ThreadResumeRegistryService {
   constructor(
     private readonly history: ThreadHistoryService,
     private readonly codexManager: CodexProcessManager,
+    private readonly settingsObserver: ThreadSettingsObserverService,
   ) {
+    this.codexManager.addListener(
+      'notification',
+      (notification: ServerNotification) => {
+        if (
+          notification.method === 'thread/closed' ||
+          notification.method === 'thread/deleted'
+        ) {
+          this.forget(notification.params.threadId);
+        }
+      },
+    );
     this.codexManager.addLifecycleListener((event) => {
       if (event.type === 'appServerReady') {
         this.pruneGenerations(event.generation);
@@ -70,10 +87,13 @@ export class ThreadResumeRegistryService {
         itemsView: 'summary',
       })
       .then((response) => {
-        if (this.epoch.get(key) === callEpoch) {
-          this.markResumed(threadId);
-          this.responseCache.set(threadId, response);
+        if (this.key(threadId) !== key || this.epoch.get(key) !== callEpoch) {
+          throw new Error(
+            'Thread open was superseded before its response arrived',
+          );
         }
+        this.markResumed(threadId);
+        this.cacheResponse(threadId, response);
         return this.toWritableOpen(response);
       })
       .catch(async (err: Error) => {
@@ -107,8 +127,23 @@ export class ThreadResumeRegistryService {
    * `readAsResume` merges cached settings with a fresh `thread/read`
    * to return a complete `ThreadResumeResponse`.
    */
-  cacheResponse(threadId: string, response: CachedThreadResponse): void {
+  cacheResponse(
+    threadId: string,
+    response: CachedThreadResponse,
+    generation = this.getGeneration(),
+  ): void {
+    if (generation !== this.getGeneration()) {
+      throw new Error(
+        'Thread settings response belongs to an obsolete app-server generation',
+      );
+    }
     this.responseCache.set(threadId, response);
+    this.settingsObserver.seedResponse(threadId, response);
+  }
+
+  /** Captures the process generation before an asynchronous start/fork request. */
+  getGeneration(): number {
+    return this.codexManager.getGeneration();
   }
 
   /** Returns the cached resolved model from a successful start/resume/fork. */
@@ -148,6 +183,8 @@ export class ThreadResumeRegistryService {
     threadId: string,
     initialTurnsLimit: number,
   ): Promise<ThreadOpenResponseDto> {
+    const key = this.key(threadId);
+    const epoch = this.epoch.get(key);
     const cached = this.responseCache.get(threadId);
     if (!cached) {
       throw new Error(
@@ -158,6 +195,9 @@ export class ThreadResumeRegistryService {
       this.history.readThreadMetadata(threadId),
       this.readInitialTurnsPage(threadId, initialTurnsLimit),
     ]);
+    if (this.key(threadId) !== key || this.epoch.get(key) !== epoch) {
+      throw new Error('Thread open was superseded while reading history');
+    }
     return this.toWritableOpen({
       ...cached,
       thread: { ...metadata.thread, turns: [] },
@@ -200,6 +240,19 @@ export class ThreadResumeRegistryService {
     response: CachedThreadResponse,
   ): ThreadOpenResponseDto {
     const initialTurnsPage = this.readEmbeddedTurnsPage(response);
+    // Read after all awaited work: a notification may have superseded the
+    // original response while metadata/history were being fetched.
+    const observed = this.settingsObserver.readSettings(
+      response.thread.id,
+    )?.settings;
+    const effective = {
+      ...response,
+      ...(observed && {
+        ...observed,
+        sandbox: observed.sandboxPolicy,
+        reasoningEffort: observed.effort,
+      }),
+    };
     return {
       mode: 'writable',
       ownership: 'acquired',
@@ -210,15 +263,15 @@ export class ThreadResumeRegistryService {
       // values with the cached resolved ones silently discards the fresher metadata
       // `readAsOpen` just fetched.
       thread: { ...response.thread, turns: [] },
-      cwd: String(response.cwd),
-      model: response.model ?? null,
-      modelProvider: response.modelProvider ?? null,
-      serviceTier: response.serviceTier ?? null,
+      cwd: String(effective.cwd),
+      model: effective.model ?? null,
+      modelProvider: effective.modelProvider ?? null,
+      serviceTier: effective.serviceTier ?? null,
       instructionSources: (response.instructionSources ?? []).map(String),
-      approvalPolicy: response.approvalPolicy ?? null,
-      approvalsReviewer: response.approvalsReviewer ?? null,
-      sandbox: response.sandbox ?? null,
-      reasoningEffort: response.reasoningEffort ?? null,
+      approvalPolicy: effective.approvalPolicy ?? null,
+      approvalsReviewer: effective.approvalsReviewer ?? null,
+      sandbox: effective.sandbox ?? null,
+      reasoningEffort: effective.reasoningEffort ?? null,
       initialTurnsPage,
       turnsBackwardsCursor:
         this.readNullableString(response, 'turnsBackwardsCursor') ??

@@ -361,3 +361,12 @@
 - [ ] 真实多 agent 调度和 approval/user-input 暂停组合的集成覆盖。
 - [ ] 修复页错误状态与 raw/表单切换往返的组件级渲染测试。
 - [ ] auto-resume 父子顺序恢复目前为全串行；兄弟会话可并行，加载会话多时恢复偏慢。
+
+## Thread 策略与恢复
+
+- [x] 前后端两半均已落地（[契约](thread-policy-recovery.md)）。后端：安全设置观测值、按会话排队的变更、严格的载荷白名单、显式的 item 分页完整性、带权限字段的审批传输测试。前端：把 item 权威、turn 生命周期、历史覆盖范围三件事拆开；打开会话时按 turn 分组对账；open 与重连共用一个恢复协调器，且同时修复 turn 生命周期而不只修 item；审批内联进它所属的执行 item；per-thread 策略以观测顺序确认。**真实模型轮次的执行已实测**，不再是待验证项：会话在 `on-request`/只读下请求了审批，改为 `never`/完全访问后同一任务不再询问（`pnpm probe live-policy`）。
+- [x] 协议探针从一次性脚本升为纳入版本管理、受类型检查的代码（`codex_probe/`，见 [README](../codex_probe/README.md)）。方法与其参数由生成的 `ClientRequest` 在类型层相关联，拼错的调用在 spawn 前就失败；每次运行使用隔离的 CODEX_HOME；只用钉住的二进制。
+- [ ] **策略徽章会长期显示过期的策略**。`use-thread-security-policy` 只在「本会话从未观测过」时读一次，此后唯一的刷新来源是 `thread/settings/updated` 通知。断线期间由 CLI 或另一个客户端改的策略，那条通知收不到，重连后没有任何路径补读，徽章就一直显示旧值、Send 也据此放行。两个附带问题：`observed:false`（服务端尚未报过）也算「已观测」，所以过早读到 unknown 的会话永不重试；`forgetPolicy` 在生产代码里**从未被调用**，会话删除或驱逐后观测值仍留在 store。要做的是给观测值一个生命周期（打开 / 重连 / 重启 / 驱逐时失效重读），并把读取失败与过期证据显示为「最后已知」而非「当前生效」。
+- [ ] **打开会话时可能把已结束的轮次当成正在运行**。`use-thread-open` 从 open 响应里找到 `status === 'inProgress'` 的轮次就无条件设为活跃指针，但响应是服务端处理请求那一刻的快照；若该轮次的 `turn/completed` 在请求在途期间就已到达，指针会被这份更旧的快照重新点亮，composer 永远转圈。这与本轮在 `settleTurnLifecycleForThread` 里修掉的是同一类错误（那里加了「本地已终态的 turn 不被迟到的 running 头复活」的守卫），只是 open 这条路径没有。同一段里 effort / serviceTier 的 seed 也是无条件写入，期间到达的 `thread/settings/updated` 会被旧响应覆盖。另需补：重连后新发现的 turn 只恢复了生命周期、未取内容，断线期间到达或被解决的审批也不在恢复范围内。
+- [ ] **plan 文本不受 item 权威规则保护**。普通 item 带 `completed`（是否已见到权威终态载荷）与 `observedSeq`（实时写入序号），迟到的 delta 与过期快照靠这两个字段挡住；plan 文本存为 `Record<itemId, string>` 纯字符串，两者皆无。终态之后再来一条 delta 会直接追加，把完整文本变成带重复尾巴的文本；持久快照也可能覆盖更新的流式文本。要做的是让 plan 走与 item 相同的权威规则。附带：已标记 `complete` 的 turn item 缓存为 `staleTime: Infinity`，若后续活动确实会给已完成轮次追加历史，该缓存需要失效路径。
+- [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。

@@ -86,6 +86,7 @@ export class ThreadsService {
       ...params,
       historyMode: REQUIRED_HISTORY_MODE,
     };
+    const settingsGeneration = this.resumeRegistry.getGeneration();
     const response = await this.codex.request<v2.ThreadStartResponse>(
       'thread/start',
       requestParams,
@@ -102,8 +103,12 @@ export class ThreadsService {
         { threadId: response.thread.id },
       );
     }
+    this.resumeRegistry.cacheResponse(
+      response.thread.id,
+      response,
+      settingsGeneration,
+    );
     this.resumeRegistry.markResumed(response.thread.id);
-    this.resumeRegistry.cacheResponse(response.thread.id, response);
     return response;
   }
 
@@ -216,14 +221,19 @@ export class ThreadsService {
    *
    * @param threadId - Thread that owns the turn
    * @param turnId - Turn whose items should be returned
-   * @returns The turn's items, oldest first
+   * @returns Persisted completion-ordered items and explicit paging coverage
    */
   async listTurnItems(
     threadId: string,
     turnId: string,
+    cursor?: string,
   ): Promise<ThreadTurnItemsResponseDto> {
-    const entries = await this.history.listTurnItems(threadId, turnId);
-    return { items: entries.map((entry) => entry.item) };
+    const { entries, ...coverage } = await this.history.listTurnItems(
+      threadId,
+      turnId,
+      cursor,
+    );
+    return { items: entries.map((entry) => entry.item), ...coverage };
   }
 
   /** Counts graph-node turns without resuming; failures become unknown counts. */
@@ -389,6 +399,7 @@ export class ThreadsService {
       ...(options.ephemeral !== undefined && { ephemeral: options.ephemeral }),
       ...(options.carryGoal && { deferGoalContinuation: true }),
     };
+    const settingsGeneration = this.resumeRegistry.getGeneration();
     const response = await this.codex.request<v2.ThreadForkResponse>(
       'thread/fork',
       params,
@@ -452,8 +463,12 @@ export class ThreadsService {
         { threadId, childThreadId },
       );
     }
+    this.resumeRegistry.cacheResponse(
+      childThreadId,
+      response,
+      settingsGeneration,
+    );
     this.resumeRegistry.markResumed(childThreadId);
-    this.resumeRegistry.cacheResponse(childThreadId, response);
     return response;
   }
 

@@ -14,7 +14,7 @@
     "start:debug": "pnpm ensure:codex-schema && nest start --debug --watch",
     "start:prod": "node dist/main",
     "generate:api": "pnpm --dir web generate:api",
-    "lint": "pnpm ensure:codex-schema && eslint \"{src,apps,libs}/**/*.ts\" --fix && cd web && pnpm lint",
+    "lint": "pnpm ensure:codex-schema && eslint \"{src,apps,libs}/**/*.ts\" \"codex_probe/**/*.ts\" --fix && cd web && pnpm lint",
     "test": "pnpm ensure:codex-schema && vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
@@ -23,7 +23,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "codex:catalog": "codex debug models --bundled > docs/upstream/model-catalog-0.153.2.json"
+    "codex:catalog": "codex debug models --bundled > docs/upstream/model-catalog-0.153.2.json",
+    "probe": "ts-node --project codex_probe/tsconfig.json codex_probe/index.ts"
   },
   "dependencies": {
     "7zip-min": "^3.0.1",

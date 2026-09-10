@@ -16,6 +16,10 @@ import {
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { RateLimitSnapshotDto } from '@/generated/api';
 import {
+  refreshThreadPolicy,
+  settleIfObserved,
+} from '@/stores/thread-policy-store';
+import {
   invalidateBranchTreesSoon,
   invalidateThreadListSoon,
   queryHasId,
@@ -33,6 +37,7 @@ import {
   mergeTurnItem,
   normalizeThreadItem,
 } from '@/lib/thread-item-normalizer';
+import { acceptsStreamedUpdate } from '@/lib/turn-item-merge';
 import { normalizeLiveTurnFailure } from '@/lib/turn-failure';
 import i18n from '@/i18n';
 
@@ -76,6 +81,8 @@ export interface NotificationContext {
     plan: TurnPlanState,
   ) => void;
   appendPlanDelta: (turnId: string, itemId: string, delta: string) => void;
+  /** Replaces one plan item's text with its authoritative accumulated value. */
+  setPlanText: (turnId: string, itemId: string, text: string) => void;
   setLoading: (loading: boolean) => void;
   expandReasoning: (itemId: string) => void;
   collapseReasoning: (itemId: string) => void;
@@ -89,6 +96,10 @@ export interface NotificationContext {
   setThreadStatus: (status: ThreadStatusType | null) => void;
   setActiveTurnId: (turnId: string | null) => void;
   clearActiveTurn: () => void;
+  /** The turn this thread currently considers running, if any. */
+  getActiveTurnId: () => string | null;
+  /** Whether a turn is already known to have finished. */
+  isTurnTerminal: (turnId: string) => boolean;
   setThreadTitle: (title: string | null) => void;
   resolveApprovalByRequestId: (requestId: string | number) => void;
 }
@@ -151,57 +162,69 @@ function isPlanStepStatus(value: unknown): value is TurnPlanStepStatus {
 const handleReasoningSummaryTextDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    type: 'reasoning',
-    itemId,
-    content:
-      (existing?.type === 'reasoning' ? existing.content : '') +
-      (delta ?? ''),
-    completed: false,
-  }));
+  ctx.updateTurnItem(turnId, itemId, (existing) => {
+    if (existing && !acceptsStreamedUpdate(existing)) return existing;
+    return {
+      type: 'reasoning',
+      itemId,
+      content:
+        (existing?.type === 'reasoning' ? existing.content : '') +
+        (delta ?? ''),
+      completed: false,
+    };
+  });
   ctx.expandReasoning(itemId);
 };
 
 const handleAgentMessageDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    type: 'agentMessage',
-    itemId,
-    content:
-      (existing?.type === 'agentMessage' ? existing.content : '') +
-      (delta ?? ''),
-    questions: existing?.type === 'agentMessage' ? existing.questions : [],
-    completed: false,
-  }));
+  ctx.updateTurnItem(turnId, itemId, (existing) => {
+    if (existing && !acceptsStreamedUpdate(existing)) return existing;
+    return {
+      type: 'agentMessage',
+      itemId,
+      content:
+        (existing?.type === 'agentMessage' ? existing.content : '') +
+        (delta ?? ''),
+      questions: existing?.type === 'agentMessage' ? existing.questions : [],
+      completed: false,
+    };
+  });
 };
 
 const handleCommandExecutionOutputDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing?.type === 'commandExecution'
-      ? existing
-      : { type: 'commandExecution' as const, itemId, content: '' }),
-    content:
-      (existing?.type === 'commandExecution' ? existing.content : '') +
-      (delta ?? ''),
-    completed: false,
-  }));
+  ctx.updateTurnItem(turnId, itemId, (existing) => {
+    if (existing && !acceptsStreamedUpdate(existing)) return existing;
+    return {
+      ...(existing?.type === 'commandExecution'
+        ? existing
+        : { type: 'commandExecution' as const, itemId, content: '' }),
+      content:
+        (existing?.type === 'commandExecution' ? existing.content : '') +
+        (delta ?? ''),
+      completed: false,
+    };
+  });
 };
 
 const handleFileChangeOutputDelta: Handler = (params, ctx) => {
   const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
   if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing?.type === 'fileChange'
-      ? existing
-      : { type: 'fileChange' as const, itemId, content: '' }),
-    content:
-      (existing?.type === 'fileChange' ? existing.content : '') +
-      (delta ?? ''),
-    completed: false,
-  }));
+  ctx.updateTurnItem(turnId, itemId, (existing) => {
+    if (existing && !acceptsStreamedUpdate(existing)) return existing;
+    return {
+      ...(existing?.type === 'fileChange'
+        ? existing
+        : { type: 'fileChange' as const, itemId, content: '' }),
+      content:
+        (existing?.type === 'fileChange' ? existing.content : '') +
+        (delta ?? ''),
+      completed: false,
+    };
+  });
 };
 
 const handleTurnDiffUpdated: Handler = (params, ctx) => {
@@ -222,7 +245,13 @@ const handleItemStarted: Handler = (params, ctx) => {
     '';
   const normalized = normalizeThreadItem(item, false, itemId);
   if (normalized.kind === 'render' || normalized.kind === 'unknown') {
-    ctx.updateTurnItem(turnId, normalized.item.itemId, () => normalized.item);
+    // `item/started` carries an empty shell. Recovery can install the terminal
+    // payload for an item before its own start notification is processed — on
+    // reconnect the snapshot legitimately runs ahead of the replayed stream —
+    // and letting the shell win there would blank out a finished item.
+    ctx.updateTurnItem(turnId, normalized.item.itemId, (existing) =>
+      existing && !acceptsStreamedUpdate(existing) ? existing : normalized.item,
+    );
   }
 };
 
@@ -243,6 +272,14 @@ const handleItemCompleted: Handler = (params, ctx) => {
     if (normalized.item.type === 'reasoning') {
       ctx.collapseReasoning(normalized.item.itemId);
     }
+    return;
+  }
+  // Plan items were previously dropped here, so plan text only ever grew by
+  // delta and a fragment lost to a disconnect stayed lost. Like every other
+  // terminal payload this one carries the whole accumulated text, so it
+  // replaces rather than appends.
+  if (normalized.kind === 'plan') {
+    ctx.setPlanText(turnId, normalized.itemId, normalized.text);
   }
 };
 
@@ -261,8 +298,15 @@ const handleTurnCompleted: Handler = (params, ctx) => {
   }
 
   ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
-  ctx.setLoading(false);
-  ctx.clearActiveTurn();
+  // Only the turn that is actually running may stop the composer. A replayed or
+  // late `turn/completed` naming an earlier turn used to clear the pointer
+  // regardless, which released Send and hid the spinner while a different turn
+  // was still streaming.
+  const active = ctx.getActiveTurnId();
+  if (active === null || active === turnId) {
+    ctx.setLoading(false);
+    ctx.clearActiveTurn();
+  }
 
   if (turn.status === 'failed' && turn.error) {
     ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, turn.error));
@@ -285,6 +329,18 @@ const handleThreadSettingsUpdated: Handler = (params, ctx) => {
       path: { threadId },
     }),
   });
+  // This notification is the only confirmation that a requested security policy
+  // actually took effect — the patch endpoint returns a queued acknowledgement,
+  // not proof. Reading here is what releases the composer's hold on Send.
+  //
+  // A direct read rather than a query invalidation, and the difference was
+  // measured: with a read already in flight, invalidating produced no second
+  // request at all and the pre-notification body became the cached answer. The
+  // confirmation this notification carries would have been lost, and the
+  // composer would have waited out its whole window for an event that had
+  // already arrived. `refreshThreadPolicy` stamps its own ordering, so a read
+  // issued before this notification can no longer overwrite the one after it.
+  void refreshThreadPolicy(threadId).then(() => settleIfObserved(threadId));
 
   // Entering Plan mode makes app-server rewrite the thread's reasoning effort,
   // so the badge has to be told. This is recorded per thread and for display
@@ -526,7 +582,20 @@ const handleTurnStarted: Handler = (params, ctx) => {
   const turn = params.turn as { id?: string } | undefined;
   const turnId = turn?.id;
   if (!turnId || ctx.threadId !== threadId) return;
-  ctx.updateCurrentTurn(turnId, () => ({ items: [], completed: false }));
+  // Preserve whatever this turn already holds. A repeated or late `turn/started`
+  // is not evidence the turn is empty: recovery may have already installed its
+  // persisted items, and clearing them here would re-create the very gap
+  // recovery exists to close. Reopening a finished turn is refused for the same
+  // reason — turn lifecycle moves forward only.
+  ctx.updateCurrentTurn(turnId, (items, completed) => ({
+    items,
+    completed,
+  }));
+  // Guarding the entry alone was not enough: a replayed `turn/started` for a
+  // turn already known to have finished left the entry correct and still put
+  // the composer back into a running state it could never leave, because the
+  // matching `turn/completed` had already been consumed.
+  if (ctx.isTurnTerminal(turnId)) return;
   ctx.setLoading(true);
   ctx.setActiveTurnId(turnId);
 };

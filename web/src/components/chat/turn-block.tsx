@@ -141,15 +141,13 @@ function ItemWithRequests({
     case 'commandExecution':
       return (
         <>
-          <CommandItem item={item} />
-          {approvals
-            .filter((approval) => approval.kind !== 'fileChange')
-            .map((approval) => (
-              <ApprovalItem
-                key={String(approval.requestId)}
-                approval={approval}
-              />
-            ))}
+          {/* Approvals go INSIDE the command card. Rendering them as siblings
+              is what printed the same command twice — three times once the
+              policy-amendment section repeated it as well. */}
+          <CommandItem
+            item={item}
+            approvals={approvals.filter((approval) => approval.kind !== 'fileChange')}
+          />
           {inputCard}
         </>
       );

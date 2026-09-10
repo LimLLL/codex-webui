@@ -79,8 +79,10 @@
 | GET    | `/api/threads/:threadId`                         | ThreadsController         | metadata-only 读取单个 thread；历史统一走分页 turns/items 端点                                                       |
 | GET    | `/api/threads/:threadId/branch-state`            | ThreadsController         | 读取 compact guard 状态与持久化树成员。包含本地创建和启动期认领的拓扑，不做每请求 app-server 扫描                    |
 | GET    | `/api/threads/:threadId/branch-tree`             | ThreadsController         | 读取 thread 所在本地分支树                                                                                           |
-| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list`（按 `turnId` 过滤）读单个 turn 的**完整** items，不 resume。未 materialized 的 pinned refusal 记 warning 后归一为 `[]`，不回退到 full turn pages |
-| GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification/成功写入暴露设置，返回 `observed:false` |
+| GET    | `/api/threads/:threadId/turns/:turnId/items`     | ThreadsController         | 走 `thread/items/list` 读单个 turn 的持久化 items（完成顺序），返回 `items/complete/nextCursor/incompleteReason`；可用 `cursor` 续读，达到上限或分页不可用时明确不完整，不 resume |
+| GET    | `/api/threads/:threadId/security-policy`        | ThreadSecurityPolicyController | 读取已观察到的下轮 approval/sandbox/reviewer；未知值不使用全局默认 |
+| PATCH  | `/api/threads/:threadId/security-policy`        | ThreadSecurityPolicyController | 严格校验 approvalPolicy/sandboxPolicy，HTTP 202 仅确认接受排队；不自动获取所有权 |
+| GET    | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 读取后端已观察到的 collaboration mode；若 app-server 尚未通过 notification 暴露设置，返回 `observed:false` |
 | PATCH  | `/api/threads/:threadId/collaboration-mode`      | ThreadCommandsController  | 设置 next-turn collaboration mode，不启动 turn；需要已解析出 thread 当前 model，否则 400。**不写 null effort**（会被 app-server 当作清空）；进入 Plan 时记录被顶掉的 effort，退出时还原 |
 | GET    | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 读取 thread 持久化 goal，未设置时 `{ goal:null }`                                                                      |
 | PATCH  | `/api/threads/:threadId/goal`                    | ThreadCommandsController  | 创建/更新 goal。Body 支持 `objective`（≤4000 字符）、`status`、`tokenBudget`；至少提供一个字段；仅 `tokenBudget` 接受显式 `null`（透传给 app-server 走默认预算重置），`objective`/`status` 传 null 会 400 |
@@ -248,3 +250,7 @@ Apps UI 的列表行保持紧凑，只保留启用状态和管理入口。Defaul
 
 - Fastify adapter 要求 POST 请求带 `Content-Type: application/json` 时 body 不能为空，即使没有参数也要传 `{}`
 - Query 参数均为 string，controller 内做类型转换 (如 `Number(limit)`, `archived === 'true'`)
+
+## Policy and recovery guarantees
+
+See [thread-policy-recovery.md](thread-policy-recovery.md) for queued-versus-observed policy semantics, settings freshness, explicit paging completeness, measured item durability/order, and approval payload preservation.

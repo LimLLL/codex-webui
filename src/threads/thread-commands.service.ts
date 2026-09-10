@@ -114,6 +114,7 @@ export class ThreadCommandsService {
       },
     };
 
+    const before = this.settingsObserver.readSettings(threadId);
     await this.codex.request<Record<string, never>>('thread/settings/update', {
       threadId,
       collaborationMode,
@@ -123,6 +124,7 @@ export class ThreadCommandsService {
       threadId,
       collaborationMode,
       displaced,
+      before,
     );
   }
 
@@ -191,6 +193,8 @@ export class ThreadCommandsService {
    * which case app-server keeps its own resolution.
    */
   private resolveCurrentThreadEffort(threadId: string): ReasoningEffort | null {
+    const settings = this.settingsObserver.readSettings(threadId)?.settings;
+    if (settings && 'effort' in settings) return settings.effort ?? null;
     return (
       this.settingsObserver.readObservedEffort(threadId) ??
       this.resumeRegistry.readCachedEffort(threadId)

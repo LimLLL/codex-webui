@@ -2,10 +2,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { v2 } from '../codex/codex-schema';
 import { CodexService } from '../codex/codex.service';
+import { isUnmaterializedTurnsListError } from './thread-errors';
 import {
-  isEmptyThreadItemsListRefusal,
-  isUnmaterializedTurnsListError,
-} from './thread-errors';
+  readTurnItems,
+  requestTurnItemsPage,
+  TURN_ITEMS_MAX_PAGES,
+  type TurnItemsRead,
+} from './thread-item-history';
 import { assertPaginatedThread } from './thread-history-mode';
 import {
   projectTurnForClient,
@@ -50,12 +53,6 @@ type ExperimentalResumeParams = v2.ThreadResumeParams & {
   };
 };
 
-/** One item plus the turn it belongs to, as returned by `thread/items/list`. */
-export interface ThreadItemEntry {
-  turnId?: string;
-  item: Record<string, unknown>;
-}
-
 /** Raised when a provenance walk observes a turn that is still running. */
 export class InProgressTurnHistoryError extends Error {
   constructor(
@@ -78,17 +75,7 @@ export class TurnUserMessageNotFoundError extends Error {
   }
 }
 
-interface ThreadItemsPage {
-  data?: ThreadItemEntry[];
-  nextCursor?: string | null;
-}
-
 type UserMessageItem = Extract<v2.ThreadItem, { type: 'userMessage' }>;
-
-const TURN_ITEMS_PAGE_SIZE = 500;
-
-/** Backstop so a misbehaving cursor cannot page forever. */
-const TURN_ITEMS_MAX_PAGES = 20;
 
 const TURN_COUNT_PAGE_SIZE = 200;
 
@@ -211,35 +198,19 @@ export class ThreadHistoryService {
     }
   }
 
-  /**
-   * Reads every persisted item for one turn without resuming the thread.
-   *
-   * The `summary` turns view app-server returns by default omits `reasoning`
-   * and `plan` items, so a client that opened a thread cheaply has no way to
-   * show them. This tops a single turn up to full detail on demand instead of
-   * paying for full detail across the whole first page.
-   *
-   * @param threadId - Thread that owns the turn
-   * @param turnId - Turn whose items should be returned
-   * @returns Items belonging to that turn, oldest first
-   * @throws Unexpected app-server failures other than the pinned empty-thread
-   *   refusal
-   */
+  /** Reads a bounded persisted-item window with explicit paging completeness. */
   async listTurnItems(
     threadId: string,
     turnId: string,
-  ): Promise<ThreadItemEntry[]> {
-    try {
-      return await this.listTurnItemsDirect(threadId, turnId);
-    } catch (err) {
-      if (!isEmptyThreadItemsListRefusal(err)) throw err;
+    cursor?: string,
+  ): Promise<TurnItemsRead> {
+    const result = await readTurnItems(this.codex, threadId, turnId, cursor);
+    if (!result.complete) {
       this.logger.warn(
-        `Normalizing thread/items/list refusal to empty for thread=${threadId} turn=${turnId}. ` +
-          'Pinned app-server uses this response for an unmaterialized thread, ' +
-          'but the same response can also mean the store lacks item pagination.',
+        `Incomplete thread/items/list for thread=${threadId} turn=${turnId}: ${result.incompleteReason}`,
       );
-      return [];
     }
+    return result;
   }
 
   /**
@@ -264,7 +235,8 @@ export class ThreadHistoryService {
     const seenCursors = new Set<string>();
 
     for (let page = 0; page < TURN_ITEMS_MAX_PAGES; page += 1) {
-      const response = await this.requestTurnItemsPage(
+      const response = await requestTurnItemsPage(
+        this.codex,
         threadId,
         turnId,
         cursor,
@@ -304,42 +276,6 @@ export class ThreadHistoryService {
     throw new Error(
       `thread/items/list exceeded ${TURN_ITEMS_MAX_PAGES} pages for thread ${threadId} turn ${turnId}`,
     );
-  }
-
-  private async listTurnItemsDirect(
-    threadId: string,
-    turnId: string,
-  ): Promise<ThreadItemEntry[]> {
-    const entries: ThreadItemEntry[] = [];
-    let cursor: string | undefined;
-
-    // The turn filter does not disable pagination, and the caller marks the
-    // result as complete — so stopping at the first page would silently drop
-    // the tail of a long turn and never retry it.
-    for (let page = 0; page < TURN_ITEMS_MAX_PAGES; page += 1) {
-      const response = await this.requestTurnItemsPage(
-        threadId,
-        turnId,
-        cursor,
-      );
-      if (Array.isArray(response?.data)) entries.push(...response.data);
-
-      const nextCursor = this.nullableString(response?.nextCursor);
-      if (!nextCursor) break;
-      if (nextCursor === cursor) {
-        // A cursor that does not advance would otherwise spin until the page
-        // cap, re-fetching the same items each time.
-        this.logger.warn(
-          `thread/items/list cursor did not advance for thread=${threadId} turn=${turnId}; stopping`,
-        );
-        break;
-      }
-      cursor = nextCursor;
-    }
-
-    // Entries carry their own turnId so unfiltered pages can be grouped; the
-    // filter is advisory, so drop anything that leaked in from another turn.
-    return entries.filter((entry) => !entry.turnId || entry.turnId === turnId);
   }
 
   /**
@@ -528,21 +464,6 @@ export class ThreadHistoryService {
       nextCursor: this.nullableString(record.nextCursor),
       backwardsCursor: this.nullableString(record.backwardsCursor),
     };
-  }
-
-  /** Requests one ascending, target-filtered item page without normalization. */
-  private requestTurnItemsPage(
-    threadId: string,
-    turnId: string,
-    cursor?: string,
-  ): Promise<ThreadItemsPage> {
-    return this.codex.request<ThreadItemsPage>('thread/items/list', {
-      threadId,
-      turnId,
-      cursor,
-      limit: TURN_ITEMS_PAGE_SIZE,
-      sortDirection: 'asc',
-    });
   }
 
   /**
