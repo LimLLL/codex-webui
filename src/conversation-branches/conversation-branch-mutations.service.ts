@@ -1,6 +1,8 @@
 /** Mutating helpers for branch topology rows. */
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { cleanupBranchGroups } from './conversation-branch-group-cleanup';
+import { Subject } from 'rxjs';
 import { randomUUID } from 'node:crypto';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
@@ -70,6 +72,9 @@ export class OrphanedLocalTopologyError extends Error {
 
 @Injectable()
 export class ConversationBranchMutationsService {
+  private readonly changed = new Subject<void>();
+  /** Committed local topology or navigation changes that affect overview projections. */
+  readonly changes = this.changed.asObservable();
   constructor(@Inject(DRIZZLE_DB) private readonly db: AppDatabase) {}
 
   /** Reads all known fork edges, local and adopted. */
@@ -123,6 +128,7 @@ export class ConversationBranchMutationsService {
         createdAt: Date.now(),
       })
       .run();
+    this.changed.next();
   }
 
   /**
@@ -133,7 +139,7 @@ export class ConversationBranchMutationsService {
    */
   replaceAdoptedForks(records: AdoptedForkRecord[]): AdoptedForkPersistResult {
     const now = Date.now();
-    return this.db.transaction((tx) => {
+    const result = this.db.transaction((tx) => {
       // Group cleanup is deferred to the end of the transaction on purpose.
       // Between clearing and re-inserting, a group that mixes local and adopted
       // versions is transiently under-populated, and dissolving on that reading
@@ -190,7 +196,7 @@ export class ConversationBranchMutationsService {
         versionRecords,
         now,
       );
-      this.cleanupGroups(tx, touchedGroupIds, now);
+      cleanupBranchGroups(tx, touchedGroupIds, now);
 
       return {
         adoptedEdges,
@@ -198,6 +204,8 @@ export class ConversationBranchMutationsService {
         topologyOnlyEdges: topologyOnlyEdges + versionResult.topologyOnlyEdges,
       };
     });
+    this.changed.next();
+    return result;
   }
 
   /**
@@ -210,7 +218,7 @@ export class ConversationBranchMutationsService {
     threadId: string,
     confirmedDeleteSet: Set<string>,
   ): ReapDeletedThreadResult {
-    return this.db.transaction((tx) => {
+    const result = this.db.transaction((tx) => {
       const survivingChildren = tx
         .select({ childThreadId: conversationBranchEdges.childThreadId })
         .from(conversationBranchEdges)
@@ -237,7 +245,7 @@ export class ConversationBranchMutationsService {
         .delete(conversationBranchEdges)
         .where(eq(conversationBranchEdges.childThreadId, threadId))
         .run();
-      const cleanup = this.cleanupGroups(tx, affectedGroupIds, Date.now());
+      const cleanup = cleanupBranchGroups(tx, affectedGroupIds, Date.now());
 
       return {
         removedVersionRows: removedVersions.changes,
@@ -246,6 +254,8 @@ export class ConversationBranchMutationsService {
         resequencedGroups: cleanup.resequencedGroups,
       };
     });
+    this.changed.next();
+    return result;
   }
 
   /**
@@ -486,63 +496,5 @@ export class ConversationBranchMutationsService {
     commonPrefixTurnId: string,
   ): string {
     return `${treeRootThreadId}\u0000${commonPrefixTurnId}`;
-  }
-
-  private cleanupGroups(
-    tx: BranchTransaction,
-    groupIds: string[],
-    now: number,
-  ): { dissolvedGroups: number; resequencedGroups: number } {
-    const uniqueGroupIds = [...new Set(groupIds)];
-    if (uniqueGroupIds.length === 0) {
-      return { dissolvedGroups: 0, resequencedGroups: 0 };
-    }
-
-    let dissolvedGroups = 0;
-    let resequencedGroups = 0;
-    for (const groupId of uniqueGroupIds) {
-      const rows = tx
-        .select()
-        .from(conversationBranchVersions)
-        .where(eq(conversationBranchVersions.groupId, groupId))
-        .orderBy(conversationBranchVersions.versionIndex)
-        .all();
-
-      if (rows.length < 2) {
-        tx.delete(conversationBranchVersions)
-          .where(eq(conversationBranchVersions.groupId, groupId))
-          .run();
-        tx.delete(conversationBranchGroups)
-          .where(eq(conversationBranchGroups.groupId, groupId))
-          .run();
-        dissolvedGroups += 1;
-        continue;
-      }
-
-      const alreadySequenced = rows.every(
-        (row, index) => row.versionIndex === index + 1,
-      );
-      if (alreadySequenced) continue;
-
-      rows.forEach((row, index) => {
-        tx.update(conversationBranchVersions)
-          .set({ versionIndex: -(index + 1), updatedAt: now })
-          .where(eq(conversationBranchVersions.versionId, row.versionId))
-          .run();
-      });
-      rows.forEach((row, index) => {
-        tx.update(conversationBranchVersions)
-          .set({ versionIndex: index + 1, updatedAt: now })
-          .where(eq(conversationBranchVersions.versionId, row.versionId))
-          .run();
-      });
-      tx.update(conversationBranchGroups)
-        .set({ updatedAt: now })
-        .where(eq(conversationBranchGroups.groupId, groupId))
-        .run();
-      resequencedGroups += 1;
-    }
-
-    return { dissolvedGroups, resequencedGroups };
   }
 }

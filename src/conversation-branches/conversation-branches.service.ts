@@ -1,6 +1,12 @@
 /** Persists and resolves local conversation branch topology. */
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import {
+  branchMemberDtos,
+  branchGroupDto,
+  branchVersionDto,
+} from './conversation-branch-projection';
+import { Subject } from 'rxjs';
 import { randomUUID } from 'node:crypto';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
@@ -11,14 +17,11 @@ import {
   conversationBranchVersions,
   type ConversationBranchActiveMember,
   type ConversationBranchEdge,
-  type ConversationBranchGroup,
-  type ConversationBranchVersion,
 } from '../database/schema';
 import type {
   BranchGroupDto,
   BranchStateDto,
   BranchTreeDto,
-  BranchTreeMemberDto,
   BranchVersionDto,
 } from './dto/conversation-branches.dto';
 import type { ThreadProvenance } from './provenance';
@@ -52,6 +55,9 @@ export interface RecordedMessageBranch {
 
 @Injectable()
 export class ConversationBranchesService {
+  private readonly changed = new Subject<void>();
+  /** Committed local topology or navigation changes that affect overview projections. */
+  readonly changes = this.changed.asObservable();
   constructor(@Inject(DRIZZLE_DB) private readonly db: AppDatabase) {}
 
   /** Resolves the locally tracked tree root for a thread, or the thread itself. */
@@ -207,6 +213,7 @@ export class ConversationBranchesService {
         set: { activeThreadId, updatedAt: now },
       })
       .run();
+    this.changed.next();
   }
 
   /** Clears any active-member pointer that names a server-confirmed deleted id. */
@@ -220,6 +227,7 @@ export class ConversationBranchesService {
         ),
       )
       .run();
+    this.changed.next();
   }
 
   /**
@@ -333,12 +341,13 @@ export class ConversationBranchesService {
       return { groupId: currentGroupId, version: inserted };
     });
 
+    this.changed.next();
     const tree = this.buildTreeDto(params.treeRootThreadId);
     const group = tree.groups.find((item) => item.groupId === groupId);
     if (!group) {
       throw new Error(`branch group ${groupId} vanished after insert`);
     }
-    return { tree, group, version: this.toVersionDto(version) };
+    return { tree, group, version: branchVersionDto(version) };
   }
 
   /**
@@ -466,8 +475,8 @@ export class ConversationBranchesService {
       treeRootThreadId: rootThreadId,
       activeThreadId: this.validActiveThreadId(rootThreadId, edges),
       tracked: groups.length > 0 || edges.length > 0,
-      members: this.toMemberDtos(rootThreadId, edges),
-      groups: groups.map((group) => this.toGroupDto(group, versions)),
+      members: branchMemberDtos(rootThreadId, edges),
+      groups: groups.map((group) => branchGroupDto(group, versions)),
     };
   }
 
@@ -482,75 +491,5 @@ export class ConversationBranchesService {
       ...edges.map((edge) => edge.childThreadId),
     ]);
     return members.has(row.activeThreadId) ? row.activeThreadId : null;
-  }
-
-  private toMemberDtos(
-    rootThreadId: string,
-    edges: ConversationBranchEdge[],
-  ): BranchTreeMemberDto[] {
-    const parentIds = new Set(edges.map((edge) => edge.parentThreadId));
-    const members: BranchTreeMemberDto[] = [
-      {
-        threadId: rootThreadId,
-        parentThreadId: null,
-        hasChildren: parentIds.has(rootThreadId),
-        source: 'local',
-        commonPrefixTurnId: null,
-      },
-    ];
-
-    for (const edge of edges) {
-      if (edge.childThreadId === rootThreadId) continue;
-      members.push({
-        threadId: edge.childThreadId,
-        parentThreadId: edge.parentThreadId,
-        hasChildren: parentIds.has(edge.childThreadId),
-        source: edge.source === 'adopted' ? 'adopted' : 'local',
-        // Identifies which version group describes *this* fork. A thread can
-        // appear in several groups — it is a branch of the group it was forked
-        // into, and the original of any group created from its own later turns
-        // — and only the one keyed by this prefix says how it differs from its
-        // parent.
-        commonPrefixTurnId:
-          edge.commonPrefixTurnId === BRANCH_START_SENTINEL
-            ? null
-            : edge.commonPrefixTurnId,
-      });
-    }
-    return members;
-  }
-
-  private toGroupDto(
-    group: ConversationBranchGroup,
-    versions: ConversationBranchVersion[],
-  ): BranchGroupDto {
-    return {
-      groupId: group.groupId,
-      treeRootThreadId: group.treeRootThreadId,
-      commonPrefixTurnId:
-        group.commonPrefixTurnId === BRANCH_START_SENTINEL
-          ? null
-          : group.commonPrefixTurnId,
-      createdAt: group.createdAt,
-      updatedAt: group.updatedAt,
-      versions: versions
-        .filter((version) => version.groupId === group.groupId)
-        .map((version) => this.toVersionDto(version)),
-    };
-  }
-
-  private toVersionDto(version: ConversationBranchVersion): BranchVersionDto {
-    return {
-      versionId: version.versionId,
-      groupId: version.groupId,
-      threadId: version.threadId,
-      versionIndex: version.versionIndex,
-      kind: version.kind === 'original' ? 'original' : 'branch',
-      source: version.source === 'adopted' ? 'adopted' : 'local',
-      messageTurnId: version.messageTurnId,
-      previewText: version.previewText,
-      createdAt: version.createdAt,
-      updatedAt: version.updatedAt,
-    };
   }
 }
