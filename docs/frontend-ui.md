@@ -56,14 +56,36 @@ Code-based route tree: `routes/router.tsx`。Auth guard via pathless layout rout
 | 断点 | 范围 | Sidebar 行为 | Session Panel | FilesPanel |
 |------|------|-------------|---------------|------------|
 | Desktop | ≥ 1024px (lg) | inline `w-64`，可手动折叠 | ResizablePanelGroup 垂直分割 | inline `w-56` tree + viewer |
-| Tablet | 640–1023px | Sheet overlay（左侧滑出） | Sheet overlay（底部 70dvh） | tree 在 Sheet，viewer 全宽 |
-| Mobile | < 640px | Sheet overlay（左侧滑出） | Sheet overlay（底部 70dvh） | tree 在 Sheet，viewer 全宽 |
+| Tablet | 640–1023px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
+| Mobile | < 640px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
 
 - 路由变化与进入 desktop 断点时自动关闭 Sheet
 - ChatHeader: < lg 显示 hamburger 按钮打开 sidebar Sheet；desktop 折叠时显示 PanelLeftOpen 展开按钮
 - ChatHeader: < lg 隐藏 Diagnostics/Language/Theme 按钮，放入 `...` overflow Popover（Settings 保留在 sidebar 导航中）
 - sidebar 底部: desktop 显示 PanelLeftClose 折叠按钮（`hidden lg:block`）
 - SessionPanel 内 file tree `w-52`: < lg 通过 `hidden lg:flex` 隐藏
+
+### 视口高度：`--app-vh` 而非视口单位
+
+`lib/mobile-viewport.ts` 在启动时把 `visualViewport.height` 镜像到 `--app-vh`，**所有全高界面都从这个变量取高度**，不再用 `100dvh` / `100vh` / `h-screen`：`#root`、登录页、三个 integrations sheet 的 ScrollArea、移动端会话抽屉。`100dvh` 是首次同步前和无 visual viewport 时的 fallback。
+
+视口单位不够用的两种情形：
+
+- **iOS 软键盘**。Safari 不实现 `interactive-widget`，键盘弹出既不缩小布局视口也不改变 `dvh`，输入框被压在键盘下面。只有 `visualViewport.height` 反映真实可见区域。（`index.html` 的 `interactive-widget=resizes-content` 只对实现了它的浏览器生效，主要是 Chrome。）
+- **覆盖式浏览器栏**。部分内嵌浏览器在页面上方绘制底部工具栏且不减少任何视口测量值，尺寸无从测得，只能按 UA 盲留 —— `html.qq-browser` 保留 `--qq-bottom-gap`（56px），限制在 `<1024px`，桌面版共用 UA 但没有该工具栏。
+
+同步有两个约束，缺一个都会出问题：
+
+- **缩放时不同步**。双指放大会在不缩小布局的前提下缩小 visual viewport，并把它滚离文档原点。此时按它设置外壳高度会让整个应用塌进放大区域；而 visual viewport 在缩放态下还会持续发 `scroll`，于是每次平移都塌一次。`scale !== 1` 时保持上一次读数即可，`offsetTop` 同理不需要单独处理 —— 它只在缩放或键盘过渡期非 0。
+- **值没变就不写**。`scroll` 的触发频率远高于高度变化，写入相同值仍然会脏化样式。
+
+### 悬停显形控件：`hover-reveal`
+
+Tailwind v4 的 `hover:` / `group-hover:` 变体**本身就编译在 `@media (hover: hover)` 里**，所以旁边一个裸 `opacity-0` 在触屏上永远不会被抬起来 —— 控件不可见却仍可点中，成了隐形热区。`index.css` 的 `@utility hover-reveal` 表达完整意图：默认可见，仅在 `(hover: hover) and (pointer: fine)` 下隐藏。
+
+配 `group-hover*:opacity-100` 与 `focus-visible:opacity-100` 使用，两者特异性 0,2,0 均高于 `hover-reveal` 的 0,1,0，不依赖源码顺序。用在 8 处：代码块复制、附件移除、@ 引用附加、文件页签关闭、终端页签关闭、会话行菜单、消息版本操作行、分支节点删除。
+
+> 不要改回在 `index.css` 里裸写全局 class：未分层规则在级联里压过整个 `@layer utilities`，之后任何 `opacity-*` 工具类作用在同一元素上都会被静默吃掉。`@utility` 才会落进 utilities 层。
 
 ## 布局
 

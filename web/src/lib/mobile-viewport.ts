@@ -1,10 +1,13 @@
 /**
- * Mobile viewport fixes.
+ * Mirrors the visual viewport into `--app-vh`, the height every full-height
+ * surface in the app is sized from.
  *
- * QQ Browser (and similar embedded browsers) draw a bottom toolbar that
- * overlays the page without changing `window.innerHeight`, so a 100dvh shell
- * still hides the composer underneath it. Mirroring `visualViewport.height`
- * into `--app-vh` lets CSS track what is actually visible.
+ * `100dvh` tracks retractable browser chrome but not the software keyboard on
+ * iOS, where the keyboard neither resizes the layout viewport nor honours
+ * `interactive-widget`. Some embedded browsers additionally draw a bottom
+ * toolbar over the page without reducing `innerHeight`. In both cases a
+ * `100dvh` shell puts the composer underneath something, and
+ * `visualViewport.height` is the only reading that reflects what is visible.
  */
 
 /** Extra bottom padding reserved for overlay browser chrome (QQ Browser). */
@@ -13,18 +16,18 @@ const QQ_BOTTOM_GAP_PX = 56;
 /** Matches QQ Browser and its embedded webview user agents. */
 const QQ_BROWSER_UA = /MQQBrowser|QQBrowser|QQ\//i;
 
-/** Keeps the viewport meta honest about keyboard/viewport resizing behaviour. */
-function ensureInteractiveWidget(): void {
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
-  if (!meta) return;
-  const content = meta.getAttribute('content') ?? '';
-  if (!content || content.includes('interactive-widget')) return;
-  meta.setAttribute('content', `${content}, interactive-widget=resizes-content`);
-}
+/**
+ * WeChat's Android webview is built on the same X5/TBS engine and carries
+ * `MQQBrowser` in its user agent, but draws no such toolbar. Without this
+ * exclusion every WeChat user loses a strip of the composer area to chrome
+ * that is not there.
+ */
+const WECHAT_UA = /MicroMessenger/i;
 
 /** Marks QQ Browser so CSS can reserve space for its overlay toolbar. */
 function markQqBrowser(): void {
-  if (!QQ_BROWSER_UA.test(navigator.userAgent)) return;
+  const ua = navigator.userAgent;
+  if (WECHAT_UA.test(ua) || !QQ_BROWSER_UA.test(ua)) return;
   document.documentElement.classList.add('qq-browser');
   document.documentElement.style.setProperty(
     '--qq-bottom-gap',
@@ -33,20 +36,38 @@ function markQqBrowser(): void {
 }
 
 /**
- * Installs the viewport fixes and returns a cleanup function.
+ * Installs the viewport sync and returns a cleanup function.
  *
- * Safe to call more than once; every listener is registered against the same
- * sync function and removed on cleanup.
+ * Each call registers its own listeners and its own cleanup, so calling it
+ * more than once leaks nothing as long as every returned function is invoked.
+ *
+ * @returns Removes the listeners this call registered.
  */
 export function installMobileViewportFixes(): () => void {
-  ensureInteractiveWidget();
   markQqBrowser();
 
+  const root = document.documentElement;
+  let applied: string | null = null;
+
   const sync = () => {
-    const height = window.visualViewport?.height || window.innerHeight || 0;
-    if (height > 0) {
-      document.documentElement.style.setProperty('--app-vh', `${height}px`);
-    }
+    const viewport = window.visualViewport;
+    // Pinch zoom shrinks the visual viewport without shrinking the layout, and
+    // scrolls it away from the document origin. Sizing the shell from it then
+    // collapses the whole app to the magnified region — and because the visual
+    // viewport also emits `scroll` while zoomed, it would do so on every pan.
+    // The layout is already correct at scale 1, so zoom simply holds the last
+    // reading. `offsetTop` needs no separate handling for the same reason: it
+    // is only non-zero while zoomed or mid-keyboard-transition, and the shell
+    // shrinking to the viewport height is what lets the browser settle it back.
+    if (viewport && viewport.scale !== 1) return;
+    const height = viewport?.height || window.innerHeight || 0;
+    if (height <= 0) return;
+    const next = `${height}px`;
+    // `scroll` fires far more often than the height changes; writing an
+    // identical value still dirties style on every one of them.
+    if (next === applied) return;
+    applied = next;
+    root.style.setProperty('--app-vh', next);
   };
 
   sync();

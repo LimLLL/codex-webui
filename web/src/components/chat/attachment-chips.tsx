@@ -47,7 +47,7 @@ function ChipItem({ attachment, onRemove }: { attachment: ChatAttachment; onRemo
       <button
         type="button"
         onClick={onRemove}
-        className="ml-0.5 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:opacity-100"
+        className="hover-reveal ml-0.5 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
       >
         <X className="h-3 w-3" />
       </button>

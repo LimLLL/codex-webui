@@ -39,7 +39,7 @@ export function LoginPage({ onLogin }: Props) {
   };
 
   return (
-    <div className="relative flex h-screen items-center justify-center overflow-hidden bg-background">
+    <div className="relative flex h-[var(--app-vh,100dvh)] items-center justify-center overflow-hidden bg-background">
       <form
         onSubmit={handleSubmit}
         className="glass-5 relative z-10 w-full max-w-sm space-y-5 rounded-3xl p-8"

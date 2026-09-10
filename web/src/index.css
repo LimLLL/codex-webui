@@ -15,8 +15,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * `--app-vh` is mirrored from `visualViewport.height` by
+ * installMobileViewportFixes(); `100dvh` is the value before the first sync and
+ * on any browser without a visual viewport. Every full-height surface in the
+ * app sizes from this variable rather than from a viewport unit, because a
+ * viewport unit does not shrink for the iOS software keyboard and does not
+ * account for browser chrome that overlays the page without reporting itself.
+ */
 #root {
-  height: 100dvh;
+  height: var(--app-vh, 100dvh);
   /* Safe-area insets for notch/home-bar devices */
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
@@ -25,52 +33,32 @@ body {
 }
 
 /*
- * Mobile viewport height.
- *
- * `100dvh` is not enough in overlay-chrome browsers; `--app-vh` is mirrored
- * from `visualViewport.height` by installMobileViewportFixes(). The `svh`
- * fallback covers browsers that support it but fire before the first sync.
+ * QQ Browser draws a bottom toolbar over the page without reporting it through
+ * any viewport measurement, so the space has to be reserved blind. Scoped to
+ * mobile widths: the desktop build shares the user agent but not the toolbar.
  */
-@supports (height: 100svh) {
-  @media (max-width: 1023.98px) {
-    #root {
-      height: 100svh;
-    }
-  }
-}
-
 @media (max-width: 1023.98px) {
-  #root {
-    height: var(--app-vh, 100svh);
+  html.qq-browser #root {
+    padding-bottom: calc(
+      env(safe-area-inset-bottom, 0px) + var(--qq-bottom-gap, 56px)
+    );
   }
-}
-
-html.qq-browser #root {
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--qq-bottom-gap, 56px));
 }
 
 /*
- * Code block copy button.
+ * Reveals a control on hover, and keeps it visible where hover does not exist.
  *
- * Touch devices have no hover, so the button must be visible by default. On
- * hover-capable pointers the hover-reveal affordance is preserved, with focus
- * keeping it visible for keyboard users.
+ * Tailwind's `hover` and `group-hover` variants already compile behind
+ * `(hover: hover)`, so a bare `opacity-0` beside them is never lifted on a
+ * touch device — the control stays invisible while remaining hit-testable.
+ * Pairs with `group-hover:opacity-100` / `focus-visible:opacity-100`, both of
+ * which outrank this by specificity regardless of source order.
  */
-.codex-copy-btn {
+@utility hover-reveal {
   opacity: 1;
-}
 
-.codex-copy-btn:focus-visible {
-  opacity: 1;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .codex-copy-btn {
+  @media (hover: hover) and (pointer: fine) {
     opacity: 0;
-  }
-
-  .group:hover .codex-copy-btn {
-    opacity: 1;
   }
 }
 
@@ -354,3 +342,4 @@ html.qq-browser #root {
 .glass-gpu {
   will-change: backdrop-filter, transform, opacity;
 }
+

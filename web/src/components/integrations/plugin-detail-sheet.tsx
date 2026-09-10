@@ -68,7 +68,7 @@ export function PluginDetailSheet({
             <Skeleton className="h-20 w-full" />
           </div>
         ) : detail ? (
-          <ScrollArea className="h-[calc(100vh-8rem)] pr-2">
+          <ScrollArea className="h-[calc(var(--app-vh,100dvh)_-_8rem)] pr-2">
             <div className="space-y-4 pb-6 pt-2">
               {/* Description */}
               {detail.description && (

@@ -131,7 +131,7 @@ export function AppDefaultsSheet({ open, onClose }: AppDefaultsSheetProps) {
             <WarningBanner message={t('Failed to load Codex config.')} />
           </div>
         ) : (
-          <ScrollArea className="h-[calc(100vh-8rem)] px-4 pr-2">
+          <ScrollArea className="h-[calc(var(--app-vh,100dvh)_-_8rem)] px-4 pr-2">
             <PolicySection title={t('Default App Settings')}>
               <ConfigBooleanOverrideControl
                 label={t('Apps enabled')}

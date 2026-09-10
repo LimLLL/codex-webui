@@ -140,7 +140,7 @@ export function AppDetailSheet({ app, onClose }: AppDetailSheetProps) {
             <Skeleton className="h-28 w-full" />
           </div>
         ) : (
-          <ScrollArea className="h-[calc(100vh-8rem)] px-4 pr-2">
+          <ScrollArea className="h-[calc(var(--app-vh,100dvh)_-_8rem)] px-4 pr-2">
             <div className="space-y-5 pb-6 pt-2">
               <AppIdentity app={app} metadata={metadata} />
 

@@ -141,7 +141,7 @@ export function BranchGraphNode({ data }: NodeProps) {
               event.stopPropagation();
               node.onDelete?.(node.threadId);
             }}
-            className="nodrag -mr-1 -mt-1 shrink-0 cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:cursor-default disabled:opacity-30 group-hover/node:opacity-100"
+            className="hover-reveal nodrag -mr-1 -mt-1 shrink-0 cursor-pointer rounded p-1 text-muted-foreground transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:cursor-default disabled:opacity-30 group-hover/node:opacity-100"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
