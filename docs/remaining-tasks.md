@@ -259,6 +259,10 @@
 - [x] `parsedFiles` 语义含混：值取的是「头部读取成功的文件数」，字段名却让人读成「完整解析的文件数」，掩盖了两趟扫描的关键差异。补 JSDoc 明确语义，另加 `fullyParsedFiles` 报告真正全量解析的数量。
 - [x] `app.module.spec.ts` 会迁移真实数据库：编译真 `AppModule` 会构造真 `DatabaseService`，未设 `WEBUI_DB_PATH` 时直接打开开发者本机的 `~/.codex/codex-webui.sqlite`。改为在临时目录建库并在 `afterAll` 清理。
 
+- [x] 触屏上的隐形控件：`opacity-0` 配 `group-hover:opacity-100` 的写法有 8 处，而 Tailwind v4 的 `hover:` / `group-hover:` 变体本身就编译在 `@media (hover: hover)` 内，触屏上那个 `opacity-0` 永远不会被抬起——控件不可见却仍可点中。改用 `@utility hover-reveal`（必须是 `@utility`：`index.css` 里未分层的 class 会压过整个 `@layer utilities`）。
+- [x] 移动端全高界面用视口单位：`100dvh` 不随 iOS 软键盘收缩（Safari 不实现 `interactive-widget`），部分内嵌浏览器的底部工具栏也不反映在任何视口测量里，输入框被压在下面。改为统一从 `--app-vh`（镜像 `visualViewport.height`）取高度，覆盖 `#root`、登录页、三个 integrations sheet 与移动端会话抽屉。同步跳过 `scale !== 1`，否则双指放大会把整个应用塌进放大区域。
+- [ ] 运行时控制台出现 `flushSync was called from inside a lifecycle method`（PR #20 验证移动端改动时观察到，与该 PR 的三项改动无关，未定位）。React 会放弃这次同步刷新改为异步提交，依赖同步布局读数的路径（虚拟列表测量、滚动定位）可能因此拿到过期几何。需找到调用点，优先怀疑在生命周期 / `useLayoutEffect` 内触发 store 更新的位置。
+
 ### UI 与交互增强
 
 - [x] 可折叠工具调用：连续 2+ 个 MCP 工具调用合并为可展开/收起的分组；单个工具调用也可折叠参数/结果。完成后自动收起，`aria-expanded` 无障碍支持。
@@ -373,6 +377,6 @@
 - [x] **shell 轮次稳定性对照实测**（`pnpm probe turn-item-finality`）：0.153.2 上，同一 completed shell 轮次的完整 item 载荷在后续 shell 轮次和已加载线程的 `thread/resume` 后一致。比较完整载荷并要求成功读取和 resume，不再仅比较输出长度，也不外推为所有模型轮次永久不变。
 - [ ] **completed turn 永久缓存仍缺全面证据**：vendored README 的 `subAgentActivity` 条目描述了父轮次结束后追加 activity 的情况，shell 对照未覆盖；需实测模型/子代理迟到事件与 cold resume，再决定 item 查询缓存和重连失效策略。
 - [ ] **整个轮次在断线期间开始并结束时仍会遗漏**：恢复只接管活跃轮次；未知 completed 头不会生成转录，现有 older-history cursor 也到不了这段新历史。需要协调最近页刷新、转录合并及分页边界。
-- [ ] **pending 同步的挂载生命周期**：从启动 effect 抽取后不再接受原来的 `cancelled` 检查，登出或卸载后的迟到响应仍可能写入 store。需要为共享同步入口约定取消/会话生命周期。
+- [x] **pending 同步的挂载生命周期**：从启动 effect 抽取后一度丢掉了原来的 `cancelled` 检查，登出或卸载后的迟到响应仍会写入 store。`syncPendingApprovals` 增加可选 `AbortSignal`，请求前与应用前各校验一次；启动路径传入 effect 自己的 abort controller。重叠读取的相互淘汰解决不了这件事——它表达的是「另一次读取更新」，不是「这个调用方已经不在了」。
 - [ ] **过期策略的显示与发送行为待确认**：当前 last-known 说明仅在策略弹层里，闭合徽章和 Send 不因 stale 单独改变；是否强化提示或阻止发送属于产品取舍。
 - [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。
