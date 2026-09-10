@@ -161,6 +161,51 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
   const prevCountRef = useRef(timeline.length);
   const shouldAutoScroll = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
+  /** Virtual-list count readable from timers without re-arming the pin. */
+  const timelineCountRef = useRef(timeline.length);
+  /** Thread whose entry-pin has already been armed. */
+  const pinnedThreadRef = useRef<string | null>(null);
+  /** Timestamp until which the entry-pin keeps re-anchoring the bottom. */
+  const pinUntilRef = useRef(0);
+  const pinTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    timelineCountRef.current = timeline.length;
+  }, [timeline.length]);
+
+  /** Stops the entry-pin loop (user interacted, or the window expired). */
+  const stopBottomPin = useCallback(() => {
+    pinUntilRef.current = 0;
+    if (pinTimerRef.current !== null) {
+      window.clearInterval(pinTimerRef.current);
+      pinTimerRef.current = null;
+    }
+  }, []);
+
+  // A user gesture means they chose a scroll position; stop fighting it.
+  useEffect(() => {
+    const userEvents = ['touchstart', 'touchmove', 'pointerdown', 'wheel', 'keydown'];
+    const onUserInteraction = () => stopBottomPin();
+    for (const event of userEvents) {
+      document.addEventListener(event, onUserInteraction, {
+        capture: true,
+        passive: true,
+      });
+    }
+    return () => {
+      for (const event of userEvents) {
+        document.removeEventListener(event, onUserInteraction, { capture: true });
+      }
+      stopBottomPin();
+    };
+  }, [stopBottomPin]);
+
+  // Reset the pin when switching threads; the arm effect below runs after this
+  // one on the same commit, so the new thread gets a fresh pin.
+  useEffect(() => {
+    pinnedThreadRef.current = null;
+    stopBottomPin();
+  }, [threadId, stopBottomPin]);
 
   // `paddingEnd` grows the scrollable range so the last entry can clear the
   // floating composer; `scrollPaddingEnd` keeps auto-scroll from parking that
@@ -220,6 +265,39 @@ export function ChatTimeline({ onEditMessage, bottomInset = 0 }: Props) {
     // Only on threadId change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
+
+  /**
+   * Entry pin.
+   *
+   * The virtualizer renders from estimated row heights, so the single
+   * `scrollToIndex` above lands short once the first rows are measured. Keep
+   * re-anchoring the bottom for a short window after a thread opens, and stop
+   * the moment the user touches the transcript so manual history browsing is
+   * never fought.
+   */
+  useEffect(() => {
+    if (!threadId || timeline.length === 0) return;
+    if (pinnedThreadRef.current === threadId) return;
+
+    pinnedThreadRef.current = threadId;
+    shouldAutoScroll.current = true;
+    pinUntilRef.current = Date.now() + 3500;
+
+    const scrollToLatest = () => {
+      const count = timelineCountRef.current;
+      if (count > 0) virtualizer.scrollToIndex(count - 1, { align: 'end' });
+    };
+
+    scrollToLatest();
+    if (pinTimerRef.current !== null) window.clearInterval(pinTimerRef.current);
+    pinTimerRef.current = window.setInterval(() => {
+      if (Date.now() > pinUntilRef.current) {
+        stopBottomPin();
+        return;
+      }
+      scrollToLatest();
+    }, 100);
+  }, [threadId, timeline.length, virtualizer, stopBottomPin]);
 
   const virtualItems = virtualizer.getVirtualItems();
 

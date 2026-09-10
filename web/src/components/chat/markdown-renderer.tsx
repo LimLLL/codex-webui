@@ -187,7 +187,7 @@ function CodeBlock({
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-400 opacity-0 transition-opacity hover:text-gray-100 group-hover:opacity-100"
+          className="codex-copy-btn flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-400 transition-colors hover:text-gray-100"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? t('Copied!') : t('Copy')}
