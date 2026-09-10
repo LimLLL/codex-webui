@@ -1,163 +1,193 @@
-import type { v2 } from '../codex/codex-schema';
-import { CodexService } from '../codex/codex.service';
+/** Overview semantics operate on complete shared metadata before pagination. */
+import { resolve } from 'node:path';
+import { ThreadsOverviewService } from './threads-overview.service';
+import {
+  ThreadMetadataService,
+  type ThreadMetadataEntry,
+} from './thread-metadata.service';
 import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
-import { ThreadsOverviewService } from './threads-overview.service';
 import { makeThreadFixture } from './threads.testing';
 
-describe('ThreadsOverviewService', () => {
-  const mockCodex = { request: vi.fn() };
-  const mockBranchMutations = { listEdges: vi.fn() };
-  const mockBranches = { listActiveMembers: vi.fn() };
-  const mockPendingApprovals = { listPending: vi.fn() };
-  let service: ThreadsOverviewService;
+function entry(
+  id: string,
+  parent: string | null = null,
+  cwd = '/root',
+  archived = false,
+  updatedAt = 1,
+): ThreadMetadataEntry {
+  return {
+    archived,
+    thread: makeThreadFixture({
+      id,
+      forkedFromId: parent,
+      cwd,
+      updatedAt,
+      createdAt: 1,
+      name: id,
+      preview: id,
+    }),
+  };
+}
 
+describe('ThreadsOverviewService', () => {
+  let entries: ThreadMetadataEntry[];
+  const freshness = {
+    generation: 1,
+    refreshedAt: 100,
+    stale: false,
+    refreshing: false,
+  };
+  const listEdges = vi.fn();
+  const listPending = vi.fn();
+  const listActiveMembers = vi.fn();
+  let service: ThreadsOverviewService;
   beforeEach(() => {
+    entries = [];
+    listEdges.mockReturnValue([]);
+    listPending.mockReturnValue([]);
+    listActiveMembers.mockReturnValue(new Map());
     service = new ThreadsOverviewService(
-      mockCodex as unknown as CodexService,
-      mockBranchMutations as unknown as ConversationBranchMutationsService,
-      mockBranches as unknown as ConversationBranchesService,
-      mockPendingApprovals as unknown as PendingApprovalsService,
-    );
-    mockCodex.request.mockReset();
-    mockBranchMutations.listEdges.mockReset();
-    mockBranches.listActiveMembers.mockReset();
-    mockPendingApprovals.listPending.mockReset();
-    mockBranchMutations.listEdges.mockReturnValue([
       {
-        childThreadId: 'child',
-        parentThreadId: 'root',
-        treeRootThreadId: 'root',
-        source: 'local',
-      },
-    ]);
-    mockBranches.listActiveMembers.mockReturnValue(
-      new Map([
-        ['root', { treeRootThreadId: 'root', activeThreadId: 'child' }],
-      ]),
+        read: () => Promise.resolve({ entries, freshness }),
+      } as unknown as ThreadMetadataService,
+      { listEdges } as unknown as ConversationBranchMutationsService,
+      { listActiveMembers } as unknown as ConversationBranchesService,
+      { listPending } as unknown as PendingApprovalsService,
     );
-    mockPendingApprovals.listPending.mockReturnValue([]);
   });
 
-  it('folds branch members into one row and sorts by lifted activity', async () => {
-    mockCodex.request.mockImplementation((_method: string, params) =>
-      Promise.resolve(
-        listResponse(
-          (params as { archived: boolean }).archived
-            ? []
-            : [makeThread('root', 10), makeThread('child', 20, 'root')],
-        ),
+  it('collapses before paging and lifts activity from every matching member', async () => {
+    entries = [
+      entry('root'),
+      ...Array.from({ length: 30 }, (_, i) =>
+        entry(`child-${i}`, 'root', '/root', false, i + 10),
       ),
+      entry('other', null, '/root', false, 5),
+    ];
+    listActiveMembers.mockReturnValue(
+      new Map([['root', { activeThreadId: 'child-0' }]]),
     );
-
-    const result = await service.listOverview({ archived: false, limit: 20 });
-
-    expect(result.data).toHaveLength(1);
+    const result = await service.listOverview({
+      limit: 1,
+      sortKey: 'updated_at',
+    });
     expect(result.data[0]).toMatchObject({
+      thread: { id: 'root', updatedAt: 39 },
+      openThreadId: 'child-0',
+      latestActivityAt: 39,
+    });
+    expect(result.data[0].memberThreadIds).toHaveLength(31);
+    expect(result.nextCursor).toBe('1');
+    expect(result.freshness).toBe(freshness);
+    expect(
+      (
+        await service.listOverview({
+          cursor: '1',
+          limit: 1,
+          sortKey: 'updated_at',
+        })
+      ).data[0].thread.id,
+    ).toBe('other');
+  });
+
+  it('keeps filtered siblings separate when their root is outside the workspace', async () => {
+    entries = [
+      entry('root'),
+      entry('left', 'root', '/branch'),
+      entry('right', 'root', '/branch'),
+    ];
+    const result = await service.listOverview({ cwd: '/branch' });
+    expect(result.data.map((row) => row.thread.id).sort()).toEqual([
+      'left',
+      'right',
+    ]);
+    expect(
+      result.data.every(
+        (row) =>
+          row.treeRootThreadId === 'root' && row.memberThreadIds.length === 1,
+      ),
+    ).toBe(true);
+  });
+
+  it('walks through archived ancestors without displaying them in the active view', async () => {
+    entries = [entry('root', null, '/root', true), entry('child', 'root')];
+    expect((await service.listOverview({})).data[0]).toMatchObject({
+      thread: { id: 'child' },
       treeRootThreadId: 'root',
-      openThreadId: 'child',
-      memberThreadIds: ['root', 'child'],
-      hiddenThreadIds: ['child'],
-      latestActivityAt: 20,
+    });
+    expect(
+      (await service.listOverview({ archived: true })).data[0],
+    ).toMatchObject({
+      thread: { id: 'root' },
+      memberThreadIds: ['root'],
       hasBranchDescendants: true,
     });
-    expect(result.data[0].thread.id).toBe('root');
-    expect(result.data[0].thread.updatedAt).toBe(20);
   });
 
-  it('enumerates each archived state once when no filter is applied', async () => {
-    // A full enumeration costs one round trip per 200 stored threads and this
-    // projection runs on every sidebar refresh, so re-listing the state the
-    // caller already holds doubles the cost of the whole sidebar. Measured at
-    // ~900 ms for 154 stored conversations before this was fixed.
-    const archivedFlags: boolean[] = [];
-    mockCodex.request.mockImplementation((_method: string, params) => {
-      const archived = (params as { archived: boolean }).archived;
-      archivedFlags.push(archived);
-      return Promise.resolve(
-        listResponse(archived ? [] : [makeThread('root', 10)]),
-      );
-    });
-
-    await service.listOverview({ archived: false, limit: 20 });
-
-    expect(archivedFlags.filter((archived) => !archived)).toHaveLength(1);
-    expect(archivedFlags.filter((archived) => archived)).toHaveLength(1);
-  });
-
-  it('re-enumerates the filtered state rather than reusing a subset', async () => {
-    // A `cwd`/`searchTerm` page is a subset, so standing it in for the whole
-    // archived state would drop the parent links of everything filtered out and
-    // un-collapse branches whose ancestor lies outside the filter.
-    const calls: Array<{ archived: boolean; cwd?: string }> = [];
-    mockCodex.request.mockImplementation((_method: string, params) => {
-      const typed = params as { archived: boolean; cwd?: string };
-      calls.push({ archived: typed.archived, cwd: typed.cwd });
-      return Promise.resolve(
-        listResponse(typed.archived ? [] : [makeThread('root', 10)]),
-      );
-    });
-
-    await service.listOverview({ archived: false, limit: 20, cwd: '/work' });
-
-    // One filtered read for the page, plus an unfiltered read of each state for
-    // topology.
-    expect(calls.filter((call) => call.cwd === '/work')).toHaveLength(1);
+  it('preserves literal case-sensitive name OR preview search and relative cwd matching', async () => {
+    const row = entry('id', null, resolve('.'));
+    row.thread.name = 'Alpha_BETA % café';
+    row.thread.preview = 'OriginalPrompt';
+    entries = [row];
     expect(
-      calls.filter((call) => call.cwd === undefined && !call.archived),
+      (await service.listOverview({ searchTerm: 'Alpha_', cwd: '.' })).data,
     ).toHaveLength(1);
+    expect(
+      (await service.listOverview({ searchTerm: 'OriginalPrompt' })).data,
+    ).toHaveLength(1);
+    expect((await service.listOverview({ searchTerm: 'alpha' })).data).toEqual(
+      [],
+    );
+    expect((await service.listOverview({ searchTerm: 'Alpha%' })).data).toEqual(
+      [],
+    );
   });
 
-  it('keeps a branch reachable when the filtered view excludes its root', async () => {
-    let call = 0;
-    mockCodex.request.mockImplementation((_method: string, params) => {
-      call += 1;
-      if (call === 1) {
-        return Promise.resolve(listResponse([makeThread('child', 20, 'root')]));
-      }
-      return Promise.resolve(
-        listResponse(
-          (params as { archived: boolean }).archived
-            ? []
-            : [makeThread('root', 10), makeThread('child', 20, 'root')],
-        ),
-      );
-    });
+  it('orders creation by the representative and excludes a filtered active pointer', async () => {
+    entries = [
+      entry('root'),
+      entry('child', 'root', '/elsewhere'),
+      entry('other'),
+    ];
+    entries[1].thread.createdAt = 100;
+    entries[2].thread.createdAt = 50;
+    listActiveMembers.mockReturnValue(
+      new Map([['root', { activeThreadId: 'child' }]]),
+    );
+    const rows = (
+      await service.listOverview({ sortKey: 'created_at', cwd: '/root' })
+    ).data;
+    expect(rows.map((row) => row.thread.id)).toEqual(['other', 'root']);
+    expect(rows[1].openThreadId).toBe('root');
+  });
 
-    const result = await service.listOverview({
-      archived: false,
-      cwd: '/branch-only',
-      limit: 20,
+  it('aggregates waiting state and local pending counts over the complete filtered group', async () => {
+    entries = [
+      entry('root'),
+      entry('running', 'root'),
+      entry('waiting', 'root'),
+    ];
+    entries[1].thread.status = { type: 'active', activeFlags: [] };
+    entries[2].thread.status = {
+      type: 'active',
+      activeFlags: ['waitingOnUserInput'],
+    };
+    listPending.mockReturnValue([{ threadId: 'waiting' }]);
+    expect((await service.listOverview({})).data[0]).toMatchObject({
+      running: false,
+      waitingOnApproval: true,
+      waitingOnUserInput: true,
+      pendingApprovalCount: 1,
     });
+  });
 
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0]).toMatchObject({
-      treeRootThreadId: 'root',
-      openThreadId: 'child',
-      memberThreadIds: ['child'],
-      hiddenThreadIds: [],
-      latestActivityAt: 20,
-    });
-    expect(result.data[0].thread.id).toBe('child');
+  it('retains local parent precedence over an upstream relationship', async () => {
+    entries = [entry('root'), entry('child', 'external')];
+    listEdges.mockReturnValue([
+      { childThreadId: 'child', parentThreadId: 'root' },
+    ]);
+    expect((await service.listOverview({})).data).toHaveLength(1);
   });
 });
-
-function listResponse(data: v2.Thread[]): v2.ThreadListResponse {
-  return { data, nextCursor: null, backwardsCursor: null };
-}
-
-function makeThread(
-  id: string,
-  updatedAt: number,
-  forkedFromId: string | null = null,
-): v2.Thread {
-  return makeThreadFixture({
-    id,
-    sessionId: id,
-    preview: id,
-    forkedFromId,
-    updatedAt,
-    recencyAt: updatedAt,
-  });
-}

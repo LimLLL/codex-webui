@@ -425,6 +425,30 @@ export class ThreadOverviewRowDto {
   pendingApprovalCount!: number;
 }
 
+/** Age and process identity of the shared metadata used to compute an overview. */
+export class ThreadMetadataFreshnessDto {
+  @ApiProperty({
+    description: 'App-server generation that supplied this collection.',
+  })
+  generation!: number;
+
+  @ApiProperty({
+    description: 'Successful complete discovery time, Unix milliseconds.',
+  })
+  refreshedAt!: number;
+
+  @ApiProperty({
+    description:
+      'True after a known change, failed refresh, expiry, or process replacement.',
+  })
+  stale!: boolean;
+
+  @ApiProperty({
+    description: 'True while backend-owned discovery is in flight.',
+  })
+  refreshing!: boolean;
+}
+
 /** Server-side projection of the sidebar's branch-collapsed conversation list. */
 export class ThreadOverviewResponseDto {
   @ApiProperty({ type: () => [ThreadOverviewRowDto] })
@@ -432,6 +456,9 @@ export class ThreadOverviewResponseDto {
 
   @ApiProperty(NULLABLE_STRING_SCHEMA)
   nextCursor!: string | null;
+
+  @ApiProperty({ type: () => ThreadMetadataFreshnessDto })
+  freshness!: ThreadMetadataFreshnessDto;
 }
 
 /** Request body for batched decorative branch-graph turn counts. */

@@ -1,7 +1,11 @@
 /** Server-side branch-collapsed projection for the conversation sidebar. */
 import { Injectable } from '@nestjs/common';
 import type { v2 } from '../codex/codex-schema';
-import { CodexService } from '../codex/codex.service';
+import { resolve } from 'node:path';
+import {
+  ThreadMetadataService,
+  type ThreadMetadataEntry,
+} from './thread-metadata.service';
 import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
@@ -19,10 +23,7 @@ export interface ThreadOverviewParams {
   sortKey?: 'created_at' | 'updated_at';
 }
 
-interface ThreadSnapshot {
-  thread: v2.Thread;
-  archived: boolean;
-}
+type ThreadSnapshot = ThreadMetadataEntry;
 
 interface ProjectionGroup {
   displayThreadId: string;
@@ -33,7 +34,7 @@ interface ProjectionGroup {
 @Injectable()
 export class ThreadsOverviewService {
   constructor(
-    private readonly codex: CodexService,
+    private readonly metadata: ThreadMetadataService,
     private readonly branchMutations: ConversationBranchMutationsService,
     private readonly branches: ConversationBranchesService,
     private readonly pendingApprovals: PendingApprovalsService,
@@ -53,17 +54,26 @@ export class ThreadsOverviewService {
     const limit = params.limit ?? 100;
     const offset = this.parseCursor(params.cursor);
     const archived = params.archived ?? false;
-    const filteredThreads = await this.listAllThreads({
-      archived,
-      searchTerm: params.searchTerm,
-      cwd: params.cwd,
-      sortKey: params.sortKey,
-    });
-    const topologySnapshots = await this.listTopologyThreads(
-      archived,
-      filteredThreads,
-      Boolean(params.searchTerm ?? params.cwd),
-    );
+    const { entries, freshness } = await this.metadata.read();
+    const cwd = params.cwd !== undefined ? resolve(params.cwd) : null;
+    // Measured against 0.153.2: search is a literal, case-sensitive substring
+    // match against either the explicit name or the first-message preview.
+    const filteredThreads = entries
+      .filter((entry) => entry.archived === archived)
+      .map((entry) => entry.thread)
+      .filter((thread) => !cwd || thread.cwd === cwd)
+      .filter(
+        (thread) =>
+          !params.searchTerm ||
+          thread.preview.includes(params.searchTerm) ||
+          Boolean(thread.name?.includes(params.searchTerm)),
+      )
+      .sort((a, b) => {
+        const field =
+          params.sortKey === 'updated_at' ? 'updatedAt' : 'createdAt';
+        return b[field] - a[field] || b.id.localeCompare(a.id);
+      });
+    const topologySnapshots = entries;
 
     const topologyById = new Map(
       topologySnapshots.map((snapshot) => [snapshot.thread.id, snapshot]),
@@ -90,68 +100,9 @@ export class ThreadsOverviewService {
     const page = rows.slice(offset, offset + limit);
     return {
       data: page,
+      freshness,
       nextCursor: offset + limit < rows.length ? String(offset + limit) : null,
     };
-  }
-
-  private async listAllThreads(params: {
-    archived: boolean;
-    searchTerm?: string;
-    cwd?: string;
-    sortKey?: 'created_at' | 'updated_at';
-  }): Promise<v2.Thread[]> {
-    const data: v2.Thread[] = [];
-    let cursor: string | null | undefined;
-    do {
-      const response = await this.codex.request<v2.ThreadListResponse>(
-        'thread/list',
-        {
-          cursor,
-          limit: 200,
-          archived: params.archived,
-          searchTerm: params.searchTerm,
-          cwd: params.cwd,
-          sortKey: params.sortKey,
-          modelProviders: [],
-        },
-      );
-      data.push(...response.data);
-      cursor = response.nextCursor;
-    } while (cursor);
-    return data;
-  }
-
-  /**
-   * Collects the thread set used to reconstruct fork topology.
-   *
-   * Topology must span both archived states, because a visible branch can hang
-   * off an archived ancestor. It must not, however, re-enumerate a list the
-   * caller already holds: a full enumeration costs one round trip per 200
-   * stored threads and this projection runs on every sidebar refresh.
-   *
-   * The already-fetched page can only stand in for its archived state when the
-   * caller applied no filters — a `searchTerm` or `cwd` narrows it to a subset,
-   * and reusing that subset would silently drop the parent links of everything
-   * filtered out, un-collapsing branches whose ancestor lies outside the filter.
-   *
-   * @param archived - Archived state the caller already enumerated
-   * @param alreadyFetched - Threads the caller holds for that state
-   * @param filtered - Whether `alreadyFetched` is a filtered subset
-   */
-  private async listTopologyThreads(
-    archived: boolean,
-    alreadyFetched: v2.Thread[],
-    filtered: boolean,
-  ): Promise<ThreadSnapshot[]> {
-    const snapshots: ThreadSnapshot[] = [];
-    for (const state of [false, true]) {
-      const reusable = state === archived && !filtered;
-      const threads = reusable
-        ? alreadyFetched
-        : await this.listAllThreads({ archived: state });
-      snapshots.push(...threads.map((thread) => ({ thread, archived: state })));
-    }
-    return snapshots;
   }
 
   private buildTopology(topologyById: Map<string, ThreadSnapshot>): {
