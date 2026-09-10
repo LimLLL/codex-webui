@@ -4,6 +4,7 @@ import { ConversationBranchMutationsService } from '../conversation-branches/con
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadsOverviewService } from './threads-overview.service';
+import { makeThreadFixture } from './threads.testing';
 
 describe('ThreadsOverviewService', () => {
   const mockCodex = { request: vi.fn() };
@@ -151,30 +152,12 @@ function makeThread(
   updatedAt: number,
   forkedFromId: string | null = null,
 ): v2.Thread {
-  return {
+  return makeThreadFixture({
     id,
     sessionId: id,
-    forkedFromId,
-    parentThreadId: null,
     preview: id,
-    ephemeral: false,
-    section: null,
-    sectionEnteredAt: null,
-    projectId: null,
-    modelProvider: 'openai',
-    createdAt: 1,
+    forkedFromId,
     updatedAt,
     recencyAt: updatedAt,
-    status: { type: 'idle' },
-    path: null,
-    cwd: '/tmp',
-    cliVersion: '0.149.1',
-    source: 'appServer',
-    threadSource: null,
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    name: null,
-    turns: [],
-  };
+  });
 }

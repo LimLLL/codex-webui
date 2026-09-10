@@ -3,6 +3,7 @@ import type { v2 } from '../codex/codex-schema';
 import { ErrorCode } from '../common/error-codes';
 import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
 import { ThreadResumeRegistryService } from './thread-resume-registry.service';
+import { makeThreadFixture } from './threads.testing';
 import {
   InProgressTurnHistoryError,
   ThreadHistoryService,
@@ -232,14 +233,7 @@ describe('ThreadsBranchingService', () => {
 });
 
 function sourceMetadata(status: v2.ThreadStatus): v2.ThreadReadResponse {
-  return {
-    thread: {
-      id: 'source',
-      historyMode: 'paginated',
-      status,
-      turns: [],
-    } as v2.Thread,
-  };
+  return { thread: makeThreadFixture({ id: 'source', status }) };
 }
 
 function userInput(text: string): v2.UserInput[] {

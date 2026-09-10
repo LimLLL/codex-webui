@@ -14,6 +14,7 @@ import { ThreadHistoryService } from './thread-history.service';
 import { ThreadSettingsObserverService } from './thread-settings-observer.service';
 import { ThreadsDeletePlannerService } from './threads-delete-planner.service';
 import { ThreadsDeletionService } from './threads-deletion.service';
+import { makeThreadFixture } from './threads.testing';
 
 const readyAdoption = {
   status: 'ready',
@@ -660,34 +661,7 @@ function makeThread(
   forkedFromId: string | null = null,
   overrides: Partial<v2.Thread> = {},
 ): v2.Thread {
-  return {
-    id,
-    sessionId: 'session',
-    forkedFromId,
-    parentThreadId: null,
-    preview: id,
-    ephemeral: false,
-    section: null,
-    sectionEnteredAt: null,
-    projectId: null,
-    modelProvider: 'openai',
-    createdAt: 1,
-    updatedAt: 1,
-    recencyAt: 1,
-    historyMode: 'paginated',
-    status: { type: 'idle' },
-    path: null,
-    cwd: '/tmp',
-    cliVersion: '0.149.1',
-    source: 'appServer',
-    threadSource: null,
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    name: null,
-    turns: [],
-    ...overrides,
-  };
+  return makeThreadFixture({ id, preview: id, forkedFromId, ...overrides });
 }
 
 function listResponse(
