@@ -405,3 +405,5 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
   - generating（active 无 blocking flags）：Loader2 + `animate-spin`
   - idle：灰色 MessageSquare
 - **Approval count badge**：hydrated pending approvals > 1 时显示数字（9+ 封顶），半透明黄色圆角背景
+
+策略读取失败时，SecurityPolicyBadge 弹层显示「最后已知」说明（含中文翻译）。闭合徽章与发送按钮不因 stale 单独改变；确认中的用户策略选择仍按原有规则等待。

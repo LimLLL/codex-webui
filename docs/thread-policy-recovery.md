@@ -94,9 +94,11 @@ known live and inserts restored gaps by persisted adjacency. A cold refresh
 can therefore change the order of overlapping items. An ordinary serial model
 turn was measured to agree across all three orderings — started, completed and
 persisted — so the divergence is specific to genuine overlap rather than a
-routine hazard. Late subagent activity may also add an item to an
-already-completed turn; completed-turn history is not an indefinitely immutable
-cache.
+routine hazard. The `turn-item-finality` shell control on 0.153.2 found the
+complete item payloads unchanged after another shell turn and a resume of the
+still-loaded thread. It does not establish general immutability: the vendored
+README describes late `subAgentActivity` attributed to completed parents, and
+neither that case nor cold replay is covered by this control.
 
 Consumers must therefore honour `complete` rather than publishing every
 response as the turn's full history. Marking an incomplete read `full` retires
@@ -127,6 +129,15 @@ Each asynchronous continuation belongs to its original selection, including a
 deadline read or a PATCH refusal that arrives after a re-selection. Superseded
 reads cannot confirm through their return value after the store discarded them.
 An older cache entry cannot confirm while a newer read is outstanding or failed.
+Reads also refresh after a successful open (including startup/restart recovery)
+and on socket reconnect for subscribed threads. The post-open read covers an
+initial hook read that ran before resume could seed the backend observer.
+Deletion and idle eviction discard the policy and its confirmation timer.
+Only the latest issued read may mark held evidence stale on failure; an older
+failure must not relabel a newer successful observation. Stale evidence remains
+visible as last-known in the policy popover. Send still follows the existing
+selection-confirmation contract rather than a new stale-policy blocking rule.
+
 Each policy read is aborted after eight seconds; the eight-second selection
 window can therefore be followed by at most eight seconds for the final read.
 Transport loss on PATCH is uncertain delivery and follows the read/confirmation
@@ -177,3 +188,27 @@ network enablement retains omission/null rather than defaulting to unrestricted.
 Network-only requests may omit command and cwd entirely. The environment
 identifier is not consumed by this deployment's UI. No additional backend
 projection or permission inference is introduced.
+
+## Reconnect request snapshots
+
+Model effort and service-tier observations share the monotonic item counter,
+but compare only settings for the same thread. Each open path advances the
+counter before issuing its request, so two concurrent opens also have distinct
+baselines. A response without a known baseline cannot outrank a held observation.
+
+Reconnect creates a turn row before fetching an adopted active turn's items and
+restores its user prompt as well. An item or approval arriving during the header
+read does not prove that this turn's earlier items have been recovered. Targets
+are compared against the requests issued by this reconnect, not against rows
+present when headers arrive. Unfinished plan prose also makes a turn eligible
+for item recovery. Entire turns that both began and ended during the gap still
+require a separate recent-history refresh; an older-history cursor cannot
+recover newer missing turns.
+
+Startup and reconnect share pending-request synchronization. A missing server
+row resolves only an unchanged request that was already pending before the
+read. Existing cards retain their local decisions, and an overlapping newer
+read supersedes older results only for the conversations it covers. Known
+threads deleted during a read are not recreated. The shared entry point does
+not yet carry the startup effect's unmount cancellation; that lifecycle remains
+a follow-up.

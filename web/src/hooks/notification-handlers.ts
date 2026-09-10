@@ -37,7 +37,10 @@ import {
   mergeTurnItem,
   normalizeThreadItem,
 } from '@/lib/thread-item-normalizer';
-import { acceptsStreamedUpdate } from '@/lib/turn-item-merge';
+import {
+  acceptsStreamedUpdate,
+  nextObservationSeq,
+} from '@/lib/turn-item-merge';
 import { normalizeLiveTurnFailure } from '@/lib/turn-failure';
 import i18n from '@/i18n';
 
@@ -350,15 +353,18 @@ const handleThreadSettingsUpdated: Handler = (params, ctx) => {
     | { effort?: string | null; serviceTier?: string | null }
     | undefined;
   if (!settings) return;
-  const store = useModelStore.getState();
-  store.setObservedThreadEffort(
+  // Same display-only contract for the tier: without it the speed picker falls
+  // back to the model's catalog default and can claim "Standard" for a thread
+  // actually running on a paid tier. Stamped as it arrives, so an open response
+  // served before this notification cannot overwrite it.
+  useModelStore.getState().setObservedThreadSettings(
     threadId,
-    (settings.effort ?? null) as ReasoningEffort | null,
+    {
+      effort: (settings.effort ?? null) as ReasoningEffort | null,
+      serviceTier: settings.serviceTier ?? null,
+    },
+    nextObservationSeq(),
   );
-  // Same display-only contract as the effort above. Without it the speed picker
-  // falls back to the model's catalog default and can claim "Standard" for a
-  // thread that is actually running on a paid tier.
-  store.setObservedThreadServiceTier(threadId, settings.serviceTier ?? null);
 };
 
 /** Keeps the goal row live when a goal changes outside this tab. */

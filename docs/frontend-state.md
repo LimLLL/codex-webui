@@ -107,6 +107,16 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 
 Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，即使最近一页历史没有该 turn。`writeStdin` 回调的 item 可属于更早的 turn，因此卡片按回调 turn 渲染为 unattached request，而不是倒挂回原 command 或改变其 lifecycle。
 
+### 两类数据，两条规则（先分清再谈合并）
+
+凡是「发一个请求、响应回来往 store 里写」的地方，都要先回答：**这份响应和本地已有的值，谁更新？** 答案取决于数据属于哪一类，用错类别的规则会同时导致过度设计和错误行为。
+
+**A 类：app-server 是权威。** thread item、turn 生命周期、安全策略、线程设置、observed 模型设置。实时通知与 REST 读取是**同一份服务端状态的两个视角**，谁新都有可能——T 时刻发出的读取带回 T 的状态，而 T+0.5 的通知可能先到达。这里必须显式比顺序：请求发出前捕获 `currentObservationSeq()` 作为基线，实时写入时用 `nextObservationSeq()` 盖戳，冲突时 `observedSeq > baselineSeq` 的一侧胜出。策略读取另有一套按发出顺序排序的序号（见 [thread-policy-recovery.md](thread-policy-recovery.md)）。
+
+**B 类：本项目自己的 SQLite，内容是实时通知的录音。** token usage、turn diff、turn error。`TokenUsageService` / `TurnDiffService` / `TurnErrorsService` 都是订阅 app-server 通知后落库；**app-server 不提供这三样的历史读取**，本地持久化的唯一理由就是实时流过去便再也取不到。既然录音是从同一条通知晚一跳写下的，它**不可能比实时新**，因此规则是「实时有就用实时的，DB 只填空、永不覆盖」，不需要任何序号。
+
+`hydrateTurnErrorsForThread` 一直按 B 类规则合并（`incoming ?? existing`）；`hydrateTokenUsageForThread` 与 `hydrateTurnDiffsForThread` 曾写成整表替换与直接覆盖，会把请求在途期间到达的实时值回退成更旧的录音，现已改为填空。**给 B 类数据加观测序号是错的**：那是 A 类的机制，既多余又意味着承认录音可能更新。
+
 ### Item 权威与恢复合并 (`lib/turn-item-merge.ts`)
 
 三件事被显式拆开：**item 生命周期**（片段 / 终态）、**turn 生命周期**、**历史覆盖范围**。拆开的依据是对钉住 app-server 的实测：
@@ -123,7 +133,7 @@ Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，
 
 open 与重连共用 item 修复入口；重连另读 turn 头。请求前捕获观测基线与 recovery epoch，应用前重新校验（会话可能已删除/驱逐/被更新的恢复取代）。**in-flight 去重的 key 必须含 epoch**：否则被 supersede 的旧 promise 仍占着位置，替补恢复会复用它并在 epoch 校验处被丢弃，结果是一次修复都不会发生。
 
-重连恢复的**另一半是 turn 生命周期**，不是只有 item。item 与 lifecycle 由不同通知承载：断线期间完成的 turn 把它的 `turn/completed` 发进了空处，只补 item 会让转录正确而 composer 永远转圈。因此重连会以 `itemsView: notLoaded` 重读最近的 turn 头（不带 item，与 item 合并互不干扰）并据此收敛 `completed` / `activeTurnId` / `loading`：只前进、只对**头里确实出现**的 turn 下结论（读取有界，更早的 turn 只是超出范围），并接管断线期间新开的运行中 turn 指针；已经终态的本地 turn 不被迟到的 running 头重新激活。新发现 turn 的内容与遗漏审批尚未接入这条恢复路径。两者并行发出，让生命周期不必等最慢的转录分页。分页只认 `complete` 字段——`nextCursor` 为空也可能意味着分页不可用或响应损坏，把它当作「就这些了」会让被截断的转录看起来权威。失败的读取不恢复任何东西，也不声称完整。
+重连恢复的**另一半是 turn 生命周期**，不是只有 item。item 与 lifecycle 由不同通知承载：断线期间完成的 turn 把它的 `turn/completed` 发进了空处，只补 item 会让转录正确而 composer 永远转圈。因此重连会以 `itemsView: notLoaded` 重读最近的 turn 头（不带 item，与 item 合并互不干扰）并据此收敛 `completed` / `activeTurnId` / `loading`：只前进、只对**头里确实出现**的 turn 下结论（读取有界，更早的 turn 只是超出范围），并接管断线期间新开的运行中 turn 指针；已经终态的本地 turn 不被迟到的 running 头重新激活。新接管的活跃 turn 会建立转录行并补读 item/提示词；未完成 plan 同样纳入恢复。启动与重连共用 pending 审批同步，按请求发出前的状态及会话范围避免误清新请求、重开已解决请求。整个轮次在断线期间开始并结束的缺口仍需最近历史页刷新，不能靠旧历史游标补齐。两者并行发出，让生命周期不必等最慢的转录分页。分页只认 `complete` 字段——`nextCursor` 为空也可能意味着分页不可用或响应损坏，把它当作「就这些了」会让被截断的转录看起来权威。失败的读取不恢复任何东西，也不声称完整。
 
 ### 历史恢复 (turnsToTimeline)
 
@@ -157,13 +167,14 @@ Session 级的模型 / 推理强度 / 速度档位 override，随每次 `turn/st
 | `effortOverride` | `ReasoningEffort \| null`，null = 用模型默认。**仅用户操作可写** —— 把观测值回写这里会把该强度强加到下一个发送的 thread 上 |
 | `observedEffortByThread` | 按 thread 记录 app-server 报告的强度，**仅供展示**。Plan mode 会在服务端改写 thread 强度，badge 要能显示但不能把它变成 override |
 | `observedServiceTierByThread` | 同上，按 thread 记录 app-server 报告的速度档位，仅供展示 |
+| `observedSettingsSeqByThread` | 同一 thread 的设置观测顺序；open 发出前递增计数，实时通知到达时递增，较旧结果不得覆盖较新结果 |
 | `serviceTierOverride` | `string \| null \| undefined` —— **三态** |
 
 `serviceTierOverride` 与上面两个不同，必须是三态：`undefined` = 用户没碰过选择器，字段缺省，thread 保持原档位；`null` = 用户显式选了标准速度，必须发出去才能清掉已有档位；字符串 = 模型 advertise 的 tier id。折叠掉 `null` 会让「切回标准」无法表达；反过来永远发送则会把没开过选择器的用户的配置档位强行清空。
 
 推理强度与速度档位都是逐模型 advertise 的，切换模型时两者一并重置（`setServiceTierOverride(undefined)`），否则可能残留新模型没有的档位。
 
-两张观测表由两条路径写入：`thread/settings/updated` 通知，以及 `applyOpenResponse` 中的开线程水合。**光靠通知不够** —— 它只在设置发生变化时才发，所以重新打开或刷新后的线程会退回目录默认值：速度选择器会对一个实际跑在付费档的线程显示「标准」，而 composer 因为 override 是 `undefined` 又不发 `serviceTier`，该档位继续生效。用户会以为自己在标准速度和标准计费上。`forgetObservedThreadEffort` 同时清两张表，且早退条件必须同时检查两者 —— 只看 effort 会漏掉只有 tier 记录的线程。
+两张观测表由两条路径写入：`thread/settings/updated` 通知，以及 `applyOpenResponse` 中的开线程水合。**光靠通知不够** —— 它只在设置发生变化时才发，所以重新打开或刷新后的线程会退回目录默认值：速度选择器会对一个实际跑在付费档的线程显示「标准」，而 composer 因为 override 是 `undefined` 又不发 `serviceTier`，该档位继续生效。用户会以为自己在标准速度和标准计费上。`forgetObservedThreadEffort` 同时清两张表和观测序号，且早退条件必须同时检查两者 —— 只看 effort 会漏掉只有 tier 记录的线程。
 
 ## connection-store
 
@@ -207,3 +218,5 @@ useCodexSocket → store mutation → React re-render
 ```
 
 完整及部分 top-up 的共享 Query 缓存都不携带请求发出时的观测基线，因此采用保守的未知基线：保留已有终态载荷，仍用持久终态修复片段；不能在响应应用时补打时间序号。
+
+Plan prose 按 item 保存 `{ text, completed, observedSeq }`，终态后拒绝 delta；恢复中的持久终态替换流式片段，但请求发出后到达的实时终态保留。

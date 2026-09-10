@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ThreadDto, TurnDto } from '../generated/api';
 import type { ApprovalRequest } from '../types/approval';
+import type { ThreadTokenUsage } from '../types/codex-notifications';
 
 const emit = vi.fn();
 
@@ -191,6 +192,63 @@ describe('reopening a thread', () => {
   });
 });
 
+describe('locally recorded datasets fill gaps but never overwrite live', () => {
+  // Token usage and turn diffs have no historical read on app-server; the rows
+  // come from this project's own database, written from the same notifications
+  // the browser already received. The recording is therefore never newer than
+  // live, and a hydrate that lands after one must not revert it.
+  it('keeps a token usage value that arrived while the read was in flight', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    const live = { totalTokens: 999 } as unknown as ThreadTokenUsage;
+    store.setTokenUsageForThread('t1', 'turn-1', live);
+
+    store.hydrateTokenUsageForThread('t1', [
+      {
+        turnId: 'turn-1',
+        usage: { totalTokens: 1 } as unknown as ThreadTokenUsage,
+      },
+      {
+        turnId: 'turn-0',
+        usage: { totalTokens: 2 } as unknown as ThreadTokenUsage,
+      },
+    ]);
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.tokenUsageByTurn['turn-1']).toBe(live);
+    // A turn live never reported is exactly what the recording is for.
+    expect(runtime.tokenUsageByTurn['turn-0']).toEqual({ totalTokens: 2 });
+    expect(runtime.latestTokenUsage).toBe(live);
+  });
+
+  it('keeps a turn diff that arrived while the read was in flight', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    // `updateTurnDiffForThread` only maps existing rows, so both turns need one.
+    const emptyPlan = { explanation: null, steps: [] };
+    store.updateTurnPlanForThread('t1', 'turn-1', emptyPlan);
+    store.updateTurnPlanForThread('t1', 'turn-2', emptyPlan);
+    store.updateTurnDiffForThread('t1', 'turn-1', 'live diff');
+
+    store.hydrateTurnDiffsForThread('t1', [
+      { turnId: 'turn-1', diff: 'recorded diff' },
+      { turnId: 'turn-2', diff: 'recorded diff 2' },
+    ]);
+
+    const timeline = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!.timeline;
+    const first = timeline.find(
+      (e) => e.kind === 'turn' && e.turnId === 'turn-1',
+    );
+    const second = timeline.find(
+      (e) => e.kind === 'turn' && e.turnId === 'turn-2',
+    );
+    expect(first?.kind === 'turn' && first.diff).toBe('live diff');
+    expect(second?.kind === 'turn' && second.diff).toBe('recorded diff 2');
+  });
+});
+
 describe('plan text recovery', () => {
   it('keeps plan item text separate from the tool explanation on hydration and repair', () => {
     const store = useTimelineStore.getState();
@@ -211,7 +269,9 @@ describe('plan text recovery', () => {
     expect(turn?.plan).toEqual({
       explanation: null,
       steps: [],
-      planTextByItemId: { plan: 'one copy' },
+      planTextByItemId: {
+        plan: { text: 'one copy', completed: true, observedSeq: undefined },
+      },
     });
   });
 
@@ -226,7 +286,32 @@ describe('plan text recovery', () => {
       .getState()
       .getThreadRuntime('t1')!
       .timeline.find((entry) => entry.kind === 'turn');
-    expect(turn?.plan?.planTextByItemId).toEqual({ plan: 'plan text' });
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'plan text',
+      completed: false,
+    });
+  });
+
+  it('refuses a plan delta that arrives after the terminal payload', () => {
+    const store = useTimelineStore.getState();
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'first half ');
+    store.setPlanTextForThread(
+      't1',
+      'turn-1',
+      'plan',
+      'first half second half',
+    );
+    // The terminal payload already contains what this delta carried; appending
+    // it would duplicate the tail and reopen a finished plan item.
+    store.appendPlanDeltaForThread('t1', 'turn-1', 'plan', 'second half');
+    const turn = useTimelineStore
+      .getState()
+      .getThreadRuntime('t1')!
+      .timeline.find((entry) => entry.kind === 'turn');
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'first half second half',
+      completed: true,
+    });
   });
 
   it('accepts terminal plan text when all earlier events were missed', () => {
@@ -236,7 +321,10 @@ describe('plan text recovery', () => {
       .getState()
       .getThreadRuntime('t1')!
       .timeline.find((entry) => entry.kind === 'turn');
-    expect(turn?.plan?.planTextByItemId).toEqual({ plan: 'complete plan' });
+    expect(turn?.plan?.planTextByItemId?.plan).toMatchObject({
+      text: 'complete plan',
+      completed: true,
+    });
   });
 });
 
@@ -285,7 +373,7 @@ describe('on-demand turn item top-up', () => {
     // Keyed by item id rather than folded into one blob: that is what lets a
     // persisted plan replace a fragment left behind by a dropped connection.
     expect(
-      turnEntry.kind === 'turn' && turnEntry.plan?.planTextByItemId?.p1,
+      turnEntry.kind === 'turn' && turnEntry.plan?.planTextByItemId?.p1?.text,
     ).toContain('the plan');
     expect(
       turnEntry.kind === 'turn' && turnEntry.items.map((i) => i.type),

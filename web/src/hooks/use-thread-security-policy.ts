@@ -38,6 +38,8 @@ export interface ThreadSecurityPolicyView {
   observed: ThreadSecurityPolicyDto | undefined;
   /** True when the server has never told us this thread's policy. */
   unknown: boolean;
+  /** True when the shown policy is last-known because the latest read failed. */
+  stale: boolean;
   /** A selection the user made that is not yet confirmed effective. */
   pending: PatchThreadSecurityPolicyDto | null;
   /** How the wait ended, or `pending` while it continues. */
@@ -59,16 +61,26 @@ export function useThreadSecurityPolicy(
   const observed = useThreadPolicyStore((s) =>
     threadId ? s.observedByThread[threadId]?.policy : undefined,
   );
+  const stale = useThreadPolicyStore((s) =>
+    threadId ? Boolean(s.observedByThread[threadId]?.stale) : false,
+  );
   const clearPolicy = useThreadPolicyStore((s) => s.clearPolicy);
 
   const patch = useMutation(threadSecurityPolicyPatchSecurityPolicyMutation());
 
-  // One read on first sight of a conversation. Everything after that is driven
-  // by `thread/settings/updated`, which is the only event that reports a change
-  // made anywhere — this tab, another tab, the CLI.
+  // One read on first sight of a conversation. After that the live path is
+  // `thread/settings/updated`, the only event reporting a change made anywhere
+  // — this tab, another tab, the CLI — and reconnect re-reads for the window
+  // where that event could not be delivered.
+  //
+  // `observed: false` deliberately does NOT count as having read it. It means
+  // the server has not reported this conversation's settings yet, which is
+  // absence of evidence; treating the record's existence as the answer left a
+  // thread first seen too early permanently stuck on "unknown".
   useEffect(() => {
     if (!threadId) return;
-    if (useThreadPolicyStore.getState().observedByThread[threadId]) return;
+    const held = useThreadPolicyStore.getState().observedByThread[threadId];
+    if (held?.policy.observed && !held.stale) return;
     void refreshThreadPolicy(threadId);
   }, [threadId]);
 
@@ -81,6 +93,7 @@ export function useThreadSecurityPolicy(
   return {
     observed,
     unknown: !observed?.observed,
+    stale: stale && Boolean(observed?.observed),
     pending: pendingEntry?.requested ?? null,
     outcome: pendingEntry?.outcome ?? null,
     isSettling: pendingEntry?.outcome === 'pending',

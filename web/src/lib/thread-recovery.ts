@@ -131,7 +131,10 @@ export function recoverTurnItems(threadId: string, turnId: string): Promise<void
  *
  * @param threadId - Conversation whose turn lifecycle may have moved
  */
-async function recoverTurnLifecycle(threadId: string): Promise<void> {
+async function recoverTurnLifecycle(
+  threadId: string,
+  itemTargets: Set<string>,
+): Promise<void> {
   const epoch = epochs.get(threadId) ?? 0;
   try {
     const { data } = await threadsListTurns({
@@ -141,11 +144,21 @@ async function recoverTurnLifecycle(threadId: string): Promise<void> {
     if (!data?.data?.length) return;
     if ((epochs.get(threadId) ?? 0) !== epoch) return;
     const store = useTimelineStore.getState();
-    if (!store.getThreadRuntime(threadId)) return;
+    const runtime = store.getThreadRuntime(threadId);
+    if (!runtime) return;
+
     store.settleTurnLifecycleForThread(
       threadId,
       data.data.map((turn) => ({ id: turn.id, status: turn.status })),
     );
+
+    // Also fetch a running turn first seen during this header request. A live
+    // item or approval may already have created its row, but that is not proof
+    // its pre-reconnect items were fetched. Only this recovery's targets are.
+    const adopted = store.getThreadRuntime(threadId)?.activeTurnId ?? null;
+    if (adopted && !itemTargets.has(adopted)) {
+      void recoverTurnItems(threadId, adopted);
+    }
   } catch {
     // Same contract as item recovery: a failed read changes nothing. The turn
     // keeps whatever lifecycle it had, which is no worse than before the call.
@@ -176,11 +189,16 @@ export function recoverThreadAfterReconnect(threadId: string): void {
   if (runtime.activeTurnId) targets.add(runtime.activeTurnId);
   for (const entry of runtime.timeline) {
     if (entry.kind !== 'turn') continue;
-    if (entry.items.some((item) => !item.completed)) targets.add(entry.turnId);
+    if (
+      entry.items.some((item) => !item.completed) ||
+      Object.values(entry.plan?.planTextByItemId ?? {}).some((item) => !item.completed)
+    ) {
+      targets.add(entry.turnId);
+    }
   }
   for (const turnId of targets) void recoverTurnItems(threadId, turnId);
   // Runs alongside rather than after: the two repair independent facts, and
   // making lifecycle wait on item paging would keep a finished turn spinning
   // for the length of the slowest transcript repair.
-  void recoverTurnLifecycle(threadId);
+  void recoverTurnLifecycle(threadId, targets);
 }

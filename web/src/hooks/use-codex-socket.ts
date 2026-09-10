@@ -12,7 +12,10 @@ import { handleNotification, type NotificationContext } from './notification-han
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors, threadsResumeThread } from '@/generated/api/sdk.gen';
 import { parseApprovalRequest } from '@/lib/approval-parsers';
 import { recoverThreadAfterReconnect, supersedeRecovery } from '@/lib/thread-recovery';
+import { nextObservationSeq } from '@/lib/turn-item-merge';
+import { forgetThreadPolicy, refreshThreadPolicy, settleIfObserved } from '@/stores/thread-policy-store';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
+import { syncPendingApprovals } from '@/lib/pending-approvals-sync';
 import { applyOpenResponse } from './use-thread-open';
 import i18n from '@/i18n';
 
@@ -49,7 +52,18 @@ export function useCodexSocket(enabled = true) {
         // durable history for the turns that could have moved during the gap.
         for (const threadId of store.subscribedThreadIds) {
           recoverThreadAfterReconnect(threadId);
+          // The security policy has the same gap and no other repair path: its
+          // only live source is `thread/settings/updated`, so a change made by
+          // the CLI or another tab during the outage would otherwise leave the
+          // badge asserting a policy the conversation is no longer under.
+          void refreshThreadPolicy(threadId).then(() =>
+            settleIfObserved(threadId),
+          );
         }
+        // Approvals reach this client only as socket events, so the gap loses
+        // both halves of their lifecycle: one raised while away never appears,
+        // and one answered on another device is never cleared.
+        void syncPendingApprovals(store.subscribedThreadIds);
       }
       hasConnectedBefore = true;
     };
@@ -65,12 +79,19 @@ export function useCodexSocket(enabled = true) {
       queryClient,
       forgetThreads: (threadIds) => {
         // Evicting a runtime while a recovery is outstanding would otherwise
-        // let that response recreate the conversation it just discarded.
-        for (const threadId of threadIds) supersedeRecovery(threadId);
+        // let that response recreate the conversation it just discarded. Policy
+        // state lives in its own store and needs the same treatment, or a
+        // destroyed conversation leaves behind an observation and a running
+        // confirmation timer.
+        for (const threadId of threadIds) {
+          supersedeRecovery(threadId);
+          forgetThreadPolicy(threadId);
+        }
         useTimelineStore.getState().forgetThreads(threadIds);
       },
       markThreadDeletedRemotely: (threadId, message) => {
         supersedeRecovery(threadId);
+        forgetThreadPolicy(threadId);
         useTimelineStore.getState().markThreadDeletedRemotely(threadId, message);
       },
       updateCurrentTurn: (turnId, updater) => {
@@ -232,6 +253,7 @@ export function useCodexSocket(enabled = true) {
         // Restore full thread state via deduped resume, then hydrate dependent data sequentially.
         // Recovery after an app-server restart, not a user opening anything:
         // the active-branch pointer must keep naming what they last chose.
+        const openBaselineSeq = nextObservationSeq();
         void threadsResumeThread({
           path: { threadId },
           query: { recordActive: false },
@@ -241,7 +263,7 @@ export function useCodexSocket(enabled = true) {
             // Shared with the route and the refresh-recovery path: the response
             // carries a recent page of turns rather than the whole history, and
             // three separate readings of that shape is how one of them goes stale.
-            applyOpenResponse(data);
+            applyOpenResponse(data, openBaselineSeq);
             // Hydrate after timeline is in place to avoid race.
             const [tokenRes, diffRes, errorRes] = await Promise.allSettled([
               tokenUsageReadThreadTokenUsage({ path: { threadId } }),

@@ -86,6 +86,6 @@ export function isPlanDisplayable(plan: TurnPlanState | undefined): boolean {
   if (plan.explanation) return true;
   if (plan.steps.length > 0) return true;
   return Object.values(plan.planTextByItemId ?? {}).some(
-    (text) => text.trim().length > 0,
+    (item) => item.text.trim().length > 0,
   );
 }

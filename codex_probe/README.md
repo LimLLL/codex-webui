@@ -53,6 +53,15 @@ others use `thread/shellCommand`, which produces real turns and real items with
 no credentials — but runs unsandboxed by design, so it can never answer anything
 about policy enforcement.
 
+## Completed shell-turn control
+
+`pnpm probe turn-item-finality` compares complete item payloads, including output
+content, after completion, a later shell turn, and a resume of the still-loaded
+thread. On 0.153.2 those payloads were unchanged. Successful reads and resume are
+required for that verdict. This does not prove model/subagent turn immutability
+or cold-replay stability; the vendored README's late `subAgentActivity` case
+remains outside this experiment.
+
 ## Writing one
 
 Probes are TypeScript and are **typechecked**, not type-stripped. `ts-node`

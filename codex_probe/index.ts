@@ -10,11 +10,13 @@ import { settingsUpdate } from './probes/settings-update';
 import { itemPersistence } from './probes/item-persistence';
 import { itemOrdering } from './probes/item-ordering';
 import { livePolicy } from './probes/live-policy';
+import { turnItemFinality } from './probes/turn-item-finality';
 
 const PROBES: Probe[] = [
   settingsUpdate,
   itemPersistence,
   itemOrdering,
+  turnItemFinality,
   livePolicy,
 ];
 

@@ -7,10 +7,27 @@ export interface TurnPlanStep {
   status: TurnPlanStepStatus;
 }
 
+/**
+ * One plan item's prose, carrying the same lifecycle facts as a turn item.
+ *
+ * Plan text used to be a bare string, which put it outside the authority rules
+ * every other item obeys: a delta arriving after the terminal payload appended
+ * to text that was already complete, duplicating its tail, and a persisted
+ * snapshot could overwrite text streamed after the snapshot was taken. The two
+ * fields below are exactly what {@link TurnItemBase} uses to prevent both.
+ */
+export interface PlanItemText {
+  text: string;
+  /** True once an authoritative terminal plan payload was observed. */
+  completed: boolean;
+  /** Observation counter at the live write, for ranking against snapshots. */
+  observedSeq?: number;
+}
+
 export interface TurnPlanState {
   explanation: string | null;
   steps: TurnPlanStep[];
-  planTextByItemId?: Record<string, string>;
+  planTextByItemId?: Record<string, PlanItemText>;
 }
 
 interface TurnItemBase {

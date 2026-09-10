@@ -890,5 +890,13 @@
   "The saved draft changed elsewhere while you were editing. Saving now would overwrite it.": "编辑期间已保存的草稿在别处被改动。现在保存会覆盖它。",
   "Discard my edits and load the saved draft": "放弃我的改动，载入已保存的草稿",
   "This change only takes effect after Codex restarts. Use “Restart Codex” in the model catalog section below.": "该改动需重启 Codex 才生效。可使用下方「模型目录」中的「重启 Codex」。",
-  "The running catalog differs from what the configuration points at now. Restart to align them.": "运行中的目录与配置当前指向的不一致。重启以对齐。"
+  "The running catalog differs from what the configuration points at now. Restart to align them.": "运行中的目录与配置当前指向的不一致。重启以对齐。",
+  "Our most capable model for complex, demanding work.": "我们能力最强的模型，面向复杂、高要求的工作。",
+  "Strong model for everyday coding.": "日常编码的强力模型。",
+  "Small, fast, and cost-efficient model for simpler coding tasks.": "小巧、快速、性价比高，适合较简单的编码任务。",
+  "Latest frontier agentic coding model for broad defensive cybersecurity work.": "最新的前沿智能体编码模型，面向广泛的防御性网络安全工作。",
+  "Cyber-permissive variant of our latest frontier agentic coding model for advanced, authorized cybersecurity research.": "最新前沿智能体编码模型的网络安全放宽版本，面向高级的、已获授权的网络安全研究。",
+  "Automatic approval review model for Codex.": "Codex 的自动审批复核模型。",
+  "Showing the last known policy — it could not be re-read just now.": "当前显示最后已知的策略，刚才未能重新读取。",
+  "2x speed, increased usage": "2 倍速度，用量更高"
 }

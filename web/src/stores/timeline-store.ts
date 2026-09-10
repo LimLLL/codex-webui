@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand';
 import { getSocket } from '../socket';
+import { forgetThreadPolicy } from './thread-policy-store';
 import type {
   TimelineEntry,
   TurnFailure,
@@ -121,7 +122,8 @@ function normalizedPlan(
 ): TurnPlanState | undefined {
   // Hydration and later repair must use the same per-item representation.
   // `explanation` belongs to the structured plan tool, not the model's prose.
-  return mergePersistedPlan(undefined, items);
+  // Nothing is held yet at hydration, so no baseline can be outranked.
+  return mergePersistedPlan(undefined, items, -1);
 }
 
 /**
@@ -134,6 +136,7 @@ function normalizedPlan(
 function mergePersistedPlan(
   existing: TurnPlanState | undefined,
   normalized: ThreadItemNormalization[],
+  baselineSeq: number,
 ): TurnPlanState | undefined {
   const planItems = normalized.filter(
     (item): item is Extract<ThreadItemNormalization, { kind: 'plan' }> =>
@@ -141,7 +144,19 @@ function mergePersistedPlan(
   );
   if (planItems.length === 0) return existing;
   const planTextByItemId = { ...(existing?.planTextByItemId ?? {}) };
-  for (const item of planItems) planTextByItemId[item.itemId] = item.text;
+  for (const item of planItems) {
+    const live = planTextByItemId[item.itemId];
+    // The same authority table `selectPayload` applies to items. A terminal
+    // observation made after the request went out cannot be known to this
+    // snapshot, so it stands; otherwise the snapshot carries the whole
+    // accumulated text and replaces whatever fragment was held.
+    if (live?.completed && (live.observedSeq ?? 0) > baselineSeq) continue;
+    planTextByItemId[item.itemId] = {
+      text: item.text,
+      completed: true,
+      observedSeq: live?.observedSeq,
+    };
+  }
   return {
     explanation: existing?.explanation ?? null,
     steps: existing?.steps ?? [],
@@ -648,17 +663,34 @@ function applyPersistedItems(
   items: Array<Record<string, unknown>>,
   { baselineSeq, requireSummaryView, markFull }: PersistedItemsOptions,
 ): ThreadRuntimeState {
+  const normalized = items.map((item, index) =>
+    // Page-local ids must not collide with another turn's fallback ids.
+    normalizeThreadItem(item, true, `${turnId}:${index}`),
+  );
+  const timeline = [...runtime.timeline];
+  const turnIndex = timeline.findIndex(
+    (entry) => entry.kind === 'turn' && entry.turnId === turnId,
+  );
+  const user = normalized.find((item) => item.kind === 'userMessage');
+  // A turn adopted after reconnect can also have missed its prompt. Keep the
+  // prompt before its response, preserving any optimistic user row already held.
+  if (
+    turnIndex >= 0 &&
+    user?.kind === 'userMessage' &&
+    !timeline.some((entry) => entry.kind === 'user' && entry.turnId === turnId)
+  ) {
+    timeline.splice(turnIndex, 0, {
+      kind: 'user',
+      turnId,
+      content: user.message.text,
+      ...(user.message.images.length > 0 && { images: user.message.images }),
+    });
+  }
   return {
     ...runtime,
-    timeline: runtime.timeline.map((entry) => {
+    timeline: timeline.map((entry) => {
       if (entry.kind !== 'turn' || entry.turnId !== turnId) return entry;
       if (requireSummaryView && entry.itemsView !== 'summary') return entry;
-      const normalized = items.map((item, index) =>
-        // Page-local ids are a last resort: an item without its own id cannot
-        // be reconciled against live state at all, so it must not collide with
-        // a different page's fallback for the same position.
-        normalizeThreadItem(item, true, `${turnId}:${index}`),
-      );
       const persisted = normalized.flatMap((item) =>
         item.kind === 'render' || item.kind === 'unknown' ? [item.item] : [],
       );
@@ -671,7 +703,7 @@ function applyPersistedItems(
         // as "already have it". Each persisted plan item carries its own whole
         // accumulated text, so it replaces that item's fragment and leaves
         // items this snapshot does not mention alone.
-        plan: mergePersistedPlan(entry.plan, normalized),
+        plan: mergePersistedPlan(entry.plan, normalized, baselineSeq),
         ...(markFull && { itemsView: 'full' as const }),
       };
     }),
@@ -701,7 +733,8 @@ function setRuntimePlanText(
   if (idx < 0) return runtime;
   const entry = timeline[idx];
   if (entry.kind !== 'turn') return runtime;
-  if (entry.plan?.planTextByItemId?.[itemId] === text) return runtime;
+  const held = entry.plan?.planTextByItemId?.[itemId];
+  if (held?.completed && held.text === text) return runtime;
   timeline[idx] = {
     ...entry,
     plan: {
@@ -709,7 +742,14 @@ function setRuntimePlanText(
       steps: entry.plan?.steps ?? [],
       planTextByItemId: {
         ...(entry.plan?.planTextByItemId ?? {}),
-        [itemId]: text,
+        // A terminal plan payload carries the whole accumulated text, so this
+        // is a replacement. Stamping it is what lets a later snapshot tell that
+        // this was observed after the snapshot's request went out.
+        [itemId]: {
+          text,
+          completed: true,
+          observedSeq: nextObservationSeq(),
+        },
       },
     },
   };
@@ -1183,6 +1223,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
       const socket = getSocket();
       for (const threadId of evictedThreadIds) {
+        forgetThreadPolicy(threadId);
         socket.emit('thread.unsubscribe', { threadId });
       }
     },
@@ -1537,21 +1578,45 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       }));
     },
 
+    // Token usage and turn diffs are not app-server state this client reads a
+    // second view of: app-server exposes no historical read for either, and the
+    // rows come from this project's own database, written by the backend from
+    // the same notifications the browser receives. The stored copy is therefore
+    // a RECORDING of live, one hop behind it, and can never hold something the
+    // socket did not already deliver. Its whole purpose is to survive a refresh
+    // or a disconnected window.
+    //
+    // So the rule is fill-only, and no ordering machinery is needed to justify
+    // it. Both of these used to replace instead, which reverted a value that
+    // arrived while the request was in flight. `hydrateTurnErrorsForThread`
+    // below already merged, which is why it never had the bug.
     hydrateTokenUsageForThread: (threadId, turns) => {
-      const byTurn: Record<string, ThreadTokenUsage> = {};
-      for (const turn of turns) byTurn[turn.turnId] = turn.usage;
-      applyThreadUpdate(threadId, (runtime) => ({
-        ...runtime,
-        tokenUsageByTurn: byTurn,
-        latestTokenUsage: turns.at(-1)?.usage ?? null,
-      }));
+      applyThreadUpdate(threadId, (runtime) => {
+        const tokenUsageByTurn = { ...runtime.tokenUsageByTurn };
+        let filled = false;
+        for (const turn of turns) {
+          if (turn.turnId in tokenUsageByTurn) continue;
+          tokenUsageByTurn[turn.turnId] = turn.usage;
+          filled = true;
+        }
+        return {
+          ...runtime,
+          tokenUsageByTurn,
+          // The newest turn's usage drives the context gauge. A live value is
+          // already the newest by construction, so the recording only supplies
+          // one when there is nothing to supersede.
+          latestTokenUsage:
+            runtime.latestTokenUsage ??
+            (filled ? (turns.at(-1)?.usage ?? null) : null),
+        };
+      });
     },
 
     hydrateTurnDiffsForThread: (threadId, turns) => {
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         timeline: runtime.timeline.map((entry) => {
-          if (entry.kind !== 'turn') return entry;
+          if (entry.kind !== 'turn' || entry.diff !== undefined) return entry;
           const match = turns.find((turn) => turn.turnId === entry.turnId);
           return match ? { ...entry, diff: match.diff } : entry;
         }),
@@ -1641,20 +1706,32 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     appendPlanDeltaForThread: (threadId, turnId, itemId, delta) => {
       if (!delta) return;
       applyThreadUpdate(threadId, (runtime) => {
-        const patchPlan = (plan?: TurnPlanState): TurnPlanState => ({
-          explanation: plan?.explanation ?? null,
-          steps: plan?.steps ?? [],
-          planTextByItemId: {
-            ...(plan?.planTextByItemId ?? {}),
-            [itemId]: `${plan?.planTextByItemId?.[itemId] ?? ''}${delta}`,
-          },
-        });
+        const patchPlan = (plan?: TurnPlanState): TurnPlanState => {
+          const held = plan?.planTextByItemId?.[itemId];
+          return {
+            explanation: plan?.explanation ?? null,
+            steps: plan?.steps ?? [],
+            planTextByItemId: {
+              ...(plan?.planTextByItemId ?? {}),
+              [itemId]: {
+                text: `${held?.text ?? ''}${delta}`,
+                completed: false,
+                observedSeq: nextObservationSeq(),
+              },
+            },
+          };
+        };
         const idx = runtime.timeline.findIndex(
           (entry) => entry.kind === 'turn' && entry.turnId === turnId,
         );
         if (idx >= 0) {
           const entry = runtime.timeline[idx];
           if (entry.kind !== 'turn') return runtime;
+          // A delta that arrives after the terminal payload is stale by
+          // construction: that payload already carries the whole accumulated
+          // text, so appending would duplicate its tail and reopen a finished
+          // plan item. This is `acceptsStreamedUpdate` applied to plan text.
+          if (entry.plan?.planTextByItemId?.[itemId]?.completed) return runtime;
           const timeline = [...runtime.timeline];
           timeline[idx] = { ...entry, plan: patchPlan(entry.plan) };
           return { ...runtime, timeline };
@@ -1836,7 +1913,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
         return {
           ...runtime,
-          timeline,
+          timeline: activeTurnId
+            ? ensureTurnEntry(timeline, activeTurnId)
+            : timeline,
           activeTurnId,
           loading: activeTurnId !== null,
         };

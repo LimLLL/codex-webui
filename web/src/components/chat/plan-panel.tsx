@@ -36,7 +36,7 @@ export function PlanPanel({ plan, completed }: Props) {
   // so a fragment lost to a disconnect can be replaced by its whole value.
   const planText = [
     plan.explanation,
-    ...Object.values(plan.planTextByItemId ?? {}),
+    ...Object.values(plan.planTextByItemId ?? {}).map((item) => item.text),
   ]
     .map((text) => text?.trim())
     .filter(Boolean)

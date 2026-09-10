@@ -7,6 +7,7 @@ import type {
   RequestedFileSystemAccess,
   RequestedPermissions,
 } from '@/types/approval';
+import type { PendingServerRequestDto } from '@/generated/api';
 
 const rawSimpleDecisions = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 
@@ -225,4 +226,27 @@ export function parseApprovalRequest(
   }
 
   return null;
+}
+
+/**
+ * Builds an approval card from a persisted pending request.
+ *
+ * Only genuinely pending rows become cards: the table also retains answered
+ * requests, and rendering one would offer buttons for a decision already made.
+ *
+ * @param request - One row from the pending-requests endpoint
+ * @returns The approval to display, or null when the row is not one
+ */
+export function approvalFromPending(
+  request: PendingServerRequestDto,
+): ApprovalRequest | null {
+  if (request.status !== 'pending') return null;
+  return parseApprovalRequest({
+    requestId: request.requestId,
+    method: request.method,
+    params: request.params,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    itemId: request.itemId,
+  });
 }

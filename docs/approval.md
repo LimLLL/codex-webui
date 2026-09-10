@@ -135,3 +135,13 @@ therefore discards every structured scope, and an overlay whose only entry was
 one collapses to null and vanishes from the card entirely. The scope tag is the
 security-relevant part (`root` and `tmpdir` authorize very different things) and
 is parsed and rendered rather than flattened to the word "special". Omitted network permission data remains unspecified; it is never normalized to unrestricted access. Backend contract tests cover both transports. See [thread-policy-recovery.md](thread-policy-recovery.md).
+
+## Startup and reconnect recovery
+
+`pending-approvals-sync.ts` reconciles approvals and user-input requests with the
+backend pending set. Absence is resolution evidence only for requests held
+before the read and unchanged since then. Existing cards keep their decisions;
+new events cannot be cleared by an older empty snapshot. A scoped sync changes
+only those conversations, including when it supersedes an older overlapping
+read. This does not infer which decision another device made: recovered
+resolution stays neutral (`resolved`).

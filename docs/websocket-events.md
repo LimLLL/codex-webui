@@ -178,3 +178,11 @@ dev 模式 `console.debug`，不静默丢弃。
 目录应用复用 `codex.lifecycle` 的 restarting/unavailable/ready/autoResumeCompleted。ready 必须晚于 durable accepted；审批请求沿用 generation expiry。AutoResumeService 恢复期间占用 backend admission，先恢复父线程，再恢复 owner-controlled 子线程，全部保留 `recordActive:false`，不重放 turn。详见 [model-catalog.md](model-catalog.md)。
 
 本连接接收的 turn/review 工作在 transport 消费匹配的 `turn/completed` 后释放目录重启阻塞；`thread/status/changed:idle` 不释放。早于 RPC response 的终态同样处理。未知外部事件不构造本地接收事实；无法关联的手动压缩/goal continuation 等待真实 `thread/closed` 或 process close，没有定时过期。停进程前的拒绝不发 unavailable，避免错误取消现有审批。
+
+### Reconnect freshness
+
+After resubscribing, the client repairs turn lifecycle/items, re-reads each
+subscribed conversation's security policy, and synchronizes its pending approval
+and user-input requests. These reads preserve evidence received while they are
+in flight; see [thread-policy-recovery.md](thread-policy-recovery.md) for the
+ordering rules and the remaining gap for turns completed entirely while offline.

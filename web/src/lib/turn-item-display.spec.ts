@@ -82,7 +82,10 @@ describe('isPlanDisplayable', () => {
     expect(isPlanDisplayable(undefined)).toBe(false);
     expect(isPlanDisplayable(emptyPlan)).toBe(false);
     expect(
-      isPlanDisplayable({ ...emptyPlan, planTextByItemId: { a: '   ' } }),
+      isPlanDisplayable({
+        ...emptyPlan,
+        planTextByItemId: { a: { text: '   ', completed: true } },
+      }),
     ).toBe(false);
   });
 
@@ -95,7 +98,10 @@ describe('isPlanDisplayable', () => {
       }),
     ).toBe(true);
     expect(
-      isPlanDisplayable({ ...emptyPlan, planTextByItemId: { a: 'draft' } }),
+      isPlanDisplayable({
+        ...emptyPlan,
+        planTextByItemId: { a: { text: 'draft', completed: false } },
+      }),
     ).toBe(true);
   });
 });

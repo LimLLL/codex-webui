@@ -54,6 +54,16 @@ interface PolicyObservation {
   policy: ThreadSecurityPolicyDto;
   /** Sequence at which the evidence was requested. */
   seq: number;
+  /**
+   * True when the most recent read failed, so this evidence is last-known
+   * rather than current.
+   *
+   * A failed read is not evidence and must not replace a known policy with a
+   * guess — but continuing to present the old value as if it were current is
+   * the same lie the global badge used to tell. The value stays; the claim
+   * about it weakens.
+   */
+  stale?: boolean;
 }
 
 interface ThreadPolicyState {
@@ -78,6 +88,8 @@ interface ThreadPolicyState {
     policy: ThreadSecurityPolicyDto,
     seq: number,
   ) => void;
+  /** Marks the held evidence as last-known after a read failed. */
+  markPolicyStale: (threadId: string) => void;
   /** Forgets a conversation's policy state entirely. */
   forgetPolicy: (threadId: string) => void;
 }
@@ -132,6 +144,17 @@ export const useThreadPolicyStore = create<ThreadPolicyState>((set) => ({
         },
       };
     }),
+  markPolicyStale: (threadId) =>
+    set((state) => {
+      const existing = state.observedByThread[threadId];
+      if (!existing || existing.stale) return state;
+      return {
+        observedByThread: {
+          ...state.observedByThread,
+          [threadId]: { ...existing, stale: true },
+        },
+      };
+    }),
   forgetPolicy: (threadId) => {
     cancelConfirmation(threadId);
     latestReadByThread.delete(threadId);
@@ -165,7 +188,12 @@ export async function refreshThreadPolicy(
       path: { threadId },
       signal: controller.signal,
     });
-    if (!data) return undefined;
+    if (!data) {
+      if (latestReadByThread.get(threadId) === seq) {
+        useThreadPolicyStore.getState().markPolicyStale(threadId);
+      }
+      return undefined;
+    }
     if (latestReadByThread.get(threadId) !== seq) {
       // A superseded response must not confirm a request through the return
       // value after being rejected by observePolicy. Only newer, completed
@@ -182,11 +210,27 @@ export async function refreshThreadPolicy(
     return data;
   } catch {
     // A failed read is not evidence of anything. The last observation stands,
-    // which is strictly better than replacing a known policy with a guess.
+    // which is strictly better than replacing a known policy with a guess —
+    // but it is flagged, so the badge can stop calling it current.
+    if (latestReadByThread.get(threadId) === seq) {
+      useThreadPolicyStore.getState().markPolicyStale(threadId);
+    }
     return undefined;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Drops every trace of a conversation's policy state.
+ *
+ * Exposed as a plain function so the timeline store can call it when a thread
+ * is destroyed without reaching into this store's shape.
+ *
+ * @param threadId - Conversation that no longer exists
+ */
+export function forgetThreadPolicy(threadId: string): void {
+  useThreadPolicyStore.getState().forgetPolicy(threadId);
 }
 
 /** Confirmation timers, one per conversation regardless of how many views mount. */

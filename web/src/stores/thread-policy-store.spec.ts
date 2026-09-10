@@ -41,7 +41,7 @@ function deferred<T>() {
 describe('policy request ordering', () => {
   const read = vi.mocked(threadSecurityPolicyReadSecurityPolicy);
   type Reply = Awaited<
-    ReturnType<typeof threadSecurityPolicyReadSecurityPolicy<true>>
+    ReturnType<typeof threadSecurityPolicyReadSecurityPolicy<false>>
   >;
   const reply = (policy: ThreadSecurityPolicyDto): Reply =>
     ({ data: policy }) as Reply;
@@ -138,6 +138,31 @@ describe('policy request ordering', () => {
     ).toBeUndefined();
     newer.resolve(reply(observed()));
     await second;
+  });
+
+  it.each(['reject', 'empty'] as const)(
+    'does not mark newer successful evidence stale after an older %s response',
+    async (failure) => {
+      const older = deferred<Reply>();
+      read.mockReturnValueOnce(older.promise);
+      const first = refreshThreadPolicy('thread');
+      await refreshThreadPolicy('thread');
+      if (failure === 'reject') older.reject(new TypeError('network lost'));
+      else older.resolve({ data: undefined } as Reply);
+      await first;
+      expect(useThreadPolicyStore.getState().observedByThread.thread?.stale).not.toBe(true);
+    },
+  );
+
+  it('does not let a read from a forgotten thread stale its reopened evidence', async () => {
+    const older = deferred<Reply>();
+    read.mockReturnValueOnce(older.promise);
+    const first = refreshThreadPolicy('thread');
+    useThreadPolicyStore.getState().forgetPolicy('thread');
+    await refreshThreadPolicy('thread');
+    older.reject(new TypeError('network lost'));
+    await first;
+    expect(useThreadPolicyStore.getState().observedByThread.thread?.stale).not.toBe(true);
   });
 
   it('ends with unknown when the final policy read hangs', async () => {

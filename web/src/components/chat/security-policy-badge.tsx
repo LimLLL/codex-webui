@@ -177,6 +177,17 @@ export function SecurityPolicyBadge({ threadId, readOnly = false }: Props) {
           </p>
         )}
 
+        {/* A failed read leaves the last observation in place, because replacing
+            a known policy with a guess is worse. It must not keep being
+            presented as current, though: the conversation may have been changed
+            from the CLI or another client in exactly the window that could not
+            be read. */}
+        {policy.stale && (
+          <p className="rounded bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+            {t('Showing the last known policy — it could not be re-read just now.')}
+          </p>
+        )}
+
         {/* Three distinct endings, because they are not the same fact. A refused
             patch and a patch that measurably failed to take effect both mean
             the conversation kept its old policy, which the badge above is now

@@ -27,33 +27,18 @@ import { clearApiToken } from '@/auth-token';
 import { getSocket, resetSocket } from '@/socket';
 import { filesGetRoots, filesAddRoot } from '@/generated/api';
 import {
-  pendingApprovalsListPending,
   settingsListSettings,
   threadsListLoadedThreads,
   threadsResumeThread,
 } from '@/generated/api/sdk.gen';
 import { settingsListSettingsQueryKey } from '@/generated/api/@tanstack/react-query.gen';
-import type { PendingServerRequestDto } from '@/generated/api';
-import type { ApprovalRequest } from '@/types/approval';
-import { parseApprovalRequest } from '@/lib/approval-parsers';
-import { userInputFromPending } from '@/lib/user-input-parsers';
+import { syncPendingApprovals } from '@/lib/pending-approvals-sync';
 import { applyOpenResponse } from '@/hooks/use-thread-open';
+import { nextObservationSeq } from '@/lib/turn-item-merge';
 
 const MAX_IDLE_SUBSCRIPTIONS_KEY = 'general.maxIdleSubscriptions';
 const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
 const IDLE_SUBSCRIPTION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-
-function approvalFromPending(request: PendingServerRequestDto): ApprovalRequest | null {
-  if (request.status !== 'pending') return null;
-  return parseApprovalRequest({
-    requestId: request.requestId,
-    method: request.method,
-    params: request.params,
-    threadId: request.threadId,
-    turnId: request.turnId,
-    itemId: request.itemId,
-  });
-}
 
 function readMaxIdleSubscriptions(
   settings: Array<{ key: string; value: unknown }> | undefined,
@@ -72,8 +57,6 @@ export function AuthenticatedLayout() {
   const [homeDir, setHomeDir] = useState<string | null>(null);
 
   const threadCwd = useTimelineStore((s) => s.threadCwd);
-  const addApprovalForThread = useTimelineStore((s) => s.addApprovalForThread);
-  const addUserInputRequestForThread = useTimelineStore((s) => s.addUserInputRequestForThread);
   const ensureThreadState = useTimelineStore((s) => s.ensureThreadState);
   const hydrateTimelineForThread = useTimelineStore((s) => s.hydrateTimelineForThread);
   const setLoadingForThread = useTimelineStore((s) => s.setLoadingForThread);
@@ -155,13 +138,14 @@ export function AuthenticatedLayout() {
           // `recordActive: false` — nobody opened these, the page was reloaded.
           // Letting a bulk restore write the active-branch pointer would leave
           // each tree naming whichever member happened to be restored last.
+          const openBaselineSeq = nextObservationSeq();
           void threadsResumeThread({
             path: { threadId: tid },
             query: { recordActive: false },
           })
             .then(({ data: resumeData }) => {
               if (cancelled || !resumeData) return;
-              applyOpenResponse(resumeData);
+              applyOpenResponse(resumeData, openBaselineSeq);
             })
             .catch(() => {
               if (!cancelled) setLoadingForThread(tid, false);
@@ -174,23 +158,19 @@ export function AuthenticatedLayout() {
     };
     void discoverLoadedThreads().catch(() => undefined);
 
-    // 2. Hydrate pending approvals and user input requests.
-    void pendingApprovalsListPending()
-      .then(({ data }) => {
-        if (cancelled || !data) return;
-        for (const request of data.requests) {
-          const approval = approvalFromPending(request);
-          if (approval) addApprovalForThread(request.threadId, approval);
-          const userInput = userInputFromPending(request);
-          if (userInput) addUserInputRequestForThread(request.threadId, userInput);
-        }
-      })
-      .catch(() => undefined);
+    // 2. Hydrate pending approvals and user input requests. Shared with the
+    // reconnect path, which has the same gap for the opposite reason: here
+    // nothing is known yet, there everything known may have moved on.
+    // Tied to this effect's lifetime: a response landing after logout would
+    // otherwise repopulate approvals for a session that is gone.
+    const pendingReadAbort = new AbortController();
+    void syncPendingApprovals(undefined, pendingReadAbort.signal);
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      pendingReadAbort.abort();
+    };
   }, [
-    addApprovalForThread,
-    addUserInputRequestForThread,
     ensureThreadState,
     hydrateTimelineForThread,
     setActiveTurnIdForThread,
