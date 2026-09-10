@@ -125,7 +125,7 @@
 - [x] ChatHeader：thread name 显示 + inline 编辑 + archived badge。
 - [x] thread/name/updated notification 同步 header title。
 - [x] `POST /api/threads/:threadId/turns/:turnId/steer` → `turn/steer`，支持进行中追问/追加输入。ChatInput Steer/Stop 按钮，activeTurnId 跟踪，approval 期间禁用 steer。
-- [x] app-server 重启后的 active thread 自动 `thread/resume` 与 snapshot 恢复。ActiveThreadRegistry ref-count + AutoResumeService lifecycle event + codex.lifecycle socket event + 前端 reconnect 重新订阅。
+- [x] app-server 重启后的 active thread 自动 `thread/resume` 与 snapshot 恢复。后端执行义务 inventory + AutoResumeService lifecycle event + codex.lifecycle socket event；room 成员资格不再决定恢复目标。
 
 ### 事件处理与 Normalize ✅ (P0 完成)
 
@@ -380,3 +380,22 @@
 - [x] **pending 同步的挂载生命周期**：从启动 effect 抽取后一度丢掉了原来的 `cancelled` 检查，登出或卸载后的迟到响应仍会写入 store。`syncPendingApprovals` 增加可选 `AbortSignal`，请求前与应用前各校验一次；启动路径传入 effect 自己的 abort controller。重叠读取的相互淘汰解决不了这件事——它表达的是「另一次读取更新」，不是「这个调用方已经不在了」。
 - [ ] **过期策略的显示与发送行为待确认**：当前 last-known 说明仅在策略弹层里，闭合徽章和 Send 不因 stale 单独改变；是否强化提示或阻止发送属于产品取舍。
 - [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。
+
+## 后端发现与恢复的重构
+
+- [x] 共享的内存元数据读模型：完整发布、显式新鲜度、后端自有的外部变更发现；折叠先于分页的既有约束不变。
+- [x] 面向已认证连接的全局失效信号（overview / pending），覆盖已提交的取消与过期。
+- [x] 以执行义务而非 socket 成员资格作为重启恢复依据：进行中/被阻塞的 turn、活跃 goal、父会话先于子会话重新附着；所有浏览器断开后依然恢复；不重放任何提交。
+- [x] 钉住版本的元数据探针：字面量 name/preview 搜索、相对 cwd、排序、外部变更发现，以及「列出的父会话缺失」这一上游限制。
+- [x] 增量元数据的审查修复：实时 patch 跨分页存活、归档迁移使被跨越的走查作废、pending-listing 的紧急性收窄到单个会话且无后续 turn 也会过期、走查期间抬起的陈旧标记跨发布存活。
+- [x] 修正增量探针的秒级时间戳误差：拉开间隔后，即使是被拒绝的 turn 也会推进 `updatedAt`；排序保持显式陈旧直到周期发现。
+- [x] 侧边栏行索引只由**正在渲染**的视图构成。被 gate 的查询仍保留缓存，索引全部三个视图会让陈旧的详情页盖掉新鲜的首页行——连 `openThreadId` 与成员集合一起盖掉，而这两者决定点击行为。逻辑抽到 `web/src/lib/sidebar-rows.ts` 并有回归测试。
+- [x] 排序时效滞后确认为**有意取舍**（2026-09-10 裁决）。恢复即时排序需要在 turn 结束时对单个会话做针对性元数据读，且需先探针确认投递时上游 `updatedAt` 是否已推进。见 [conversation-recovery.md](conversation-recovery.md)。
+- [x] 崩溃/重新附着的原生行为探针（`codex_probe/restart-recovery.ts`）：崩溃发生在 turn 进行中，实测重新附着能恢复什么、不能恢复什么。
+- [ ] 未关联的执行活动保持保守：只有相关的终态证据或关闭/删除才退休它；不得用无关的历史完成事件去剪枝。
+- [ ] 前端刷新调度器与按需订阅，接入 [服务端契约](conversation-recovery.md)。
+- [ ] 重新生成前端 SDK 以覆盖 overview 新增的 `freshness` 字段。
+- [ ] 归档范围契约：workspace 过滤后的 `memberThreadIds` 不包含其它工作区成员，后端却归档完整已知树；跨工作区成员的前端清理/离开当前会话仍需权威的归档范围或逐线程事件对齐，不能从未显示的旧缓存推断。
+- [ ] 用真实模型的 turn、goal 与受控子会话验证崩溃/重新附着结果；重新附着本身不承诺执行续跑。
+- [x] 二次交叉审查：归档完成使用请求发出时的成员集合，避免视图切换/刷新后遗漏隐藏分支；四组独立冷恢复探针区分 null 与实际分页、读取附着前 goal、验证模型请求确实已挂起；旧 turn 终态不删除新 goal 续跑 turn。
+- [ ] **策略变更需另行产品裁决**：活跃 goal 冷恢复后可由原生调度器开启新 turn，与已批准的活跃 goal 恢复保持一致。当前不改恢复策略、不加开关；如果要禁止无人值守续跑，需先确认产品语义与原生能力，不能假定已有"仅附着不执行"模式。

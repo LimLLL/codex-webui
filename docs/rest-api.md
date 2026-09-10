@@ -199,7 +199,7 @@ Apps UI 的列表行保持紧凑，只保留启用状态和管理入口。Defaul
 | ------------------------------------- | ------------------------------------------------------------- |
 | POST /threads                         | `thread/start`                                                |
 | GET /threads                          | `thread/list`                                                 |
-| GET /threads/overview                 | `thread/list` plus local/adopted topology projection          |
+| GET /threads/overview                 | Shared in-memory metadata plus local/adopted topology projection; explicit `freshness` |
 | GET /threads/collaboration-modes      | `collaborationMode/list`                                      |
 | GET /threads/:id                      | `thread/read` with metadata only                              |
 | GET /threads/:id/collaboration-mode   | local observed settings cache                                 |
@@ -254,3 +254,12 @@ Apps UI 的列表行保持紧凑，只保留启用状态和管理入口。Defaul
 ## Policy and recovery guarantees
 
 See [thread-policy-recovery.md](thread-policy-recovery.md) for queued-versus-observed policy semantics, settings freshness, explicit paging completeness, measured item durability/order, and approval payload preservation.
+
+## Shared conversation metadata
+
+`GET /api/threads/overview` reads a backend-owned collection instead of enumerating
+upstream threads per request. It preserves collapse-before-pagination and adds
+`freshness: { generation, refreshedAt, stale, refreshing }`; `refreshedAt` is Unix
+milliseconds. No usable collection returns HTTP 503. See
+[conversation-recovery.md](conversation-recovery.md) for scheduling, failure behavior,
+filter measurements, and the global socket invalidation contract.

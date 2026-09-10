@@ -118,7 +118,7 @@ Never inherited: pending approvals, user-input requests, active turn state, term
 
 - **Timeline turn ids.** User entries carry `turnId`, filled during hydration and bound on `turn/started` for optimistically appended messages — mirroring `attachPendingVersionTurn` on the server. A message without a turn id cannot be branched, which is exactly the window in which branching is invalid anyway.
 - **Cache invalidation.** A branch version has no turn until its edited message is sent, and the backend binds it during `turn/start`. `chat-input` therefore invalidates the branch-tree queries on a successful turn start; otherwise the switcher would stay hidden until the cache happened to expire.
-- **Sidebar overview projection.** `GET /api/threads/overview` returns branch-collapsed rows directly from the backend. It consumes the filtered app-server thread snapshot, joins local/adopted topology once, lifts latest member activity, running state, waiting-on-approval/user-input state, pending approval counts, and returns a resolved `openThreadId` from the global active-member pointer. When a filter excludes the true root, the highest visible ancestor becomes the row so the branch stays reachable instead of inheriting the old page-local "hide only when root is present" compromise.
+- **Sidebar overview projection.** `GET /api/threads/overview` returns branch-collapsed rows directly from the backend. It filters a shared backend-owned complete metadata collection, joins local/adopted topology, lifts latest member activity, running state, waiting-on-approval/user-input state, pending approval counts, and returns a resolved `openThreadId` from the global active-member pointer. When a filter excludes the true root, the highest visible ancestor becomes the row so the branch stays reachable instead of inheriting the old page-local "hide only when root is present" compromise.
 - **Attention lift.** Running / awaiting-approval state from hidden branches surfaces on the visible row, since those branches have no row of their own.
 - **Deep links.** `/t/:branchThreadId` highlights the root row the branch lives under.
 - **Layout stability.** The edit button stays mounted and disabled rather than unmounting, and both the populated and empty timeline states use `scrollbar-gutter: stable` — switching versions passes through the empty state, and a gutter appearing with it visibly shifts the whole message column.
@@ -210,3 +210,13 @@ choosing it would be choosing a different product.
 Per the "no native primitive, no feature" rule: regenerating an assistant reply (no turn-level primitive), branch merging (no merge primitive, and injecting items across branches produces silent context confusion), and workspace/file-state branching (`GhostCommit` was removed in 0.149; a git-based substitute would fight the user over a shared working tree).
 
 Not built yet, but possible: durable background delete jobs, periodic scanner reruns, per-node turn counts in the graph (needs either a lazy per-node fetch or a lightweight server-side count endpoint), and replacing the private-file scanner if app-server exposes fork boundaries through JSON-RPC.
+
+## Shared overview input
+
+Overview discovery is shared across query variants and browsers; the collection
+keeps archive membership and preserves filtering before branch collapsing. It
+does not extend provenance or replace live deletion checks. Normal listing can
+discover a new external fork while reporting a null `forkedFromId`; the pinned
+probe confirms that the response/header can still carry its parent. Local/adopted
+edge precedence is retained, with no claim that listings alone supply complete
+external ancestry. See [conversation-recovery.md](conversation-recovery.md).

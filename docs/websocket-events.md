@@ -41,6 +41,8 @@ codex app-server (stdout JSONL)
 |------|---------|------|
 | `codex.notification` | Codex notification（turn error 已去 steer） | 所有通知统一事件名 |
 | `codex.serverRequest` | `{ id, method, params }` | 需要前端回复的请求 |
+| `conversation.overview.changed` | `{ generation }` | Authenticated global overview/freshness invalidation; no transcript payload |
+| `conversation.pending.changed` | `{ generation }` | Authenticated global pending-set invalidation, including expiry/cancellation |
 | `fs.changed` | `{ event, path }` | 文件变更通知 (add/change/unlink/addDir/unlinkDir) |
 | `terminal.output` | `{ terminalId, data }` | PTY 输出 |
 | `terminal.exit` | `{ terminalId, exitCode }` | PTY 进程退出 |
@@ -186,3 +188,14 @@ subscribed conversation's security policy, and synchronizes its pending approval
 and user-input requests. These reads preserve evidence received while they are
 in flight; see [thread-policy-recovery.md](thread-policy-recovery.md) for the
 ordering rules and the remaining gap for turns completed entirely while offline.
+
+### Backend discovery and reattachment
+
+Detailed room subscriptions now affect delivery only. Backend restart targets
+come from `ThreadExecutionInventoryService`, including active goals and known
+spawned owners, even with no browsers connected. `autoResumeCompleted` reports
+session reattachment, never automatic replay of a turn. The two global change
+signals above require authentication but no conversation-room membership. They
+are also emitted after authentication to request fresh baselines. The complete
+server contract and durability limits are in
+[conversation-recovery.md](conversation-recovery.md).

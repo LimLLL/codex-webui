@@ -145,3 +145,13 @@ new events cannot be cleared by an older empty snapshot. A scoped sync changes
 only those conversations, including when it supersedes an older overlapping
 read. This does not infer which decision another device made: recovered
 resolution stays neutral (`resolved`).
+
+## Global pending discovery
+
+`conversation.pending.changed` on `/ws` carries only `{ generation }` and reaches
+authenticated clients independently of conversation rooms. It requests a fresh
+pending-set read after committed creation/resolution, cancellation, and expiry
+(including backend startup). Failed response transactions emit nothing. Creation
+held by deletion defers the hint until guard release. Existing persistence, CAS
+responses, suppression and request-time reconciliation remain the authority.
+See [conversation-recovery.md](conversation-recovery.md).

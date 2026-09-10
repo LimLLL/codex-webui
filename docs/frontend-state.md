@@ -85,7 +85,7 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 
 清理只处理 safe idle runtime：非当前选中 thread、`loading=false`、无 `activeTurnId`、无 `pendingResolvedRequestIds` 缓冲、`threadStatus` 不是 `active`、无 pending approval、无 pending user-input。候选按 `lastActivityAt` 排序，超过 15 分钟未活动的 thread 在超过上限时优先被驱逐。
 
-每个被驱逐的 thread 会先从 `subscribedThreadIds` 和 `threadsById` 删除，再 emit `thread.unsubscribe` 让后端 socket room 与 `ActiveThreadRegistryService` ref-count 同步。再次打开该 thread 时走现有 `setActiveThread` + `thread/resume` 恢复路径。
+每个被驱逐的 thread 会先从 `subscribedThreadIds` 和 `threadsById` 删除，再 emit `thread.unsubscribe` 离开后端 socket room；后端执行恢复 inventory 不受 room 成员资格影响。再次打开该 thread 时走现有 `setActiveThread` + `thread/resume` 恢复路径。
 
 ### 打开线程的唯一入口 (use-thread-open)
 

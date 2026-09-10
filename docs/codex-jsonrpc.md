@@ -96,3 +96,16 @@ client → initialized {}  (notification, no id)
 ## Settings freshness and item recovery
 
 `ThreadSettingsObserverService` retains complete effective-settings notifications. Start/resume/fork responses seed only unobserved threads; repeat opens project the current observation after their awaited reads. A queued mutation never becomes an invented effective-settings snapshot. Bounded item reads expose incomplete outcomes instead of silently returning truncated history. See [thread-policy-recovery.md](thread-policy-recovery.md) for the REST contract and measured durability limits.
+
+## Execution observations
+
+Successful correlated responses are observed internally before resolving their
+caller. A local wire observation counter records the request baseline and reply
+order so backend goal observations reject stale mutation acknowledgements. This
+is not a wire-protocol extension and is not sent to browsers.
+
+`ThreadExecutionInventoryService` consumes these responses and live notifications
+independently of socket membership. Unlike `CodexAcceptedWork`, its obligations
+survive child replacement. The latter remains the catalog restart barrier and
+still clears on process exit. See
+[conversation-recovery.md](conversation-recovery.md) for reattachment semantics.
