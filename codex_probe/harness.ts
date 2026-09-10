@@ -352,6 +352,52 @@ export class AppServer {
   close(): void {
     this.child.kill();
   }
+
+  /**
+   * Kills the child and waits for it to actually exit.
+   *
+   * A crash is not a shutdown. {@link close} sends SIGTERM and returns
+   * immediately, which lets the app-server run whatever cleanup it has and lets
+   * the next process start before the old one released the CODEX_HOME database.
+   * Both are exactly what a restart-recovery measurement must be denied: the
+   * question is what survives an app-server that got no chance to tidy up.
+   *
+   * @param signal - Signal to send; the default cannot be caught or handled
+   * @returns Resolves once the child process has exited
+   * @throws If signal delivery fails or the child does not exit within ten seconds
+   */
+  kill(signal: NodeJS.Signals = 'SIGKILL'): Promise<void> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.child.off('exit', onExit);
+        this.child.off('error', onError);
+      };
+      const onExit = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        onError(new Error(`Child did not exit after ${signal}`));
+      }, 10_000);
+      this.child.once('exit', onExit);
+      this.child.once('error', onError);
+      try {
+        if (!this.child.kill(signal)) {
+          onError(new Error(`Could not deliver ${signal} to child`));
+        }
+      } catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
 }
 
 /** Sleeps, for settling windows where no notification marks the boundary. */

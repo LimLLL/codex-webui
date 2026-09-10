@@ -114,3 +114,75 @@ nothing else: they do not touch this project's NestJS layer, its REST surface,
 its Socket.IO routing, or any frontend logic. A defect in timeline
 reconciliation or in a React store is not findable here and belongs in a unit
 test.
+
+## Standalone metadata probe
+
+`pnpm exec ts-node --project codex_probe/tsconfig.json codex_probe/metadata-filters.ts`
+uses its own temporary home and a loopback provider that rejects generation. No
+provider config or model account is needed. It checks native search/cwd matching,
+timestamp ordering, and discovery of a fork created by a second app-server. On
+0.153.2 the creation event did not reach the first transport, and the listing
+reported a null parent despite parentage in the fork response and rollout header.
+See [backend recovery](../docs/conversation-recovery.md) for the implications.
+
+## metadata-incremental
+
+Answers whether the shared overview metadata can be maintained from
+notifications instead of re-walking the stored conversation list.
+
+Measured on 0.153.2:
+
+- `Thread.updatedAt` has **second precision**. With 1.2 seconds between turns,
+  even a refused-provider turn advances it. The original immediate consecutive
+  turns falsely appeared unchanged because they ran within the same second.
+  `turn/started` / `turn/completed` carry only `{ threadId, turn }`, with no
+  replacement conversation timestamp. Ordering must remain explicitly stale
+  until discovery when full enumeration is deferred.
+- `thread/status/changed` is emitted around the turn independently, carrying an
+  authoritative replacement status, so badges stay live without a walk.
+- The fixture is **not listable immediately after `thread/start`**; its first turn
+  is what makes it appear in `thread/list`. This is the one case where turn
+  activity makes discovery urgent, and it was found only because the
+  probe's first version failed on it.
+
+The measurement covers a failed turn with thread status `systemError` (the probe's
+provider deliberately refuses generation), not every turn outcome. The service
+patches live status but marks other metadata stale until scheduled discovery.
+
+## restart-recovery
+
+Answers what survives an app-server crash while a turn is running — the one
+question the backend's restart-recovery tests cannot answer, because they mock
+the native calls and so only establish bookkeeping.
+
+Method: four isolated cases cross goal/no-goal with plain/explicitly paged cold
+resume. Each uses a failed seed, then confirms the exact running turn and receipt
+of its held model request before SIGKILL. Goals are set after that request is held,
+and read again before the new process's only resume. The provider stays held after
+resume so a forced model failure cannot obscure native continuation. No model is
+called and no tokens are spent.
+
+Measured on 0.153.2:
+
+- The same crashed turn is returned as **`interrupted`** in all four cases and
+  remains terminal during the observation window.
+- Plain resume returns **`initialTurnsPage: null`**, not a populated page. It
+  returns the two fixture turns in `thread.turns`. Explicit paging returns those
+  turn headers in `initialTurnsPage`, with empty `thread.turns`. The exported
+  response type omits the experimental page field; presence alone proves nothing.
+- The persisted goal is active before attachment. Both active-goal cases start a
+  distinct new turn and issue a model request after resume. Both goal-free cases
+  start none during the four-second window. This is bounded observation, not an
+  assertion about all future scheduling or all kinds of crash.
+
+The "nothing dispatched before attachment" check waits for the model-request
+count to stop moving before taking its baseline. A request already on the wire
+when the process is SIGKILLed is still delivered afterwards, so a baseline taken
+immediately races that delivery — the first version of this check failed on one
+machine and passed on another, from timing alone. A probe that reports a
+different answer depending on host speed is measuring the host.
+
+The probe validates response contents and treats missing required evidence as a
+failure. It does not use one warm resume to validate another cold-resume variant.
+Its held provider demonstrates dispatch, not successful model work or tool effects.
+Approval/input recovery and owner-controlled children remain outside this fixture.
