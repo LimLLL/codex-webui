@@ -7,6 +7,7 @@ import {
 import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { ThreadsGateway } from './threads.gateway';
 import { ThreadsService } from './threads.service';
+import { CatalogAdmissionService } from '../codex/catalog/catalog-admission.service';
 
 @Injectable()
 export class AutoResumeService implements OnModuleInit {
@@ -18,6 +19,7 @@ export class AutoResumeService implements OnModuleInit {
     private readonly registry: ActiveThreadRegistryService,
     private readonly threadsService: ThreadsService,
     private readonly gateway: ThreadsGateway,
+    private readonly catalogAdmission: CatalogAdmissionService,
   ) {}
 
   onModuleInit(): void {
@@ -68,9 +70,24 @@ export class AutoResumeService implements OnModuleInit {
       return;
     }
 
-    const results = await Promise.allSettled(
-      threadIds.map((threadId) => this.resumeOnce(threadId)),
+    const release = this.catalogAdmission.enter(
+      'Restoring conversations after app-server restart',
     );
+    let results: PromiseSettledResult<void>[];
+    try {
+      // Owner-controlled subagents must follow their parents, including an unsubscribed owner.
+      results = [];
+      for (const threadId of threadIds) {
+        try {
+          await this.resumeWithParents(threadId, new Set());
+          results.push({ status: 'fulfilled', value: undefined });
+        } catch (reason: unknown) {
+          results.push({ status: 'rejected', reason });
+        }
+      }
+    } finally {
+      release();
+    }
     const resumedThreadIds: string[] = [];
     const failedThreadIds: string[] = [];
 
@@ -92,6 +109,20 @@ export class AutoResumeService implements OnModuleInit {
       resumedThreadIds,
       failedThreadIds,
     });
+  }
+
+  /** Restores ancestor ownership before a child without changing active-branch pointers. */
+  private async resumeWithParents(
+    threadId: string,
+    ancestors: Set<string>,
+  ): Promise<void> {
+    if (ancestors.has(threadId))
+      throw new Error('Cyclic subagent ownership during recovery');
+    ancestors.add(threadId);
+    const { thread } = await this.threadsService.readThread(threadId);
+    if (thread.parentThreadId)
+      await this.resumeWithParents(thread.parentThreadId, ancestors);
+    await this.resumeOnce(threadId);
   }
 
   private resumeOnce(threadId: string): Promise<void> {

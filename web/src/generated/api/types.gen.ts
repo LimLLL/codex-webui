@@ -325,7 +325,14 @@ export type UpdateSandboxModeDto = {
     sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
 };
 
+export type CatalogWarningDto = {
+    code: string;
+    message: string;
+    model?: string;
+};
+
 export type CodexConfigResponseDto = {
+    warnings?: Array<CatalogWarningDto>;
     config: {
         [key: string]: unknown;
     };
@@ -352,10 +359,17 @@ export type RawConfigResponseDto = {
 
 export type UpdateRawConfigDto = {
     content: string;
+    /**
+     * Exact raw content originally read, protecting concurrent edits.
+     */
+    expectedContent?: string;
 };
 
 export type RawConfigWriteResponseDto = {
     filePath: string;
+    warnings: Array<CatalogWarningDto>;
+    restartRequired: boolean;
+    reloaded: boolean;
 };
 
 export type FeedbackUploadRequestDto = {
@@ -376,6 +390,104 @@ export type FeedbackUploadResponseDto = {
      * Tracking thread id for the submitted report, not the conversation it refers to.
      */
     threadId: string;
+};
+
+export type CatalogActivationDto = {
+    outcome: 'pending' | 'accepted' | 'reverted';
+    before: string | null;
+    after: string | null;
+};
+
+export type CatalogStateDto = {
+    ready: boolean;
+    startupError: string | null;
+    configuredPointer: string | null;
+    /**
+     * The configured pointer is a file this backend owns, so it may be cleared back to the default.
+     */
+    managed: boolean;
+    /**
+     * The running child loaded the configured pointer; false means a restart is still pending.
+     */
+    pointerApplied: boolean;
+    runningPaths: Array<string>;
+    activation: CatalogActivationDto | null;
+    repairError: string | null;
+};
+
+export type CatalogDocumentDto = {
+    content: string | null;
+    warnings: Array<CatalogWarningDto>;
+};
+
+export type CatalogContentDto = {
+    content: string;
+};
+
+export type SaveCatalogDraftDto = {
+    content: string;
+    /**
+     * Exact previous draft content; null when no draft exists.
+     */
+    expectedDraft: string | null;
+};
+
+export type SeedCatalogDto = {
+    source: 'bundled' | 'effective';
+    expectedDraft: string | null;
+};
+
+export type CatalogBlockerDto = {
+    threadId: string | null;
+    name: string | null;
+    reason: string;
+    processIds?: Array<string>;
+    /**
+     * Present only for work dispatched through this backend connection.
+     */
+    requestMethod?: string;
+    turnId?: string | null;
+};
+
+export type CatalogBlockersDto = {
+    /**
+     * A scoped observation, not a global idle guarantee.
+     */
+    scope: 'managedAppServer';
+    limitations: Array<string>;
+    canApply: boolean;
+    generation: number;
+    blockers: Array<CatalogBlockerDto>;
+};
+
+export type ApplyCatalogDto = {
+    /**
+     * Exact draft approved by the user.
+     */
+    expectedDraft: string;
+    expectedPointer: string | null;
+};
+
+export type CatalogApplyResultDto = {
+    ready: boolean;
+    startupError: string | null;
+    configuredPointer: string | null;
+    /**
+     * The configured pointer is a file this backend owns, so it may be cleared back to the default.
+     */
+    managed: boolean;
+    /**
+     * The running child loaded the configured pointer; false means a restart is still pending.
+     */
+    pointerApplied: boolean;
+    runningPaths: Array<string>;
+    activation: CatalogActivationDto | null;
+    repairError: string | null;
+    warnings: Array<CatalogWarningDto>;
+};
+
+export type ChangeCatalogSourceDto = {
+    expectedPointer: string | null;
 };
 
 export type AccountDto = {
@@ -2569,6 +2681,149 @@ export type CodexFeedbackUploadFeedbackResponses = {
 
 export type CodexFeedbackUploadFeedbackResponse = CodexFeedbackUploadFeedbackResponses[keyof CodexFeedbackUploadFeedbackResponses];
 
+export type CatalogStateData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog';
+};
+
+export type CatalogStateResponses = {
+    200: CatalogStateDto;
+};
+
+export type CatalogStateResponse = CatalogStateResponses[keyof CatalogStateResponses];
+
+export type CatalogReadDraftData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/draft';
+};
+
+export type CatalogReadDraftResponses = {
+    200: CatalogDocumentDto;
+};
+
+export type CatalogReadDraftResponse = CatalogReadDraftResponses[keyof CatalogReadDraftResponses];
+
+export type CatalogSaveDraftData = {
+    body: SaveCatalogDraftDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/draft';
+};
+
+export type CatalogSaveDraftResponses = {
+    200: CatalogDocumentDto;
+};
+
+export type CatalogSaveDraftResponse = CatalogSaveDraftResponses[keyof CatalogSaveDraftResponses];
+
+export type CatalogReadEffectiveData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/effective';
+};
+
+export type CatalogReadEffectiveResponses = {
+    200: CatalogDocumentDto;
+};
+
+export type CatalogReadEffectiveResponse = CatalogReadEffectiveResponses[keyof CatalogReadEffectiveResponses];
+
+export type CatalogValidateData = {
+    body: CatalogContentDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/validate';
+};
+
+export type CatalogValidateResponses = {
+    200: CatalogDocumentDto;
+};
+
+export type CatalogValidateResponse = CatalogValidateResponses[keyof CatalogValidateResponses];
+
+export type CatalogSeedData = {
+    body: SeedCatalogDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/seed';
+};
+
+export type CatalogSeedResponses = {
+    200: CatalogDocumentDto;
+};
+
+export type CatalogSeedResponse = CatalogSeedResponses[keyof CatalogSeedResponses];
+
+export type CatalogBlockersData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/blockers';
+};
+
+export type CatalogBlockersResponses = {
+    200: CatalogBlockersDto;
+};
+
+export type CatalogBlockersResponse = CatalogBlockersResponses[keyof CatalogBlockersResponses];
+
+export type CatalogApplyData = {
+    body: ApplyCatalogDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/apply';
+};
+
+export type CatalogApplyResponses = {
+    200: CatalogApplyResultDto;
+};
+
+export type CatalogApplyResponse = CatalogApplyResponses[keyof CatalogApplyResponses];
+
+export type CatalogUseDefaultData = {
+    body: ChangeCatalogSourceDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/default';
+};
+
+export type CatalogUseDefaultResponses = {
+    200: CatalogApplyResultDto;
+};
+
+export type CatalogUseDefaultResponse = CatalogUseDefaultResponses[keyof CatalogUseDefaultResponses];
+
+export type CatalogRestoreData = {
+    body: ChangeCatalogSourceDto;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/restore';
+};
+
+export type CatalogRestoreResponses = {
+    200: CatalogApplyResultDto;
+};
+
+export type CatalogRestoreResponse = CatalogRestoreResponses[keyof CatalogRestoreResponses];
+
+export type CatalogRestartData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/codex/catalog/restart';
+};
+
+export type CatalogRestartResponses = {
+    200: CatalogStateDto;
+};
+
+export type CatalogRestartResponse = CatalogRestartResponses[keyof CatalogRestartResponses];
+
 export type AccountReadAccountData = {
     body?: never;
     path?: never;
@@ -3696,6 +3951,7 @@ export type ModelsListModelsData = {
     query?: {
         cursor?: string;
         limit?: number;
+        includeHidden?: boolean;
     };
     url: '/api/models';
 };

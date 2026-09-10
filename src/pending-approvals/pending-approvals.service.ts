@@ -1,5 +1,6 @@
 /** Persists app-server requests that require user decisions. */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { CatalogAdmissionService } from '../codex/catalog/catalog-admission.service';
 import { BusinessException } from '../common/business.exception';
 import { ErrorCode } from '../common/error-codes';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -24,6 +25,7 @@ export class PendingApprovalsService implements OnModuleInit {
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
     private readonly codexManager: CodexProcessManager,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
+    private readonly catalogAdmission: CatalogAdmissionService,
   ) {
     this.codexManager.addLifecycleListener((event) => {
       if (
@@ -155,6 +157,7 @@ export class PendingApprovalsService implements OnModuleInit {
     }
     this.deletionRegistry.assertMutable(row.threadId);
 
+    this.catalogAdmission.assertOpen();
     const client = this.codexManager.getClient();
     if (!client) {
       throw BusinessException.conflict(

@@ -27,7 +27,7 @@
 
 | Method | Path                | Controller            | 说明                                                                                                                                                                                                           |
 | ------ | ------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/codex/status` | CodexStatusController | 聚合状态：appServer/initialize/account/config/provider/models/runtime。30s TTL 缓存，5s unavailable。Runtime rollup: ready/degraded/unavailable + reasons。Provider env key 优先从 config.model_providers 读取 |
+| GET    | `/api/codex/status` | CodexStatusController | 聚合状态：appServer/initialize/account/config/provider/models/runtime。30s TTL 缓存，5s unavailable。Runtime rollup: ready/degraded/unavailable + reasons。Provider env key 优先从 config.model_providers 读取；`unknownProviderEnvKey` 只在 provider 完全没有凭据来源时上报——`experimental_bearer_token` / `auth` / `aws` / `requires_openai_auth` 都会让 `env_key` 为 null，不算缺失 |
 
 ### Codex Config
 
@@ -36,11 +36,19 @@
 | GET    | `/api/codex/config`     | CodexConfigController | 读取完整 Codex config + origins（includeLayers:true），bigint→number，敏感字段 redaction                                               |
 | PATCH  | `/api/codex/config`     | CodexConfigController | 结构化编辑 curated config 字段。Body: `{ edits: [{ keyPath, value }] }`。`value:null` 仅清除 allowlist 命中的 leaf key；写 user config.toml + reloadUserConfig |
 | GET    | `/api/codex/config/raw` | CodexConfigController | 读取 user config.toml 原始内容，返回 `{ filePath, content }`                                                                           |
-| PUT    | `/api/codex/config/raw` | CodexConfigController | 替换 user config.toml 内容并触发热加载。Body: `{ content }`                                                                            |
+| PUT    | `/api/codex/config/raw` | CodexConfigController | 独立 raw 修复。Body: `{ content, expectedContent? }`；返回 warnings、restartRequired、reloaded                                                                            |
 
 **Allowlist**: profile, model, review_model, model_provider, model_context_window, model_auto_compact_token_limit, instructions, developer_instructions, compact_prompt, model_reasoning_effort, model_reasoning_summary, model_verbosity, web_search, service_tier, approvals_reviewer；以及 leaf-only app paths：`apps._default.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode}`、`apps.<id>.{enabled,approvals_reviewer,destructive_enabled,open_world_enabled,default_tools_approval_mode,default_tools_enabled}`、`apps.<id>.tools.<tool>.{enabled,approval_mode}`。父级 table path 不开放，`apps.<id>.links.<link>` 不开放。
 
 `approvals_reviewer` 的 OpenAPI contract 包含 `user` / `auto_review` / `guardian_subagent`。具体 enum/value 校验由 app-server 的 `config/batchWrite` 执行；其结构化 `configValidationError` 会在单字段写入时转换为字段级 400。
+
+### Model Catalog
+
+`/api/codex/catalog` 提供 state、draft、effective、validate、seed、blockers、apply、default、restore、restart；完整请求契约与故障恢复语义见 [model-catalog.md](model-catalog.md)。
+目录变化只在显式应用并重启后生效。结构化和 raw config 保存返回 model/review_model 检查 warnings；raw read/write 不再依赖运行中的 app-server。
+`GET /api/codex/catalog` 的 `managed` 表示指针指向本后端拥有的槽位（`/default` 的前提）；`pointerApplied` 与 `PUT /api/codex/config/raw` 返回的 `restartRequired` 共用同一判据：拿配置当前指向的东西与**运行中 child 实际加载的**（`runningPaths`）比，而非与上一份文件比，否则两处会互相矛盾。无 child 时无从比较，返回 true。`runningPaths` 是关于实际加载内容的唯一陈述。
+
+`GET /api/codex/catalog/blockers` 返回 `scope:managedAppServer` 和 `limitations`；本连接保留工作含 `requestMethod` / `turnId`。`canApply` 不证明共享 Codex home 的外部客户端已空闲；压缩绑定到它自己开启的 turn（要求该 turn 在 ack 之后开始、压缩 item 是其首个 item、且该 turn 未被认领）并由该 turn 的 `turn/completed` 释放，`thread/shellCommand` 与已激活的 goal continuation 无法关联终态时继续拒绝。
 
 ### Codex Feedback
 
@@ -106,7 +114,7 @@
 
 | Method | Path          | Controller       | 说明                                 |
 | ------ | ------------- | ---------------- | ------------------------------------ |
-| GET    | `/api/models` | ModelsController | 列出可用模型。Query: `cursor, limit` |
+| GET    | `/api/models` | ModelsController | 列出可用模型。Query: `cursor, limit, includeHidden`（boolean） |
 
 每个模型逐项 advertise `supportedReasoningEfforts` 与 `serviceTiers`（`{ id, name, description }`，按目录顺序），外加 `defaultServiceTier`。
 

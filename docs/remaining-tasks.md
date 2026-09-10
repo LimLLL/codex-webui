@@ -340,3 +340,24 @@
 - [ ] Docker 启动前 smoke check：`codex --version`、schema 生成、`model/list` 可用性。
 - [x] HTTPS / 反向代理 / 内网暴露建议文档：README.md + README.en.md 新增 Nginx/Caddy 配置示例、WebSocket 升级、OnlyOffice publicBaseUrl 说明。
 - [x] `docker.md` 实现文档补齐并与实际 Dockerfile/docker-compose 保持同步。
+
+## Model catalog
+
+- [x] REST includeHidden 透传；完整 bundled baseline 及更新命令。
+- [x] Catalog seed/read/validate/draft/apply/default/restore/blockers/restart 与生成 SDK。
+- [x] 独立 raw config 修复、model/review_model warnings、原生校验、两槽发布与恢复代码原型。
+- [x] 接收后状态尚不可见的窗口：本连接 stdio 请求保留至可归属终态，补充而不替代上游查询；真实 turn/review/compact/queue/goal 集成测试验证。压缩**绑定到它自己开启的 turn**——上游四条手动路径全部显式发 `TurnStarted`、inline 自动压缩从不发（已读 0.153.2 源码确认），因此绑定要求「ack 之后开始 + 压缩是该 turn 首个 item + 该 turn 未被认领」三条同时成立，turn 记录按 thread 隔离且 `turn/started` 幂等；仍无法关联的 shellCommand 与 goal 工作拒绝应用至真实 thread/process close；外部客户端窗口明确返回在 limitations 并记入文档。
+- [x] 启动重试策略：瞬时故障保留 3 秒自愈；目录被拒、pending 恢复失败两类停在诊断上；旧 child 停止超时不立即重试（避免双进程），改为在该进程真正退出时补发一次。「意外退出」按 child 记账而非读 controlled 标志，避免受控重启停止超时后旧 child 退出触发普通重启、在 activation 仍 pending 时启动候选；`stop()` 超时不覆盖原始诊断。
+- [x] 目录文件读取有界：`readCatalogFile` 先 `stat` 拒绝非普通文件（FIFO 会无限期挂起）与超限大小，再异步读，避免用户可控路径拖垮负责修复它的进程。
+- [x] `restartRequired` 与 `pointerApplied` 统一以「运行中 child 实际加载的目录」为判据，不再按文件差异推断，两处不再互相矛盾。
+- [x] Thread 测试夹具收敛到 `threads.testing.ts`：三个 spec 各自手写 `v2.Thread` 字面量，每次协议升版都要各修一遍（0.153.2 加了 historyMode/model/reasoningEffort）。
+- [x] Catalog UI：列表、模板继承的全字段表单、raw JSON 与阻塞列表；字段集从模板派生以保住未知上游字段。
+- [x] 修复入口可达性：raw TOML 编辑器抽成 `raw-config-editor.tsx`，在 loading/error/success 下占据同一树位置（分支 early-return 会卸载它并丢掉未保存的 TOML）；目录区块提供 repairError，「重启 Codex」同时覆盖启动失败与「已配置但未生效」；恢复按钮条件与后端前置条件一致（含 pending 记录）。
+- [x] 编辑器可用性与并发：表单保留中途输入原文（否则 JSON/数字字段无法逐字符编辑），字段定义取自打开时的条目而非实时草稿，每次打开重置；条目按 slug 定位而非对象身份；脏草稿不被服务端内容顶替，并提供「放弃改动、载入已保存草稿」的出路，保存只替换实际发出的文本。
+- [x] 配置保存如实反映 `restartRequired` / `reloaded`，两条保存路径都显示目录 warning（结构化路径的 warning 单独留存，否则被保存后的失效重取冲掉），raw 保存带 `expectedContent`。
+- [x] 来源状态不夸大：`pointerApplied` 只在确知不一致时为 false，无 child 或无 user-level 指针不报「待重启」；无覆盖时只说「没有用户级覆盖」，不断言 bundled 生效。
+- [x] 阻塞项逃生指引与后端行为一致（暂停 goal / 浏览器关会话都不解除预留），并渲染后端 `limitations`。
+- [x] Model picker 接入 includeHidden，移除前端二次过滤；生效中的隐藏模型恒常列出。
+- [ ] 真实多 agent 调度和 approval/user-input 暂停组合的集成覆盖。
+- [ ] 修复页错误状态与 raw/表单切换往返的组件级渲染测试。
+- [ ] auto-resume 父子顺序恢复目前为全串行；兄弟会话可并行，加载会话多时恢复偏慢。

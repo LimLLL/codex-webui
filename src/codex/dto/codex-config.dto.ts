@@ -1,5 +1,6 @@
 /** DTOs for updating Codex config values via config/batchWrite. */
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CatalogWarningDto } from '../catalog/catalog.dto';
 import { APPROVAL_POLICY_VALUES, jsonValueSchema } from './v2/openapi.schema';
 
 export const SANDBOX_MODE_VALUES = [
@@ -116,6 +117,8 @@ export class UpdateCodexConfigDto {
 
 /** Full Codex config/read response after JSON-safe conversion and redaction. */
 export class CodexConfigResponseDto {
+  @ApiPropertyOptional({ type: () => [CatalogWarningDto] })
+  warnings?: CatalogWarningDto[];
   @ApiProperty(JSON_OBJECT_SCHEMA)
   config!: Record<string, unknown>;
 
@@ -136,10 +139,21 @@ export class RawConfigResponseDto {
 export class RawConfigWriteResponseDto {
   @ApiProperty()
   filePath!: string;
+  @ApiProperty({ type: () => [CatalogWarningDto] })
+  warnings!: CatalogWarningDto[];
+  @ApiProperty()
+  restartRequired!: boolean;
+  @ApiProperty()
+  reloaded!: boolean;
 }
 
 /** Request body for replacing raw user config.toml content. */
 export class UpdateRawConfigDto {
   @ApiProperty()
   content!: string;
+  @ApiPropertyOptional({
+    description:
+      'Exact raw content originally read, protecting concurrent edits.',
+  })
+  expectedContent?: string;
 }

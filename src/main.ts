@@ -29,6 +29,21 @@ async function bootstrap() {
     { bufferLogs: true },
   );
 
+  // A full catalog carries every model's instruction text, and JSON string
+  // escaping inflates it further, so those routes need far more than Fastify's
+  // 1 MiB default. config.toml does not: it stays near the default so a raw
+  // config save cannot be used to push an oversized body.
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .addHook('onRoute', (route) => {
+      if (route.url.startsWith('/api/codex/catalog')) {
+        route.bodyLimit = 18 * 1024 * 1024;
+      } else if (route.url === '/api/codex/config/raw') {
+        route.bodyLimit = 2 * 1024 * 1024;
+      }
+    });
+
   const settingsService = app.get(SettingsService);
   const uploadMaxBytes = settingsService.getNumberSetting(
     FILES_SETTING_KEYS.uploadMaxBytes,

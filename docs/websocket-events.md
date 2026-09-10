@@ -110,6 +110,22 @@ dev 模式 `console.debug`，不静默丢弃。
 - **Per-turn footer** (`turn-token-footer.tsx`): 每个完成的 turn 底部展示该 turn 的 input/output/cached/reasoning/total
 - **Context window donut** (`token-usage-ring.tsx`): ChatInput 发送按钮左侧的圆环进度图，展示 `total.totalTokens / modelContextWindow`，hover 展开完整 breakdown
 
+### `modelContextWindow` 的语义（上游行为，非本项目计算）
+
+`ThreadTokenUsage` 只有 `{ total, last, modelContextWindow }` 三个字段，本项目原样透传。该值是 app-server 上报的**有效**窗口，与 `config.toml` 里的 `model_context_window` 经常不相等：
+
+1. `model_context_window` 会被模型目录的 `max_context_window` 截断（`min(配置值, max_context_window)`）；
+2. 结果再乘以该模型的 `effective_context_window_percent`（当前普遍为 95）；
+3. `model_auto_compact_token_limit` 同样被夹到 `resolved_context_window × 90%`。
+
+模型目录里不存在的 slug（自定义 provider 的第三方模型）走 fallback 元数据，`context_window = max_context_window = 272000`、`effective_context_window_percent = 95`，因此有效窗口为 `272000 × 95% = 258400`（已实测），无论 `model_context_window` 写多大都被夹到这里。`model_auto_compact_token_limit` 走第 3 条的夹紧规则，同样是 `min(配置值, 上限)`——配置值更小时仍以配置值为准。该阈值不在协议里暴露，本文不给具体数字。
+
+注意「模型选择器里看不到」不等于「目录里没有」：bundled 目录中的条目可以是 `visibility: hide`，它有完整元数据，走的不是 fallback。
+
+上游把这一夹紧视为有意行为（openai/codex#11805、#19185、#38917），要突破需用 `model_catalog_json` 指向自定义模型目录。
+
+**压缩阈值不在协议里暴露**，因此 UI 不显示它：客户端重新推导等于把上游两个百分比常量硬编码进前端，上游一改就会静默说谎。弹窗改为用一行说明标注「窗口是 Codex 上报的有效值，可能小于 config.toml 的设置」。
+
 ## 已处理的 Server Request Methods
 
 | Method | 处理逻辑 |
@@ -148,3 +164,9 @@ dev 模式 `console.debug`，不静默丢弃。
 - 重试 error toast 按 `threadId:turnId:message` 在 5s 窗口内去重
 - `serverRequest/resolved` 可能先于 approval 到达，使用 per-thread pendingResolvedRequestIds 缓冲；approval 和 user-input 均按 requestId 定位
 - `subscribedThreadIds` 通过 `general.maxIdleSubscriptions` 做空闲 LRU 清理；active / loading / pending approval / pending user-input / buffered resolved-request thread 不会被清理
+
+### Catalog activation lifecycle
+
+目录应用复用 `codex.lifecycle` 的 restarting/unavailable/ready/autoResumeCompleted。ready 必须晚于 durable accepted；审批请求沿用 generation expiry。AutoResumeService 恢复期间占用 backend admission，先恢复父线程，再恢复 owner-controlled 子线程，全部保留 `recordActive:false`，不重放 turn。详见 [model-catalog.md](model-catalog.md)。
+
+本连接接收的 turn/review 工作在 transport 消费匹配的 `turn/completed` 后释放目录重启阻塞；`thread/status/changed:idle` 不释放。早于 RPC response 的终态同样处理。未知外部事件不构造本地接收事实；无法关联的手动压缩/goal continuation 等待真实 `thread/closed` 或 process close，没有定时过期。停进程前的拒绝不发 unavailable，避免错误取消现有审批。

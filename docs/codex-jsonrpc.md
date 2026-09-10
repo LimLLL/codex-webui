@@ -51,14 +51,18 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 - `nextId` 自增分配 request id
 - `pending` Map 存储 `{ resolve, reject, timer }`
+- `CodexAcceptedWork` 独立记录本 stdio 连接发送的工作；响应完成、超时、idle 查询不会释放。仅明确拒绝、可归属终态或真实 thread/process close 清理，补充目录重启活动检查，详见 [model-catalog.md](model-catalog.md)。
 - 默认 30s 超时，超时后自动 reject 并清理
 - `app/read` 与 `plugin/reconcile` 都走普通 request/response 路径；`plugin/reconcile` 不额外放宽 timeout，也不在 transport 层加锁。
 
 ## 进程管理 (CodexProcessManager)
 
-- `onModuleInit` 时 spawn `codex app-server --listen stdio://`
+- `onModuleInit` 先撤销未完成的 catalog activation，再 spawn `codex app-server --listen stdio://`
 - 执行 `initialize` → 等 response → 发 `initialized` notification
-- 进程退出时 3s 后自动重启
+- 健康进程意外退出时 3s 后尝试恢复；一次性的初始化失败同样按 3s 重试，否则卷挂载稍晚这类瞬时故障会变成永久宕机。三类明确不重试并保留 HTTP 修复入口和诊断：目录被拒（确定性失败）、pending 恢复失败（spawn 的前置条件）、旧 child 停止超时（可能仍存活，避免同一 Codex home 上跑两个 app-server）。第三类会把这次重试挂到该进程真正退出时补发一次，不至于因停止慢而彻底放弃自愈；离线修复的 `suspendRetries()` 会连这笔欠账一起清掉
+- 「意外退出」按 child 逐个记账，不读共享的 controlled 标志：受控重启在停止阶段超时会清掉该标志，之后旧 child 真正退出就会被误判为崩溃，从而在 activation 仍为 pending 时启动候选进程、绕过接受与回滚
+- 启动失败后的 `stop()` 超时不覆盖原始诊断（只记日志）：保留的 stderr 才是分类依据，顶替它会把确定性的目录拒绝重新变成重试循环
+- ready 在 initialize、config/read、model/list 检查及 catalog accepted 落盘后发出；受控重启与 rollback 见 [model-catalog.md](model-catalog.md)
 - `addListener()` 注册的事件监听会跨重启保留
 
 ## JSONL 审计日志
