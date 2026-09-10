@@ -263,3 +263,23 @@ upstream threads per request. It preserves collapse-before-pagination and adds
 milliseconds. No usable collection returns HTTP 503. See
 [conversation-recovery.md](conversation-recovery.md) for scheduling, failure behavior,
 filter measurements, and the global socket invalidation contract.
+
+## Pending human interactions
+
+`GET /api/pending-approvals` (optional comma-separated `threadIds`) returns
+`{ generation, requests }`. Every row retains its existing fields and adds
+`reviewSubject`: the full `{ type: 'fileChange', changes }` for a native file
+approval, or null when the upstream request parameters already carry the subject.
+Every file change retains `path`, `diff` and the structured `kind` union, including
+`move_path` for update/rename proposals. Live delivery carries the identical subject.
+
+A scope intersecting a deletion guard returns HTTP 409 with error code
+`threads.delete_in_progress`; it returns no partial snapshot. The browser must
+preserve held requests and retry after the global pending-change hint on release.
+Internal deletion planning is unaffected. `POST /api/pending-approvals/:requestId/respond`
+retains `{ result, clientId? }`, first-writer-wins CAS and existing errors. Its
+success retires the request globally after commit, without claiming execution
+success. A file approval whose `reviewSubject` is null accepts only `decline` or
+`cancel`; anything else returns HTTP 409 `approvals.subject_unavailable` and
+leaves the request pending, so no client can approve changes it could not show. See [approval.md](approval.md#global-attention-contract) for the complete
+REST/socket contract, including generation scope and neutral retirement.

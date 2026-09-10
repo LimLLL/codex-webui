@@ -69,6 +69,18 @@ export class ThreadDeletionRegistryService {
     return this.deletingThreadIds.has(threadId);
   }
 
+  /**
+   * Refuses a pending-set read whose scope intersects deletion. Returning a
+   * successful list with guarded rows omitted would incorrectly prove their
+   * resolution to existing clients. Empty/omitted scope means all threads.
+   */
+  assertPendingReadable(threadIds?: string[]): void {
+    const scope = threadIds?.length ? new Set(threadIds) : null;
+    for (const threadId of this.deletingThreadIds) {
+      if (!scope || scope.has(threadId)) this.assertMutable(threadId);
+    }
+  }
+
   /** Throws a stable conflict if a caller tries to mutate a doomed thread. */
   assertMutable(threadId: string): void {
     if (!this.isDeleting(threadId)) return;

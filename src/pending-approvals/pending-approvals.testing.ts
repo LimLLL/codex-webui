@@ -1,5 +1,9 @@
 /** Protocol fixtures for permission-bearing command approvals across both transports. */
-import type { ServerRequest, v2 } from '../codex/codex-schema';
+import type {
+  ServerNotification,
+  ServerRequest,
+  v2,
+} from '../codex/codex-schema';
 
 /** Includes structured path semantics and an intentionally omitted network grant. */
 export function permissionApprovalFixture() {
@@ -30,4 +34,44 @@ export function permissionApprovalFixture() {
     method: 'item/commandExecution/requestApproval',
     params,
   } satisfies ServerRequest;
+}
+
+/** A complete two-file subject, including a rename destination inside the kind union. */
+export function fileApprovalFixture(id: string | number = 31) {
+  const changes = [
+    {
+      path: '/workspace/alpha.txt',
+      kind: { type: 'update', move_path: '/workspace/renamed.txt' },
+      diff: '@@\n-ALPHA\n+ALPHA_EDITED\n',
+    },
+    { path: '/workspace/beta.txt', kind: { type: 'delete' }, diff: '-BETA\n' },
+  ] satisfies v2.FileUpdateChange[];
+  return {
+    changes,
+    started: {
+      method: 'item/started',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        item: {
+          id: 'patch1',
+          type: 'fileChange',
+          changes,
+          status: 'inProgress',
+        },
+      },
+    } satisfies ServerNotification,
+    request: {
+      id,
+      method: 'item/fileChange/requestApproval',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        itemId: 'patch1',
+        startedAtMs: 1,
+        reason: 'Review both files',
+        grantRoot: null,
+      },
+    } satisfies ServerRequest,
+  };
 }

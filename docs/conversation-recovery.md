@@ -152,8 +152,28 @@ Existing suppression and replay of the detailed server request are preserved.
 
 Pending reconciliation remains request-time ordered and multi-device responses
 remain first-writer-wins. A hint does not prove acceptance or resolution. The
-existing detailed `codex.notification` and `codex.serverRequest` contracts remain
-thread-scoped. Token/item deltas emit no global invalidation.
+existing detailed `codex.notification` contract remains thread-scoped. Human
+`codex.serverRequest` events now reach the authenticated room with additive
+`generation` and `reviewSubject` fields; `conversation.pending.resolved` retires
+them globally after committed resolution, cancellation or expiry. Token/item
+deltas emit no global invalidation.
+
+Pending reads return `{ generation, requests }`. A read whose scope intersects
+a deletion guard fails with HTTP 409 (`threads.delete_in_progress`), rather than
+returning a successful set with hidden rows that falsely appear resolved. Guard
+release emits another pending-change hint. Thus a successful response still
+covers its entire requested scope and a failed read resolves nothing. Internal
+deletion planning continues to inspect the underlying pending rows.
+
+File approvals include the complete proposed change set retained from the
+preceding item event. The pinned `file-approval-context` probe found the pending
+item absent from history despite other readable items, so opening history cannot
+replace this context. Retention follows live items and pending requests only;
+backend startup already expires old requests and needs no subject migration.
+See [approval.md](approval.md#global-attention-contract) for exact payloads and
+browser reconciliation obligations. Browser ingestion and subscription cleanup
+are separate work; receiving attention never acquires a transcript subscription
+or triggers session reattachment.
 
 ## Execution inventory and child replacement
 

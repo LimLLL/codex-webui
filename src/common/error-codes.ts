@@ -242,6 +242,7 @@ export const ErrorCode = {
 
   // ── Pending Approvals ──────────────────────────────────────────────
   approvals: {
+    subjectUnavailable: 'approvals.subject_unavailable',
     resultRequired: 'approvals.result_required',
     notFound: 'approvals.not_found',
     alreadyResolved: 'approvals.already_resolved',

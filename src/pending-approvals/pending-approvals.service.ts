@@ -14,9 +14,12 @@ import {
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import type {
+  PendingRequestResolvedDto,
+  PendingServerRequestsResponseDto,
   PendingServerRequestDto,
-  PendingServerRequestStatus,
 } from './dto/pending-approvals.dto';
+import { PendingApprovalContext } from './pending-approval-context';
+import { isHumanServerRequest } from './human-server-requests';
 
 @Injectable()
 export class PendingApprovalsService implements OnModuleInit {
@@ -24,6 +27,10 @@ export class PendingApprovalsService implements OnModuleInit {
   private readonly changed = new Subject<void>();
   /** Persisted pending-set changes, including cancellation and generation expiry. */
   readonly changes = this.changed.asObservable();
+  private readonly retired = new Subject<PendingRequestResolvedDto>();
+  /** Committed human-request retirements for authenticated-wide delivery. */
+  readonly resolvedRequests = this.retired.asObservable();
+  private readonly context = new PendingApprovalContext();
 
   constructor(
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
@@ -41,8 +48,17 @@ export class PendingApprovalsService implements OnModuleInit {
     });
   }
 
+  /** Old RPC requests cannot survive a complete backend restart. */
   onModuleInit(): void {
     this.expireAllPending('WebUI restarted');
+    this.context.clear();
+  }
+
+  /** Captures approval subjects before forwarding item events and observes request retirement. */
+  observeNotification(notification: ServerNotification): void {
+    this.context.observe(notification, this.codexManager.getGeneration());
+    if (notification.method === 'serverRequest/resolved')
+      this.markResolved(notification);
   }
 
   /** Persists a server request before it is emitted to WebSocket subscribers. */
@@ -54,8 +70,13 @@ export class PendingApprovalsService implements OnModuleInit {
     };
     const params = raw.params as Record<string, unknown> | undefined;
     const threadId =
-      typeof params?.threadId === 'string' ? params.threadId : null;
+      typeof params?.threadId === 'string'
+        ? params.threadId
+        : typeof params?.conversationId === 'string'
+          ? params.conversationId
+          : null;
     if (!threadId || !params || raw.id == null || !raw.method) return null;
+    if (!isHumanServerRequest(raw.method)) return null;
 
     const now = Date.now();
     const generation = this.codexManager.getGeneration();
@@ -70,7 +91,12 @@ export class PendingApprovalsService implements OnModuleInit {
       requestId,
       threadId,
       turnId: typeof params.turnId === 'string' ? params.turnId : null,
-      itemId: typeof params.itemId === 'string' ? params.itemId : null,
+      itemId:
+        typeof params.itemId === 'string'
+          ? params.itemId
+          : typeof params.callId === 'string'
+            ? params.callId
+            : null,
       method: raw.method,
       paramsJson: JSON.stringify(params),
       status: 'pending',
@@ -102,6 +128,27 @@ export class PendingApprovalsService implements OnModuleInit {
       })
       .run();
 
+    // SQLite writes and capture are synchronous: no browser read can interleave
+    // before the hint/return below. Associate only after a successful write, so
+    // a failed insert/upsert cannot overwrite the last committed subject.
+    if (raw.method === 'item/fileChange/requestApproval') {
+      if (
+        !this.context.capture(
+          generation,
+          requestId,
+          threadId,
+          row.turnId,
+          row.itemId,
+        )
+      ) {
+        this.logger.error(
+          `File approval published without its change set: request=${requestId} thread=${threadId} turn=${String(row.turnId)} item=${String(row.itemId)}`,
+        );
+      }
+    } else {
+      this.context.forgetRequest(generation, requestId);
+    }
+
     // The gateway also withholds the live request while deletion is pending.
     // Its guard-release signal publishes requests belonging to surviving threads.
     if (!this.deletionRegistry.isDeleting(threadId)) this.changed.next();
@@ -130,6 +177,20 @@ export class PendingApprovalsService implements OnModuleInit {
             .where(statusFilter)
             .all();
     return rows.map((row) => this.toDto(row));
+  }
+
+  /**
+   * Reads a complete pending set for a browser. A deletion conflict returns no
+   * snapshot, preserving the existing rule that failed reads resolve nothing.
+   * Internal deletion planning uses listPending so it can still see guarded rows.
+   */
+  readPending(threadIds?: string[]): PendingServerRequestsResponseDto {
+    const scope = threadIds?.map((id) => id.trim()).filter(Boolean);
+    this.deletionRegistry.assertPendingReadable(scope);
+    return {
+      generation: this.codexManager.getGeneration(),
+      requests: this.listPending(scope),
+    };
   }
 
   /** Responds to one pending request. First writer wins across devices. */
@@ -163,6 +224,26 @@ export class PendingApprovalsService implements OnModuleInit {
       );
     }
     this.deletionRegistry.assertMutable(row.threadId);
+    // Projection must succeed before the irreversible transport write. A corrupt
+    // params JSON must not roll back SQLite after app-server received a decision.
+    const projected = this.toDto(row);
+    if (
+      row.method === 'item/fileChange/requestApproval' &&
+      projected.reviewSubject === null
+    ) {
+      const decision =
+        typeof result === 'object' && result !== null && 'decision' in result
+          ? result.decision
+          : undefined;
+      // Enforce this at the common REST/socket boundary; old clients still draw
+      // Accept buttons. Decline/cancel preserve liveness without approving unseen changes.
+      if (decision !== 'decline' && decision !== 'cancel') {
+        throw BusinessException.conflict(
+          ErrorCode.approvals.subjectUnavailable,
+          'Cannot approve a file change without its change set; decline or cancel the request.',
+        );
+      }
+    }
 
     this.catalogAdmission.assertOpen();
     const client = this.codexManager.getClient();
@@ -201,16 +282,10 @@ export class PendingApprovalsService implements OnModuleInit {
 
       client.respondToServerRequest(this.parseRequestId(row.requestId), result);
 
-      return this.toDto({
-        ...row,
-        status: 'resolved',
-        resolvedBy: clientId ?? null,
-        resolvedAt: now,
-        updatedAt: now,
-      });
+      return { ...projected, status: 'resolved' as const, updatedAt: now };
     });
     // Publish only after the transaction commits; rollback must emit nothing.
-    this.changed.next();
+    this.publishRetired([resolvedRequest], 'resolved');
     return resolvedRequest;
   }
 
@@ -221,7 +296,7 @@ export class PendingApprovalsService implements OnModuleInit {
     if (requestId == null) return;
     const generation = this.codexManager.getGeneration();
     const now = Date.now();
-    const result = this.db
+    const rows = this.db
       .update(pendingServerRequests)
       .set({ status: 'resolved', updatedAt: now, resolvedAt: now })
       .where(
@@ -234,8 +309,9 @@ export class PendingApprovalsService implements OnModuleInit {
           eq(pendingServerRequests.status, 'pending'),
         ),
       )
-      .run();
-    if (result.changes > 0) this.changed.next();
+      .returning()
+      .all();
+    this.publishRetired(rows, 'resolved');
   }
 
   /** Marks pending requests cancelled because their thread is being interrupted/deleted. */
@@ -276,7 +352,7 @@ export class PendingApprovalsService implements OnModuleInit {
     this.logger.debug(
       `Cancelled pending requests for deleting threads: count=${rows.length} reason=${reason}`,
     );
-    this.changed.next();
+    this.publishRetired(rows, 'cancelled');
     return rows.map((row) =>
       this.toDto({
         ...row,
@@ -290,26 +366,30 @@ export class PendingApprovalsService implements OnModuleInit {
   /** Expires all pending rows for an app-server generation. */
   expireGeneration(generation: number, reason: string): void {
     this.updatePendingStatus(generation, 'expired', reason);
+    this.context.forgetGeneration(generation);
   }
 
+  /** Expires rows left by the old backend before any new pending baseline is served. */
   private expireAllPending(reason: string): void {
     const now = Date.now();
-    const result = this.db
+    const rows = this.db
       .update(pendingServerRequests)
       .set({ status: 'expired', updatedAt: now, resolvedAt: now })
       .where(eq(pendingServerRequests.status, 'pending'))
-      .run();
-    if (result.changes > 0) this.changed.next();
+      .returning()
+      .all();
+    this.publishRetired(rows, 'expired');
     this.logger.debug(`Expired stale pending requests: ${reason}`);
   }
 
+  /** Retires one generation in SQLite before broadcasting its neutral terminal state. */
   private updatePendingStatus(
     generation: number,
-    status: PendingServerRequestStatus,
+    status: PendingRequestResolvedDto['status'],
     reason: string,
   ): void {
     const now = Date.now();
-    const result = this.db
+    const rows = this.db
       .update(pendingServerRequests)
       .set({ status, updatedAt: now, resolvedAt: now })
       .where(
@@ -318,24 +398,46 @@ export class PendingApprovalsService implements OnModuleInit {
           eq(pendingServerRequests.status, 'pending'),
         ),
       )
-      .run();
-    if (result.changes > 0) this.changed.next();
+      .returning()
+      .all();
+    this.publishRetired(rows, status);
     this.logger.debug(
       `Marked pending requests ${status}: generation=${generation} reason=${reason}`,
     );
   }
 
+  /** Publishes only committed transitions, then releases their request-specific subjects. */
+  private publishRetired(
+    rows: Array<{
+      generation: number;
+      requestId: string;
+      threadId: string;
+      method: string;
+    }>,
+    status: PendingRequestResolvedDto['status'],
+  ): void {
+    for (const row of rows) {
+      this.context.forgetRequest(row.generation, row.requestId);
+      if (isHumanServerRequest(row.method)) {
+        this.retired.next({
+          generation: row.generation,
+          requestId: row.requestId,
+          threadId: row.threadId,
+          status,
+        });
+      }
+    }
+    if (rows.length > 0) this.changed.next();
+  }
+
+  /** Preserves the existing wire convention for numeric versus opaque request IDs. */
   private parseRequestId(requestId: string): string | number {
     return /^\d+$/.test(requestId) ? Number(requestId) : requestId;
   }
 
+  /** Combines unchanged persisted parameters with the request's retained review subject. */
   private toDto(row: PendingServerRequestRow): PendingServerRequestDto {
-    let params: Record<string, unknown> = {};
-    try {
-      params = JSON.parse(row.paramsJson) as Record<string, unknown>;
-    } catch {
-      params = {};
-    }
+    const params = JSON.parse(row.paramsJson) as Record<string, unknown>;
     return {
       generation: row.generation,
       requestId: row.requestId,
@@ -344,7 +446,8 @@ export class PendingApprovalsService implements OnModuleInit {
       itemId: row.itemId,
       method: row.method,
       params,
-      status: row.status as PendingServerRequestStatus,
+      reviewSubject: this.context.read(row.generation, row.requestId),
+      status: row.status as PendingServerRequestDto['status'],
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

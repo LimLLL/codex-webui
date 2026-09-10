@@ -13,7 +13,8 @@ codex app-server (server request, 有 id)
   → CodexProcessManager event listener
   → ThreadsGateway.handleCodexServerRequest()
   → PendingApprovalsService.recordServerRequest() 写入 pending_server_requests
-  → 若 thread 正在删除则仍记为 pending、但不广播（暂存内存，守卫释放时按需重放）；否则 Socket.IO emit 'codex.serverRequest' to thread room
+  → 文件审批先关联完整 reviewSubject，再写入并发布；原始 params 不变
+  → 若 thread 正在删除则仍记为 pending、但不广播（含主体暂存，守卫释放时按需重放）；否则 Socket.IO emit 'codex.serverRequest' to authenticated room
   → 前端 useCodexSocket 监听
   → 共享 runtime parser 校验 kind / approvalId / identities / availableDecisions / amendments（lib/approval-parsers.ts）
   → addApprovalForThread() 写入对应 thread runtime
@@ -155,3 +156,130 @@ pending-set read after committed creation/resolution, cancellation, and expiry
 held by deletion defers the hint until guard release. Existing persistence, CAS
 responses, suppression and request-time reconciliation remain the authority.
 See [conversation-recovery.md](conversation-recovery.md).
+
+## Global attention contract
+
+Room membership selects transcript consumers only. Human requests are emitted
+once to the authenticated audience on `/ws`, without joining a thread room or
+resuming a conversation. The original `codex.serverRequest` fields remain intact:
+
+```ts
+{
+  id: number | string; // original JSON-RPC ID
+  method: string;
+  params: Record<string, unknown>; // unchanged upstream parameters
+  generation: number;
+  reviewSubject: {
+    type: 'fileChange';
+    changes: Array<{
+      path: string;
+      kind: { type: 'add' } | { type: 'delete' }
+        | { type: 'update'; move_path: string | null };
+      diff: string;
+    }>;
+  } | null;
+}
+```
+
+Only `item/fileChange/requestApproval` needs the additional subject. Commands
+(including `writeStdin` and network-only approvals), user-input questions,
+permission requests, MCP elicitations and the legacy `applyPatchApproval` /
+`execCommandApproval` requests carry their subjects in `params`, and use
+`reviewSubject: null`. The explicit classification excludes dynamic tool calls,
+account token refresh, attestation, current-time reads and unknown methods from
+this gateway's human-request channel and pending inventory. It does not implement
+a new responder for machine-facing requests. Backend delivery support does not
+imply that every method already has a browser renderer.
+
+The pinned `file-approval-context` probe observed one approval spanning two files
+and the pending item absent from history while other items remained readable.
+The backend therefore captures the preceding file item's **entire** change set,
+preserving object-union kinds and rename destinations. Capture follows the
+committed write, so a failed insert cannot overwrite the last committed subject
+and a replacement row that captures nothing drops the previous one rather than
+inheriting it. Both are synchronous, so no read interleaves before the hint.
+
+That capture depends on `item/started` reaching the backend ahead of the approval
+on the same wire, which is **observed rather than promised by the protocol**, so
+it is not what liveness rests on. A missing item is logged as an error and the
+request is published anyway with `reviewSubject: null` — never a fabricated
+empty subject and never a history fallback. Withholding it instead would leave
+app-server waiting on an answer no browser was ever offered.
+
+A null subject on a file approval is therefore a state the protocol can reach,
+and it is enforced rather than merely documented: `respondToRequest` refuses any
+decision other than `decline` or `cancel` with HTTP 409
+`approvals.subject_unavailable`. The check sits at the shared service boundary,
+so the REST route and the legacy socket response path are both covered — a
+client still drawing an Accept button cannot approve changes nobody could see.
+Clients should present only Decline in that state; the backend does not rely on
+them to. This is the same rule that forbids approving a change set rendered only
+in part.
+
+Only in-flight file proposals and pending request subjects are retained; item,
+turn, thread and generation cleanup remove candidates, while a pending request
+keeps its subject through deletion suppression until it is retired. Retention is
+process-local because backend startup already expires all old RPC requests. No
+database migration or durable transcript cache is required.
+
+`GET /api/pending-approvals?threadIds=...` returns:
+
+```ts
+{
+  generation: number;
+  requests: Array<{
+    generation: number;
+    requestId: string;
+    threadId: string;
+    turnId: string | null;
+    itemId: string | null;
+    method: string;
+    params: Record<string, unknown>;
+    reviewSubject: FileChangeApprovalSubjectDto | null; // same subject as live
+    status: 'pending';
+    createdAt: number;
+    updatedAt: number;
+  }>;
+}
+```
+
+Omitted/empty `threadIds` means all threads; supplied IDs restrict the complete
+read scope. Times are Unix milliseconds. If any thread in that scope is under
+deletion, the endpoint returns HTTP **409**, error code
+`threads.delete_in_progress`, with **no snapshot**. It never returns a successful
+partial list by hiding guarded rows. Clients retain their pending state on that
+failure and refresh on the guard-release `conversation.pending.changed` hint.
+An unrelated scoped read and global live delivery for other threads continue.
+Internal deletion planning still reads the guarded rows. Releasing a guard
+replays surviving requests with the same subject to the authenticated audience;
+cancelled or expired requests, including reused IDs from another generation, are
+not replayed.
+
+Committed retirement emits `conversation.pending.resolved` globally:
+
+```ts
+{
+  generation: number;
+  requestId: string;
+  threadId: string;
+  status: 'resolved' | 'cancelled' | 'expired';
+}
+```
+
+This covers successful CAS responses, upstream resolution, deletion cancellation,
+child-generation expiry and startup expiry. A failed response write rolls back
+without retirement or an invalidation. An upstream resolution following a local
+response does not emit a duplicate retirement. `resolved` means no longer
+answerable, **not accepted**, and says nothing about item execution success.
+Existing per-room `codex.notification` delivery, including the raw
+`serverRequest/resolved`, is retained for compatibility. Both content-free global
+hints also remain; only the hints are sent at authentication, not request replay.
+
+The browser must normalize live IDs with `String(id)` and scope identities by
+generation. Generation is local to one backend lifetime, not a replay cursor.
+Use the same idempotent ingestion for live and recovered requests, preserve local
+answers/drafts, and let retirement defeat stale snapshots. Successful absence
+resolves only requests held before the read and unchanged since then; newer
+overlapping reads supersede older evidence. An error resolves nothing. The
+backend contract is available now; browser ingestion and notification decisions
+are separate integration work.

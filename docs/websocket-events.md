@@ -40,9 +40,10 @@ codex app-server (stdout JSONL)
 | 事件 | Payload | 作用 |
 |------|---------|------|
 | `codex.notification` | Codex notification（turn error 已去 steer） | 所有通知统一事件名 |
-| `codex.serverRequest` | `{ id, method, params }` | 需要前端回复的请求 |
+| `codex.serverRequest` | `{ id, method, params, generation, reviewSubject }` | 完整人机交互请求，面向所有已认证浏览器 |
 | `conversation.overview.changed` | `{ generation }` | Authenticated global overview/freshness invalidation; no transcript payload |
 | `conversation.pending.changed` | `{ generation }` | Authenticated global pending-set invalidation, including expiry/cancellation |
+| `conversation.pending.resolved` | `{ generation, requestId, threadId, status }` | Authenticated global committed retirement: resolved/cancelled/expired; never implies acceptance |
 | `fs.changed` | `{ event, path }` | 文件变更通知 (add/change/unlink/addDir/unlinkDir) |
 | `terminal.output` | `{ terminalId, data }` | PTY 输出 |
 | `terminal.exit` | `{ terminalId, exitCode }` | PTY 进程退出 |
@@ -149,7 +150,7 @@ dev 模式 `console.debug`，不静默丢弃。
 **删除期间的抑制与重放**：thread 处于删除守卫内时，gateway 仍照常写入 SQLite（保持 `pending`），但**不广播**该 thread 的 server request，并把它暂存在内存里。守卫释放时逐条重放：只重放 DB 里仍为 `pending` 的（真正被删掉的 thread 其待审批已在本地清理阶段置为 `cancelled`）。中止的删除因此不会留下"app-server 还在等、UI 却永远看不到"的请求。详见 [approval.md](approval.md)。
 
 用户提交 UserInputCard → `pendingApprovalsRespond` REST → 后端回传 app-server。
-`serverRequest/resolved` 通知 → 按 requestId 匹配审批/用户输入卡片 → 标记为 resolved。
+`serverRequest/resolved` 通知继续向 thread room 投递；全局 `conversation.pending.resolved` 独立覆盖已提交的响应、上游解决、删除取消和重启过期。客户端按 generation + requestId 幂等处理并保持中性解决状态。
 
 ## Thread 切换流程（多 Thread 并发）
 
@@ -199,3 +200,12 @@ signals above require authentication but no conversation-room membership. They
 are also emitted after authentication to request fresh baselines. The complete
 server contract and durability limits are in
 [conversation-recovery.md](conversation-recovery.md).
+
+Human attention now has independent authenticated-wide delivery. File approvals
+carry the full retained change set, not a replayed item stream; machine-facing
+server requests are excluded explicitly. Deletion suppression/replay includes
+the subject. Recovery reads fail with HTTP 409 while deletion intersects their
+scope so temporary suppression cannot become false resolution. Exact payloads,
+classification and client ordering rules are in
+[approval.md](approval.md#global-attention-contract). Browser integration remains
+separate from this backend delivery contract.

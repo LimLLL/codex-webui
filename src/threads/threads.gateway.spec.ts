@@ -14,6 +14,9 @@ describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
   const metadataChanges = new Subject<void>();
   const pendingChanges = new Subject<void>();
+  const pendingResolved = new Subject<
+    import('../pending-approvals/dto/pending-approvals.dto').PendingRequestResolvedDto
+  >();
   const branchChanges = new Subject<void>();
   const listeners: Record<string, (...args: unknown[]) => void> = {};
 
@@ -33,8 +36,10 @@ describe('ThreadsGateway', () => {
 
   const mockPendingApprovals = {
     changes: pendingChanges,
+    resolvedRequests: pendingResolved,
     recordServerRequest: vi.fn(),
     markResolved: vi.fn(),
+    observeNotification: vi.fn(),
     respondToRequest: vi.fn(),
     listPending: vi.fn().mockReturnValue([]),
   };
@@ -88,6 +93,20 @@ describe('ThreadsGateway', () => {
     vi.clearAllMocks();
     mockServer.to.mockReturnThis();
     mockDeletionRegistry.isDeleting.mockReturnValue(false);
+    mockPendingApprovals.recordServerRequest.mockImplementation(
+      (request: {
+        id: number | string;
+        method: string;
+        params: Record<string, unknown>;
+      }) => ({
+        generation: 1,
+        requestId: String(request.id),
+        threadId: request.params.threadId,
+        method: request.method,
+        params: request.params,
+        reviewSubject: null,
+      }),
+    );
   });
 
   afterEach(() => gateway.onModuleDestroy());
@@ -107,10 +126,11 @@ describe('ThreadsGateway', () => {
     expect(mockPendingApprovals.recordServerRequest).toHaveBeenCalledWith(
       request,
     );
-    expect(mockServer.emit).toHaveBeenCalledWith(
-      'codex.serverRequest',
-      request,
-    );
+    expect(mockServer.emit).toHaveBeenCalledWith('codex.serverRequest', {
+      ...request,
+      generation: 1,
+      reviewSubject: null,
+    });
     expect(request.params).not.toHaveProperty('additionalPermissions.network');
   });
 
@@ -215,12 +235,16 @@ describe('ThreadsGateway', () => {
 
     // Still pending means the delete aborted: cleanup cancels these rows for
     // threads it actually destroyed.
-    mockPendingApprovals.listPending.mockReturnValue([{ requestId: '7' }]);
+    mockPendingApprovals.listPending.mockReturnValue([
+      { generation: 1, requestId: '7' },
+    ]);
     releaseListener?.(['t1']);
 
-    expect(mockServer.to).toHaveBeenCalledWith('thread:t1');
+    expect(mockServer.to).toHaveBeenCalledWith('webui:authenticated');
     expect(mockServer.emit).toHaveBeenCalledWith('codex.serverRequest', {
       id: 7,
+      generation: 1,
+      reviewSubject: null,
       method: 'item/commandExecution/requestApproval',
       params: { threadId: 't1', turnId: 'turn1', itemId: 'item1' },
     });

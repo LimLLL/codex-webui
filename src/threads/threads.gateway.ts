@@ -20,6 +20,8 @@ import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
+import { isHumanServerRequest } from '../pending-approvals/human-server-requests';
+import type { PendingServerRequestEvent } from '../pending-approvals/dto/pending-approvals.dto';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { projectNotificationForClient } from '../turn-errors/turn-error-projection';
 import { ThreadMetadataService } from './thread-metadata.service';
@@ -35,11 +37,7 @@ export interface ConversationChangeSignal {
 }
 
 /** A server request held back while its thread was inside a delete. */
-interface SuppressedServerRequest {
-  id: number | string;
-  method: string;
-  params: Record<string, unknown>;
-}
+type SuppressedServerRequest = PendingServerRequestEvent;
 
 export type CodexSocketLifecycleEvent =
   | { type: 'appServerRestarting'; generation: number; delayMs: number }
@@ -95,6 +93,26 @@ export class ThreadsGateway
         this.emitChange('conversation.overview.changed');
       }),
     );
+    this.changes.add(
+      this.pendingApprovals.resolvedRequests.subscribe((request) => {
+        // Retire withheld copies too: an old generation's request ID can be
+        // reused, and replay must never borrow that newer request's liveness.
+        const held = this.suppressedRequests.get(request.threadId);
+        if (held) {
+          const remaining = held.filter(
+            (entry) =>
+              entry.generation !== request.generation ||
+              String(entry.id) !== request.requestId,
+          );
+          if (remaining.length)
+            this.suppressedRequests.set(request.threadId, remaining);
+          else this.suppressedRequests.delete(request.threadId);
+        }
+        this.server
+          .to(AUTHENTICATED_ROOM)
+          .emit('conversation.pending.resolved', request);
+      }),
+    );
     this.codexManager.addListener(
       'notification',
       (notification: ServerNotification) => {
@@ -106,10 +124,12 @@ export class ThreadsGateway
       this.handleCodexServerRequest(request);
     });
 
-    this.deletionRegistry.onRelease((threadIds) => {
-      this.replaySuppressedRequests(threadIds);
-      this.emitChange('conversation.pending.changed');
-    });
+    this.changes.add(
+      this.deletionRegistry.onRelease((threadIds) => {
+        this.replaySuppressedRequests(threadIds);
+        this.emitChange('conversation.pending.changed');
+      }),
+    );
 
     this.logger.log('ThreadsGateway initialized');
   }
@@ -184,9 +204,7 @@ export class ThreadsGateway
    * Extracts threadId from notification params and emits to the room.
    */
   private handleCodexNotification(notification: ServerNotification): void {
-    if (notification.method === 'serverRequest/resolved') {
-      this.pendingApprovals.markResolved(notification);
-    }
+    this.pendingApprovals.observeNotification(notification);
 
     const params = notification.params as Record<string, unknown> | undefined;
     const threadId = params?.['threadId'] as string | undefined;
@@ -222,13 +240,12 @@ export class ThreadsGateway
       const stillPending = new Set(
         this.pendingApprovals
           .listPending([threadId])
-          .map((row) => row.requestId),
+          .map((row) => `${row.generation}:${row.requestId}`),
       );
       for (const request of held) {
-        if (!stillPending.has(String(request.id))) continue;
-        this.server
-          .to(`thread:${threadId}`)
-          .emit('codex.serverRequest', request);
+        if (!stillPending.has(`${request.generation}:${String(request.id)}`))
+          continue;
+        this.server.to(AUTHENTICATED_ROOM).emit('codex.serverRequest', request);
         this.logger.log(
           `Replayed suppressed server request ${String(request.id)} for thread ${threadId}`,
         );
@@ -237,15 +254,27 @@ export class ThreadsGateway
   }
 
   /**
-   * Routes Codex server-initiated requests (e.g. approval) to subscribed clients.
-   * The first client to respond wins; response is forwarded back to app-server.
+   * Publishes complete human requests to every authenticated browser, once.
+   * Machine-facing requests are not user decisions and never enter this channel.
+   * The first client to respond still wins through the persisted CAS operation.
    */
   private handleCodexServerRequest(request: ServerRequest): void {
-    const params = request.params as Record<string, unknown> | undefined;
-    const threadId = params?.['threadId'] as string | undefined;
-    const requestId = (request as unknown as { id: number | string }).id;
-
-    this.pendingApprovals.recordServerRequest(request);
+    if (!isHumanServerRequest(request.method)) {
+      this.logger.debug(
+        `Excluded machine-facing server request: ${request.method}`,
+      );
+      return;
+    }
+    const pending = this.pendingApprovals.recordServerRequest(request);
+    if (!pending) return;
+    const threadId = pending.threadId;
+    const event: PendingServerRequestEvent = {
+      id: request.id,
+      method: request.method,
+      params: pending.params,
+      generation: pending.generation,
+      reviewSubject: pending.reviewSubject,
+    };
 
     // Suppressed rather than terminalized: the row stays pending so an aborted
     // delete leaves the request answerable, but there is no point surfacing a
@@ -253,24 +282,12 @@ export class ThreadsGateway
     // guard's release can put it back on screen if the delete does abort.
     if (threadId && this.deletionRegistry.isDeleting(threadId)) {
       const held = this.suppressedRequests.get(threadId) ?? [];
-      held.push({
-        id: requestId,
-        method: request.method,
-        params: params ?? {},
-      });
+      held.push(event);
       this.suppressedRequests.set(threadId, held);
       return;
     }
 
-    const target = threadId
-      ? this.server.to(`thread:${threadId}`)
-      : this.server;
-
-    target.emit('codex.serverRequest', {
-      id: requestId,
-      method: request.method,
-      params: request.params,
-    });
+    this.server.to(AUTHENTICATED_ROOM).emit('codex.serverRequest', event);
   }
 
   /**
