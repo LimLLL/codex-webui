@@ -1,14 +1,20 @@
+import { Subject } from 'rxjs';
+import { ThreadMetadataService } from './thread-metadata.service';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThreadsGateway } from './threads.gateway';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { AuthService } from '../auth/auth.service';
-import { ActiveThreadRegistryService } from './active-thread-registry.service';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { permissionApprovalFixture } from '../pending-approvals/pending-approvals.testing';
 
 describe('ThreadsGateway', () => {
   let gateway: ThreadsGateway;
+  const metadataChanges = new Subject<void>();
+  const pendingChanges = new Subject<void>();
+  const branchChanges = new Subject<void>();
   const listeners: Record<string, (...args: unknown[]) => void> = {};
 
   const mockManager = {
@@ -18,19 +24,15 @@ describe('ThreadsGateway', () => {
       },
     ),
     getClient: vi.fn(),
+    getGeneration: () => 1,
   };
 
   const mockAuthService = {
     authenticateToken: vi.fn(),
   };
 
-  const mockActiveThreads = {
-    subscribe: vi.fn(),
-    unsubscribe: vi.fn(),
-    removeSocket: vi.fn(),
-  };
-
   const mockPendingApprovals = {
+    changes: pendingChanges,
     recordServerRequest: vi.fn(),
     markResolved: vi.fn(),
     respondToRequest: vi.fn(),
@@ -57,9 +59,20 @@ describe('ThreadsGateway', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ThreadsGateway,
+        {
+          provide: ThreadMetadataService,
+          useValue: { changes: metadataChanges },
+        },
+        {
+          provide: ConversationBranchesService,
+          useValue: { changes: branchChanges },
+        },
+        {
+          provide: ConversationBranchMutationsService,
+          useValue: { changes: branchChanges },
+        },
         { provide: CodexProcessManager, useValue: mockManager },
         { provide: AuthService, useValue: mockAuthService },
-        { provide: ActiveThreadRegistryService, useValue: mockActiveThreads },
         { provide: PendingApprovalsService, useValue: mockPendingApprovals },
         {
           provide: ThreadDeletionRegistryService,
@@ -77,13 +90,14 @@ describe('ThreadsGateway', () => {
     mockDeletionRegistry.isDeleting.mockReturnValue(false);
   });
 
+  afterEach(() => gateway.onModuleDestroy());
+
   it('should join room on subscribe', () => {
     const client = { id: 'c1', join: vi.fn() };
     const result = gateway.handleSubscribe(client as never, {
       threadId: 't1',
     });
     expect(client.join).toHaveBeenCalledWith('thread:t1');
-    expect(mockActiveThreads.subscribe).toHaveBeenCalledWith('c1', 't1');
     expect(result).toEqual({ ok: true });
   });
 
@@ -106,7 +120,6 @@ describe('ThreadsGateway', () => {
       threadId: 't1',
     });
     expect(client.leave).toHaveBeenCalledWith('thread:t1');
-    expect(mockActiveThreads.unsubscribe).toHaveBeenCalledWith('c1', 't1');
     expect(result).toEqual({ ok: true });
   });
 
@@ -224,7 +237,14 @@ describe('ThreadsGateway', () => {
     mockPendingApprovals.listPending.mockReturnValue([]);
     releaseListener?.(['t1']);
 
-    expect(mockServer.emit).not.toHaveBeenCalled();
+    expect(mockServer.emit).not.toHaveBeenCalledWith(
+      'codex.serverRequest',
+      expect.anything(),
+    );
+    expect(mockServer.emit).toHaveBeenCalledWith(
+      'conversation.pending.changed',
+      { generation: 1 },
+    );
   });
 
   it('should accept connection with valid token', async () => {
@@ -235,6 +255,8 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c1',
       handshake: { auth: { token: 'test-api-key' }, headers: {} },
+      join: vi.fn(),
+      emit: vi.fn(),
       disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
@@ -249,6 +271,8 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c2',
       handshake: { auth: { token: 'wrong-key' }, headers: {} },
+      join: vi.fn(),
+      emit: vi.fn(),
       disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
@@ -263,6 +287,8 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c3',
       handshake: { auth: {}, headers: {} },
+      join: vi.fn(),
+      emit: vi.fn(),
       disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
@@ -280,6 +306,8 @@ describe('ThreadsGateway', () => {
         auth: {},
         headers: { authorization: 'Bearer some-jwt-token' },
       },
+      join: vi.fn(),
+      emit: vi.fn(),
       disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
@@ -294,6 +322,8 @@ describe('ThreadsGateway', () => {
     const client = {
       id: 'c5',
       handshake: { auth: { token: 'Bearer some-jwt-token' }, headers: {} },
+      join: vi.fn(),
+      emit: vi.fn(),
       disconnect: vi.fn(),
     };
     await gateway.handleConnection(client as never);
@@ -310,6 +340,30 @@ describe('ThreadsGateway', () => {
       '42',
       { approved: true },
       'socket-1',
+    );
+  });
+  it('broadcasts content-free overview and pending invalidations only to authenticated sockets', () => {
+    metadataChanges.next();
+    expect(mockServer.to).toHaveBeenLastCalledWith('webui:authenticated');
+    expect(mockServer.emit).toHaveBeenLastCalledWith(
+      'conversation.overview.changed',
+      { generation: 1 },
+    );
+    pendingChanges.next();
+    expect(mockServer.emit).toHaveBeenCalledWith(
+      'conversation.pending.changed',
+      { generation: 1 },
+    );
+  });
+
+  it('does not turn item output into overview refreshes', () => {
+    listeners.notification({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 't', delta: 'output' },
+    });
+    expect(mockServer.emit).not.toHaveBeenCalledWith(
+      'conversation.overview.changed',
+      expect.anything(),
     );
   });
 });

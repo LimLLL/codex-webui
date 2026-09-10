@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { CatalogAdmissionService } from '../codex/catalog/catalog-admission.service';
 import { BusinessException } from '../common/business.exception';
 import { ErrorCode } from '../common/error-codes';
+import { Subject } from 'rxjs';
 import { and, eq, inArray } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
@@ -20,6 +21,9 @@ import type {
 @Injectable()
 export class PendingApprovalsService implements OnModuleInit {
   private readonly logger = new Logger(PendingApprovalsService.name);
+  private readonly changed = new Subject<void>();
+  /** Persisted pending-set changes, including cancellation and generation expiry. */
+  readonly changes = this.changed.asObservable();
 
   constructor(
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
@@ -98,6 +102,9 @@ export class PendingApprovalsService implements OnModuleInit {
       })
       .run();
 
+    // The gateway also withholds the live request while deletion is pending.
+    // Its guard-release signal publishes requests belonging to surviving threads.
+    if (!this.deletionRegistry.isDeleting(threadId)) this.changed.next();
     return this.toDto(row);
   }
 
@@ -167,7 +174,7 @@ export class PendingApprovalsService implements OnModuleInit {
     }
 
     const now = Date.now();
-    return this.db.transaction((tx) => {
+    const resolvedRequest = this.db.transaction((tx) => {
       const updateResult = tx
         .update(pendingServerRequests)
         .set({
@@ -202,6 +209,9 @@ export class PendingApprovalsService implements OnModuleInit {
         updatedAt: now,
       });
     });
+    // Publish only after the transaction commits; rollback must emit nothing.
+    this.changed.next();
+    return resolvedRequest;
   }
 
   /** Marks a server request resolved after app-server emits serverRequest/resolved. */
@@ -211,7 +221,7 @@ export class PendingApprovalsService implements OnModuleInit {
     if (requestId == null) return;
     const generation = this.codexManager.getGeneration();
     const now = Date.now();
-    this.db
+    const result = this.db
       .update(pendingServerRequests)
       .set({ status: 'resolved', updatedAt: now, resolvedAt: now })
       .where(
@@ -225,6 +235,7 @@ export class PendingApprovalsService implements OnModuleInit {
         ),
       )
       .run();
+    if (result.changes > 0) this.changed.next();
   }
 
   /** Marks pending requests cancelled because their thread is being interrupted/deleted. */
@@ -265,6 +276,7 @@ export class PendingApprovalsService implements OnModuleInit {
     this.logger.debug(
       `Cancelled pending requests for deleting threads: count=${rows.length} reason=${reason}`,
     );
+    this.changed.next();
     return rows.map((row) =>
       this.toDto({
         ...row,
@@ -282,11 +294,12 @@ export class PendingApprovalsService implements OnModuleInit {
 
   private expireAllPending(reason: string): void {
     const now = Date.now();
-    this.db
+    const result = this.db
       .update(pendingServerRequests)
       .set({ status: 'expired', updatedAt: now, resolvedAt: now })
       .where(eq(pendingServerRequests.status, 'pending'))
       .run();
+    if (result.changes > 0) this.changed.next();
     this.logger.debug(`Expired stale pending requests: ${reason}`);
   }
 
@@ -296,7 +309,7 @@ export class PendingApprovalsService implements OnModuleInit {
     reason: string,
   ): void {
     const now = Date.now();
-    this.db
+    const result = this.db
       .update(pendingServerRequests)
       .set({ status, updatedAt: now, resolvedAt: now })
       .where(
@@ -306,6 +319,7 @@ export class PendingApprovalsService implements OnModuleInit {
         ),
       )
       .run();
+    if (result.changes > 0) this.changed.next();
     this.logger.debug(
       `Marked pending requests ${status}: generation=${generation} reason=${reason}`,
     );

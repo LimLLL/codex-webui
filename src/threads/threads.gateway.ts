@@ -7,14 +7,14 @@ import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
-  OnGatewayDisconnect,
   OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { merge, Subscription } from 'rxjs';
 import { Server, Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
@@ -22,7 +22,17 @@ import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { projectNotificationForClient } from '../turn-errors/turn-error-projection';
-import { ActiveThreadRegistryService } from './active-thread-registry.service';
+import { ThreadMetadataService } from './thread-metadata.service';
+import { ConversationBranchesService } from '../conversation-branches/conversation-branches.service';
+import { ConversationBranchMutationsService } from '../conversation-branches/conversation-branch-mutations.service';
+
+/** Only sockets whose asynchronous authentication completed join this room. */
+const AUTHENTICATED_ROOM = 'webui:authenticated';
+
+/** Invalidation only. Read the corresponding REST resource for authoritative data. */
+export interface ConversationChangeSignal {
+  generation: number;
+}
 
 /** A server request held back while its thread was inside a delete. */
 interface SuppressedServerRequest {
@@ -44,9 +54,10 @@ export type CodexSocketLifecycleEvent =
 
 @WebSocketGateway({ namespace: '/ws', cors: { origin: '*' } })
 export class ThreadsGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayInit, OnGatewayConnection, OnModuleDestroy
 {
   private readonly logger = new Logger(ThreadsGateway.name);
+  private readonly changes = new Subscription();
 
   @WebSocketServer()
   server!: Server;
@@ -60,12 +71,30 @@ export class ThreadsGateway
   constructor(
     private readonly codexManager: CodexProcessManager,
     private readonly authService: AuthService,
-    private readonly activeThreads: ActiveThreadRegistryService,
     private readonly pendingApprovals: PendingApprovalsService,
     private readonly deletionRegistry: ThreadDeletionRegistryService,
+    private readonly metadata: ThreadMetadataService,
+    private readonly branches: ConversationBranchesService,
+    private readonly branchMutations: ConversationBranchMutationsService,
   ) {}
 
   afterInit(): void {
+    this.changes.add(
+      merge(
+        this.metadata.changes,
+        this.branches.changes,
+        this.branchMutations.changes,
+      ).subscribe(() => {
+        this.emitChange('conversation.overview.changed');
+      }),
+    );
+    this.changes.add(
+      this.pendingApprovals.changes.subscribe(() => {
+        this.emitChange('conversation.pending.changed');
+        // Pending counts are local inputs to the overview, so no metadata walk is needed.
+        this.emitChange('conversation.overview.changed');
+      }),
+    );
     this.codexManager.addListener(
       'notification',
       (notification: ServerNotification) => {
@@ -79,9 +108,24 @@ export class ThreadsGateway
 
     this.deletionRegistry.onRelease((threadIds) => {
       this.replaySuppressedRequests(threadIds);
+      this.emitChange('conversation.pending.changed');
     });
 
     this.logger.log('ThreadsGateway initialized');
+  }
+
+  /** Releases observable subscriptions when the gateway is destroyed. */
+  onModuleDestroy(): void {
+    this.changes.unsubscribe();
+  }
+
+  /** Broadcasts a content-free invalidation to authenticated clients, independent of thread rooms. */
+  private emitChange(
+    event: 'conversation.overview.changed' | 'conversation.pending.changed',
+  ): void {
+    this.server.to(AUTHENTICATED_ROOM).emit(event, {
+      generation: this.codexManager.getGeneration(),
+    } satisfies ConversationChangeSignal);
   }
 
   /** Validates auth token on connection; disconnects unauthorized clients. */
@@ -94,12 +138,16 @@ export class ThreadsGateway
       return;
     }
 
+    if (client.disconnected) return;
+    await client.join(AUTHENTICATED_ROOM);
+    // A reconnect may have missed every lifecycle event. These initial signals
+    // request current baselines without replaying events or restoring transcripts.
+    const signal: ConversationChangeSignal = {
+      generation: this.codexManager.getGeneration(),
+    };
+    client.emit('conversation.overview.changed', signal);
+    client.emit('conversation.pending.changed', signal);
     this.logger.debug(`Client connected: ${client.id}`);
-  }
-
-  handleDisconnect(client: Socket): void {
-    this.logger.debug(`Client disconnected: ${client.id}`);
-    this.activeThreads.removeSocket(client.id);
   }
 
   /**
@@ -114,7 +162,6 @@ export class ThreadsGateway
     const threadId = this.parseThreadId(data);
     const room = `thread:${threadId}`;
     void client.join(room);
-    this.activeThreads.subscribe(client.id, threadId);
     this.logger.debug(`Client ${client.id} subscribed to ${room}`);
     return { ok: true };
   }
@@ -128,7 +175,6 @@ export class ThreadsGateway
     const threadId = this.parseThreadId(data);
     const room = `thread:${threadId}`;
     void client.leave(room);
-    this.activeThreads.unsubscribe(client.id, threadId);
     this.logger.debug(`Client ${client.id} unsubscribed from ${room}`);
     return { ok: true };
   }

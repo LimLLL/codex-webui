@@ -12,7 +12,7 @@ describe('approval recovery payload preservation', () => {
           getGeneration: () => 1,
           addLifecycleListener: vi.fn(),
         } as never,
-        { assertMutable: vi.fn() } as never,
+        { assertMutable: vi.fn(), isDeleting: () => false } as never,
         { assertOpen: vi.fn() } as never,
       );
       const request = permissionApprovalFixture();
