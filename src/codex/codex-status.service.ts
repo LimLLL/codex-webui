@@ -396,7 +396,17 @@ export class CodexStatusService {
       blocking = true;
     }
 
-    if (args.provider.id && args.provider.envKey === null) {
+    // A null env key only means "unknown" when the provider has no other way to
+    // authenticate. Inline bearer tokens, auth commands and AWS SigV4 all leave
+    // `env_key` null on a fully credentialed provider.
+    if (
+      args.provider.id &&
+      args.provider.envKey === null &&
+      !(
+        args.configProbe.ok &&
+        this.hasNonEnvCredential(args.provider.id, args.configProbe.data.config)
+      )
+    ) {
       reasons.add('unknownProviderEnvKey');
     }
 
@@ -462,6 +472,35 @@ export class CodexStatusService {
 
     // Fallback to hardcoded mapping for built-in providers
     return PROVIDER_ENV_KEYS[providerId.trim().toLowerCase()] ?? null;
+  }
+
+  /**
+   * Reports whether the provider authenticates through something other than an
+   * environment variable.
+   *
+   * `config/read` returns the fully normalized provider entry, so a provider
+   * configured with `experimental_bearer_token`, an `auth` command, AWS SigV4
+   * credentials, or OpenAI account auth still reports `env_key: null`. Without
+   * this check every such provider is reported as an unknown env key, which
+   * pins the runtime status to `degraded` for a perfectly valid config.
+   *
+   * @param providerId - Active `model_provider` id.
+   * @param config - Config payload returned by `config/read`.
+   * @returns True when a non-env credential source is declared.
+   */
+  private hasNonEnvCredential(providerId: string, config?: v2.Config): boolean {
+    const providerConfig = this.lookupProviderConfig(providerId, config);
+    if (!providerConfig) return false;
+
+    const bearerToken = providerConfig.experimental_bearer_token;
+    if (typeof bearerToken === 'string' && bearerToken.trim()) return true;
+
+    for (const key of ['auth', 'aws'] as const) {
+      const value = providerConfig[key];
+      if (value && typeof value === 'object') return true;
+    }
+
+    return providerConfig.requires_openai_auth === true;
   }
 
   /** Human-readable provider name from config.toml, falling back to provider id. */
