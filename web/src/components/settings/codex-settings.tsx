@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   ApprovalReviewerControl,
+  ConfigSelectOverrideControl,
   ConfigSourceBadge,
   type OverrideSelectOption,
 } from '@/components/codex-config/config-override-controls';
@@ -49,20 +50,40 @@ import {
 // Security read-only fields
 // ---------------------------------------------------------------------------
 
-const SECURITY_READONLY_KEYS = [
-  'approval_policy',
-  'sandbox_mode',
-  'sandbox_workspace_write',
-] as const;
+const SECURITY_READONLY_KEYS = ['sandbox_workspace_write'] as const;
 
 const SECURITY_FIELD_LABELS: Record<
   (typeof SECURITY_READONLY_KEYS)[number],
   string
 > = {
-  approval_policy: 'Approval Policy',
-  sandbox_mode: 'Sandbox Mode',
   sandbox_workspace_write: 'Sandbox Workspace Write',
 };
+
+/**
+ * Global defaults for conversations started from now on.
+ *
+ * These are editable here and nowhere else. The chat badge changes ONE
+ * conversation, which is a different thing — writing the global keys was
+ * measured not to reach a thread that is already loaded. Both controls existing
+ * is the point; for a while the badge pointed here for the default while this
+ * page pointed back at the badge, leaving no way to change it outside the raw
+ * TOML editor.
+ *
+ * The approval list is exactly the pinned config schema's: `untrusted` was
+ * retired from it and makes the app-server refuse to start, `on-failure` no
+ * longer exists, and the granular object form has no place in a two-choice
+ * picker. Offering a value the server rejects would break every future
+ * conversation from a settings page.
+ */
+const APPROVAL_POLICY_VALUES = ['on-request', 'never'] as const;
+type ApprovalPolicyValue = (typeof APPROVAL_POLICY_VALUES)[number];
+const isApprovalPolicyValue = (value: unknown): value is ApprovalPolicyValue =>
+  typeof value === 'string' && (APPROVAL_POLICY_VALUES as readonly string[]).includes(value);
+
+const SANDBOX_MODE_VALUES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+type SandboxModeValue = (typeof SANDBOX_MODE_VALUES)[number];
+const isSandboxModeValue = (value: unknown): value is SandboxModeValue =>
+  typeof value === 'string' && (SANDBOX_MODE_VALUES as readonly string[]).includes(value);
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -244,6 +265,33 @@ export function CodexSettings() {
     [config, origins],
   );
 
+  // Read from the same curated config the rest of this page uses, so the
+  // control shows what the server actually resolved rather than what this tab
+  // last wrote.
+  const globalApprovalPolicy = useMemo(
+    () =>
+      resolveConfigValue(
+        config,
+        origins,
+        ['approval_policy'],
+        'on-request' as ApprovalPolicyValue,
+        isApprovalPolicyValue,
+      ),
+    [config, origins],
+  );
+
+  const globalSandboxMode = useMemo(
+    () =>
+      resolveConfigValue(
+        config,
+        origins,
+        ['sandbox_mode'],
+        'read-only' as SandboxModeValue,
+        isSandboxModeValue,
+      ),
+    [config, origins],
+  );
+
   // ---- Group fields ----
   const groupedFields = useMemo(() => {
     const map = new Map<string, FieldDef[]>();
@@ -344,9 +392,43 @@ export function CodexSettings() {
             </h3>
             <p className="text-xs text-muted-foreground">
               {t(
-                'Approval policy and sandbox mode are changed from the chat security badge.',
+                'Defaults for new conversations. Changing them does not affect a conversation already open — use its security badge for that.',
               )}
             </p>
+            <ConfigSelectOverrideControl
+              label={t('Approval Policy')}
+              description={t('When Codex asks before running a command.')}
+              effectiveValue={globalApprovalPolicy.value}
+              source={globalApprovalPolicy.source}
+              overridden={isUserConfigOrigin(origins, 'approval_policy')}
+              saving={updateMutation.isPending}
+              options={APPROVAL_POLICY_VALUES.map((value) => ({
+                value,
+                label: t(value),
+              }))}
+              onCommit={(value) =>
+                updateMutation.mutate({
+                  body: { edits: [{ keyPath: 'approval_policy', value }] },
+                })
+              }
+            />
+            <ConfigSelectOverrideControl
+              label={t('Sandbox Mode')}
+              description={t('What a command may reach by default.')}
+              effectiveValue={globalSandboxMode.value}
+              source={globalSandboxMode.source}
+              overridden={isUserConfigOrigin(origins, 'sandbox_mode')}
+              saving={updateMutation.isPending}
+              options={SANDBOX_MODE_VALUES.map((value) => ({
+                value,
+                label: t(value),
+              }))}
+              onCommit={(value) =>
+                updateMutation.mutate({
+                  body: { edits: [{ keyPath: 'sandbox_mode', value }] },
+                })
+              }
+            />
             <ApprovalReviewerControl
               label={t('Approvals Reviewer')}
               description={t('Default reviewer for approval requests.')}

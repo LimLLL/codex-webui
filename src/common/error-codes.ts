@@ -113,6 +113,7 @@ export const ErrorCode = {
     /** Params: { index } */
     invalidInputType: 'threads.invalid_input_type',
     invalidApprovalPolicy: 'threads.invalid_approval_policy',
+    threadNotLoaded: 'threads.not_loaded',
     invalidSandboxMode: 'threads.invalid_sandbox_mode',
     paginatedHistoryRequired: 'threads.paginated_history_required',
     branchEditedTurnRequired: 'threads.branch_edited_turn_required',

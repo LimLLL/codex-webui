@@ -17,6 +17,7 @@ describe('ThreadsBranchingService', () => {
   const mockResumeRegistry = {
     markResumed: vi.fn(),
     cacheResponse: vi.fn(),
+    getGeneration: vi.fn(() => 1),
     forget: vi.fn(),
   };
   const mockBranches = {

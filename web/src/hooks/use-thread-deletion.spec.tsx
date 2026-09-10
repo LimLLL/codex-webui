@@ -30,6 +30,8 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  // The hook now reaches the policy store, which initialises i18n on import.
+  initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
 vi.mock('@/stores/snackbar-store', () => ({ showSnackbar }));

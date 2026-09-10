@@ -28,6 +28,10 @@
     // Tooling configs, not application code: drizzle-kit and Vitest load these
     // from source themselves and never read `dist`.
     "drizzle.config.ts",
-    "vitest.config.mts"
+    "vitest.config.mts",
+    // Probes drive the app-server binary directly and are never part of the
+    // server build. `rootDir` is pinned to `src`, so leaving them in would fail
+    // the build by design rather than quietly relocate the output.
+    "codex_probe"
   ]
 }

@@ -122,7 +122,7 @@ export function ThreadRow({
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100"
+            className="hover-reveal h-6 w-6 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>

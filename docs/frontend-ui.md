@@ -56,14 +56,36 @@ Code-based route tree: `routes/router.tsx`。Auth guard via pathless layout rout
 | 断点 | 范围 | Sidebar 行为 | Session Panel | FilesPanel |
 |------|------|-------------|---------------|------------|
 | Desktop | ≥ 1024px (lg) | inline `w-64`，可手动折叠 | ResizablePanelGroup 垂直分割 | inline `w-56` tree + viewer |
-| Tablet | 640–1023px | Sheet overlay（左侧滑出） | Sheet overlay（底部 70dvh） | tree 在 Sheet，viewer 全宽 |
-| Mobile | < 640px | Sheet overlay（左侧滑出） | Sheet overlay（底部 70dvh） | tree 在 Sheet，viewer 全宽 |
+| Tablet | 640–1023px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
+| Mobile | < 640px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
 
 - 路由变化与进入 desktop 断点时自动关闭 Sheet
 - ChatHeader: < lg 显示 hamburger 按钮打开 sidebar Sheet；desktop 折叠时显示 PanelLeftOpen 展开按钮
 - ChatHeader: < lg 隐藏 Diagnostics/Language/Theme 按钮，放入 `...` overflow Popover（Settings 保留在 sidebar 导航中）
 - sidebar 底部: desktop 显示 PanelLeftClose 折叠按钮（`hidden lg:block`）
 - SessionPanel 内 file tree `w-52`: < lg 通过 `hidden lg:flex` 隐藏
+
+### 视口高度：`--app-vh` 而非视口单位
+
+`lib/mobile-viewport.ts` 在启动时把 `visualViewport.height` 镜像到 `--app-vh`，**所有全高界面都从这个变量取高度**，不再用 `100dvh` / `100vh` / `h-screen`：`#root`、登录页、三个 integrations sheet 的 ScrollArea、移动端会话抽屉。`100dvh` 是首次同步前和无 visual viewport 时的 fallback。
+
+视口单位不够用的两种情形：
+
+- **iOS 软键盘**。Safari 不实现 `interactive-widget`，键盘弹出既不缩小布局视口也不改变 `dvh`，输入框被压在键盘下面。只有 `visualViewport.height` 反映真实可见区域。（`index.html` 的 `interactive-widget=resizes-content` 只对实现了它的浏览器生效，主要是 Chrome。）
+- **覆盖式浏览器栏**。部分内嵌浏览器在页面上方绘制底部工具栏且不减少任何视口测量值，尺寸无从测得，只能按 UA 盲留 —— `html.qq-browser` 保留 `--qq-bottom-gap`（56px），限制在 `<1024px`，桌面版共用 UA 但没有该工具栏。
+
+同步有两个约束，缺一个都会出问题：
+
+- **缩放时不同步**。双指放大会在不缩小布局的前提下缩小 visual viewport，并把它滚离文档原点。此时按它设置外壳高度会让整个应用塌进放大区域；而 visual viewport 在缩放态下还会持续发 `scroll`，于是每次平移都塌一次。`scale !== 1` 时保持上一次读数即可，`offsetTop` 同理不需要单独处理 —— 它只在缩放或键盘过渡期非 0。
+- **值没变就不写**。`scroll` 的触发频率远高于高度变化，写入相同值仍然会脏化样式。
+
+### 悬停显形控件：`hover-reveal`
+
+Tailwind v4 的 `hover:` / `group-hover:` 变体**本身就编译在 `@media (hover: hover)` 里**，所以旁边一个裸 `opacity-0` 在触屏上永远不会被抬起来 —— 控件不可见却仍可点中，成了隐形热区。`index.css` 的 `@utility hover-reveal` 表达完整意图：默认可见，仅在 `(hover: hover) and (pointer: fine)` 下隐藏。
+
+配 `group-hover*:opacity-100` 与 `focus-visible:opacity-100` 使用，两者特异性 0,2,0 均高于 `hover-reveal` 的 0,1,0，不依赖源码顺序。用在 8 处：代码块复制、附件移除、@ 引用附加、文件页签关闭、终端页签关闭、会话行菜单、消息版本操作行、分支节点删除。
+
+> 不要改回在 `index.css` 里裸写全局 class：未分层规则在级联里压过整个 `@layer utilities`，之后任何 `opacity-*` 工具类作用在同一元素上都会被静默吃掉。`@utility` 才会落进 utilities 层。
 
 ## 布局
 
@@ -180,7 +202,7 @@ Mobile/Tablet (< lg):
 - 判据对**内部** item union 穷尽：往这个 union 加成员是**编译错误**，而不是日后某个空白气泡。协议侧的未知类型不走这条穷尽——normalizer 先把它们折成 `unknownActivity`，渲染成明确的「不支持的活动」标记
 - 正在跑但暂无可见内容的回合显示已有的 `Thinking...` 占位（该分支此前因为被更早的 `return null` 挡住而实际不可达）；已完成且无可见内容的回合不渲染任何表面
 - 挂着审批卡/用户输入卡的 item **不会**被滤掉——卡片渲染在 item 体旁边，滤掉会把可交互的审批一并带走
-- 回合级的 plan 与 diff 同样按渲染器的真实条件判断（`PlanPanel` 要求 explanation/steps/文本三者之一，diff 要求非空串），而不是判断字段是否存在
+- 回合级的 plan 与 diff 同样按渲染器的真实条件判断（`PlanPanel` 要求 plan 文本或 steps，diff 要求非空串），而不是判断字段是否存在。plan 文本**合并为一处呈现**：流式 delta 与从历史读回的文本是同一段散文，此前分成 explanation 段落与「临时 delta」`<pre>` 两块，会让同一个 plan 在刷新前后长得不一样——而持久化的 plan 恰恰一点也不「临时」
 
 ### 删除进行中的反馈
 
@@ -222,6 +244,31 @@ Mobile/Tablet (< lg):
 - **GitDiffPanel** (`turn-items/git-diff-panel.tsx`)：封装 DiffView，集中处理 Shiki 懒加载（模块级单例）、theme（从 `useThemeStore` 读取）、Unified/Split 切换、parse 失败 raw fallback（DiffRenderBoundary error boundary）。
 - **file-change-item**：completed 时展开区域用 GitDiffPanel（`showToolbar=false`，因卡片 header 已有文件名）；流式阶段保留 `<pre>` 原始渲染。
 - **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST。蓝色边框(pending) / 灰色(resolved)。
+
+## 审批呈现
+
+命令审批**内联在 command item 内部**，与 fileChange 的既有做法一致；此前它是兄弟卡片，会把同一条命令重画第二遍，策略修正案区块再重画第三遍。
+
+规则不是「审批区绝不显示命令」，而是**只去掉同一动作的重复表示**：
+
+| 情况 | 呈现 |
+|------|------|
+| 与宿主同一动作 | 命令只由 command item 画一次；审批区只加 reason / cwd / 请求的额外权限 / 状态 / 操作 |
+| 子命令或 stdin 写入 | 授权对象与宿主显示的不是同一个东西，审批区显示它自己的那份文本 |
+| 申请了额外沙箱权限 | 显式展示文件系统条目与网络请求 —— 这是 command item 结构上不可能显示的内容 |
+| 纯网络审批 | 协议 + 主机即完整授权对象，协议允许此类请求不带 `command`/`cwd` |
+| 一个宿主多个请求 | 按 requestId 分段，各自独立作用域与操作 |
+| 无同轮宿主 | 保留自包含卡片（`approval-item.tsx`）；跨轮 stdin 回调即属此类 |
+| 已决议 | 收成紧凑状态条。**`resolved` 保持中性**——服务端在 turn 开始/结束/中断的生命周期清理中也会 resolve，不等于用户接受过 |
+
+关键约束：
+
+- 比较用**原始命令**，不用 `stripShellWrapper` 剥壳后的显示形式——后者是为可读性重写过的，拿它判等会把两条不同的命令认成同一条。
+- 待审批时授权文本**强制可见**，不受输出折叠状态影响；不能让人给看不见的命令授权。
+- 策略修正案授权的是**未来**匹配的命令，作用域比当前这一次更宽，因此收在独立的展开区内，但接受按钮之前必须先看到确切提案。
+- 权限缺失 = **未指定**，不等于不受限；`networkEnabled` 为三态，`null` 不渲染成「禁止联网」。
+- 文件系统条目保留访问类型与路径语义（`path` / `glob` / `special`，以及 `deny`），不压平成模糊路径列表。**`special` 在钉住 schema 里是对象联合而非字符串**（`root` / `minimal` / `project_roots`+subpath / `tmpdir` / `slash_tmp` / `unknown`+path），按字符串判断等于把它整类丢掉——而只含一条 special 的权限浮层会因此整体变 null，从卡片上消失。作用域标签本身就是安全信息（`root` 与 `tmpdir` 授权的东西完全不同），因此展示的是它的 scope 而不是「special」这个词。
+- 决议后**不丢上下文**：状态条只替换掉操作按钮，命令、reason、cwd 与权限浮层继续渲染——事后要能看清当时到底授权了什么。
 - **diff-viewer** (turn-level)：按 `diff --git` 分段拆分聚合 diff，每个文件渲染一个 GitDiffPanel（竖排列表，非 tab）。
 - **diff-utils.ts**：`ensureDiffHeaders` 为 Codex 裸 hunk（无 `---`/`+++` 头）补充文件头；`stripGitPathPrefix` 去除 `a/`/`b/` 前缀。
 
@@ -380,3 +427,5 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
   - generating（active 无 blocking flags）：Loader2 + `animate-spin`
   - idle：灰色 MessageSquare
 - **Approval count badge**：hydrated pending approvals > 1 时显示数字（9+ 封顶），半透明黄色圆角背景
+
+策略读取失败时，SecurityPolicyBadge 弹层显示「最后已知」说明（含中文翻译）。闭合徽章与发送按钮不因 stale 单独改变；确认中的用户策略选择仍按原有规则等待。

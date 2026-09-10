@@ -96,7 +96,7 @@ export function TerminalTabs({
                   event.stopPropagation();
                   requestClose(terminal);
                 }}
-                className="mr-1 rounded p-0.5 opacity-0 hover:bg-muted group-hover:opacity-100"
+                className="hover-reveal mr-1 rounded p-0.5 hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
                 title={t('Close terminal')}
               >
                 <X className="h-2.5 w-2.5" />

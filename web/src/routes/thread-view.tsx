@@ -199,7 +199,7 @@ export function ThreadView() {
       {/* Mobile/Tablet: session panel as bottom Sheet */}
       {!isDesktop && (
         <Sheet open={showPanel} onOpenChange={(open) => { if (!open) setSessionPanelOpen(false); }}>
-          <SheetContent side="bottom" className="!h-[70dvh] p-0" showCloseButton={false}>
+          <SheetContent side="bottom" className="!h-[calc(var(--app-vh,100dvh)*0.7)] p-0" showCloseButton={false}>
             <SheetTitle className="sr-only">{t('Session panel')}</SheetTitle>
             <div className="flex h-full flex-col">
               {sessionPanelContent}

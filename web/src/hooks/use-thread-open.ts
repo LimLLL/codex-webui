@@ -25,9 +25,12 @@ import type {
   ThreadReadResponseDto,
   ThreadTurnsPageDto,
 } from '@/generated/api/types.gen';
+import { recoverTurnItems } from '@/lib/thread-recovery';
 import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
+import { nextObservationSeq } from '@/lib/turn-item-merge';
+import { refreshThreadPolicy, settleIfObserved } from '@/stores/thread-policy-store';
 
 /** Turns fetched per older-history page. */
 export const HISTORY_PAGE_SIZE = 20;
@@ -98,7 +101,10 @@ export function applyReadOnlySnapshot(
  * interpret the response the same way, or `thread.turns` — empty by design
  * since history became metadata-first — silently renders those threads blank.
  */
-export function applyOpenResponse(response: ThreadOpenResponseDto): void {
+export function applyOpenResponse(
+  response: ThreadOpenResponseDto,
+  baselineSeq: number = -1,
+): void {
   const store = useTimelineStore.getState();
   const threadId = response.thread.id;
 
@@ -122,26 +128,73 @@ export function applyOpenResponse(response: ThreadOpenResponseDto): void {
     cwd: response.cwd,
   });
   store.setThreadStatusForThread(threadId, response.thread.status);
+  // The first hook read can precede resume and report observed:false. Opening
+  // (including restart recovery) is the point at which settings are available.
+  void refreshThreadPolicy(threadId).then(() => settleIfObserved(threadId));
 
   // Seed the composer's display-only view of this thread's resolved settings.
   // `thread/settings/updated` only fires when settings change, so without this
   // a reopened thread would fall back to catalog defaults — the speed picker
   // would claim "Standard" for a thread already running on a paid tier while
   // the composer omits `serviceTier`, leaving that tier in force.
-  const modelStore = useModelStore.getState();
-  modelStore.setObservedThreadEffort(
+  //
+  // Stamped with the baseline captured BEFORE the request rather than with the
+  // current counter: this response describes the thread as it was when the
+  // request was served, so a settings notification that arrived while it was in
+  // flight is newer and must not be overwritten by it.
+  useModelStore.getState().setObservedThreadSettings(
     threadId,
-    (response.reasoningEffort ?? null) as ReasoningEffort | null,
+    {
+      effort: (response.reasoningEffort ?? null) as ReasoningEffort | null,
+      serviceTier: response.serviceTier,
+    },
+    baselineSeq,
   );
-  modelStore.setObservedThreadServiceTier(threadId, response.serviceTier);
 
   // `thread.turns` is empty by construction now, so an in-progress turn has to
   // be recognised from the page that was returned instead.
-  const activeTurn = response.initialTurnsPage.data.find(
-    (turn) => turn.status === 'inProgress',
+  //
+  // A page is a snapshot taken when the request was SERVED. If that turn's
+  // `turn/completed` arrived while this response was in flight, the page still
+  // calls it running, and adopting it would revive a turn this client already
+  // watched finish — leaving the composer spinning forever on a finished turn.
+  // `settleTurnLifecycleForThread` refuses the same thing on the reconnect path;
+  // this is the open path's half of that rule.
+  const locallyTerminalTurnIds = new Set(
+    (store.getThreadRuntime(threadId)?.timeline ?? []).flatMap((entry) =>
+      entry.kind === 'turn' && entry.completed ? [entry.turnId] : [],
+    ),
   );
-  store.setActiveTurnIdForThread(threadId, activeTurn?.id ?? null);
-  store.setLoadingForThread(threadId, Boolean(activeTurn));
+  const activeTurn = response.initialTurnsPage.data.find(
+    (turn) =>
+      turn.status === 'inProgress' && !locallyTerminalTurnIds.has(turn.id),
+  );
+  // A page that names no running turn is not proof there is none. It was built
+  // when the request was served, and a turn started since — or started while
+  // this was in flight — will not be in it. Only clear the pointer when this
+  // page actually covers the turn it names and reports it finished; otherwise
+  // the live lifecycle events remain the better-informed source.
+  const known = store.getThreadRuntime(threadId)?.activeTurnId ?? null;
+  const pageCoversKnownTurn =
+    known !== null &&
+    response.initialTurnsPage.data.some((turn) => turn.id === known);
+  if (activeTurn) {
+    store.setActiveTurnIdForThread(threadId, activeTurn.id);
+  } else if (known === null || pageCoversKnownTurn) {
+    store.setActiveTurnIdForThread(threadId, null);
+  }
+  store.setLoadingForThread(
+    threadId,
+    Boolean(activeTurn) || (known !== null && !pageCoversKnownTurn),
+  );
+
+  // A running turn arrives empty: the page is fetched in the `summary` view,
+  // which carries only user messages and a turn's final assistant message, and
+  // a turn still running has no final message yet. Its finished items are
+  // durable all the same — persistence happens per item, not per turn — so
+  // they are read separately instead of leaving the transcript blank until the
+  // turn ends. The per-turn top-up cannot do this: it is gated on completion.
+  if (activeTurn) void recoverTurnItems(threadId, activeTurn.id);
 
   hydrateAuxiliaryData(threadId);
 }
@@ -165,9 +218,12 @@ export function useOpenThread() {
       store.setActiveThread(threadId);
       const runtime = store.getThreadRuntime(threadId);
       if (!runtime?.hydrated) store.setLoadingForThread(threadId, true);
+      // Captured before the request goes out, so anything observed while it is
+      // in flight outranks the snapshot the response carries.
+      return { baselineSeq: nextObservationSeq() };
     },
-    onSuccess: (response: ThreadOpenResponseDto) => {
-      applyOpenResponse(response);
+    onSuccess: (response: ThreadOpenResponseDto, _variables, context) => {
+      applyOpenResponse(response, context?.baselineSeq);
       if (response.mode === 'readOnly') {
         showSnackbar(
           t('This conversation is open in another client; opened read-only.'),

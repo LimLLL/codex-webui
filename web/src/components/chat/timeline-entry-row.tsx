@@ -57,7 +57,7 @@ export function TimelineEntryRow({
           />
         </div>
         {/* Reserved even when empty so revealing the controls cannot shift layout. */}
-        <div className="mt-1 flex h-6 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">
+        <div className="hover-reveal mt-1 flex h-6 items-center gap-1 transition-opacity focus-within:opacity-100 group-hover/user:opacity-100">
           {versions && (
             <MessageVersionSwitcher
               versions={versions}

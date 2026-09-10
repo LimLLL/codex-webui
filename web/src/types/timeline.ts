@@ -7,15 +7,50 @@ export interface TurnPlanStep {
   status: TurnPlanStepStatus;
 }
 
+/**
+ * One plan item's prose, carrying the same lifecycle facts as a turn item.
+ *
+ * Plan text used to be a bare string, which put it outside the authority rules
+ * every other item obeys: a delta arriving after the terminal payload appended
+ * to text that was already complete, duplicating its tail, and a persisted
+ * snapshot could overwrite text streamed after the snapshot was taken. The two
+ * fields below are exactly what {@link TurnItemBase} uses to prevent both.
+ */
+export interface PlanItemText {
+  text: string;
+  /** True once an authoritative terminal plan payload was observed. */
+  completed: boolean;
+  /** Observation counter at the live write, for ranking against snapshots. */
+  observedSeq?: number;
+}
+
 export interface TurnPlanState {
   explanation: string | null;
   steps: TurnPlanStep[];
-  planTextByItemId?: Record<string, string>;
+  planTextByItemId?: Record<string, PlanItemText>;
 }
 
 interface TurnItemBase {
   itemId: string;
+  /**
+   * Whether an authoritative terminal payload has been observed for this item.
+   *
+   * This is item lifecycle, deliberately not turn lifecycle: app-server persists
+   * an item when the item finishes, not when its turn does, so a running turn
+   * routinely holds terminal items. Treating the two as one is what let a late
+   * delta reopen a finished item and let a history snapshot declare a still
+   * running command complete.
+   */
   completed: boolean;
+  /**
+   * Runtime observation counter at the moment a live notification last wrote
+   * this item; absent for items restored from persistence.
+   *
+   * Recovery needs to distinguish "this was updated while my request was in
+   * flight" from "this predates my request". Wall-clock cannot answer that and
+   * the protocol gives items no sequence number, so the client stamps its own.
+   */
+  observedSeq?: number;
 }
 
 export interface ReasoningTurnItem extends TurnItemBase {

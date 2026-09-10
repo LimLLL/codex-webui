@@ -407,7 +407,7 @@ export type CatalogStateDto = {
      */
     managed: boolean;
     /**
-     * The running child loaded the configured pointer; false means a restart is still pending.
+     * False only on a known mismatch: a user-level pointer the running child did not load. True when there is nothing to compare (no child, or no user-level pointer).
      */
     pointerApplied: boolean;
     runningPaths: Array<string>;
@@ -477,7 +477,7 @@ export type CatalogApplyResultDto = {
      */
     managed: boolean;
     /**
-     * The running child loaded the configured pointer; false means a restart is still pending.
+     * False only on a known mismatch: a user-level pointer the running child did not load. True when there is nothing to compare (no child, or no user-level pointer).
      */
     pointerApplied: boolean;
     runningPaths: Array<string>;
@@ -713,7 +713,6 @@ export type SandboxDangerFullAccessDto = {
 
 export type SandboxReadOnlyDto = {
     type: 'readOnly';
-    access: ReadOnlyAccessRestrictedDto | ReadOnlyAccessFullAccessDto;
     networkAccess: boolean;
 };
 
@@ -725,7 +724,6 @@ export type SandboxExternalSandboxDto = {
 export type SandboxWorkspaceWriteDto = {
     type: 'workspaceWrite';
     writableRoots: Array<string>;
-    readOnlyAccess: ReadOnlyAccessRestrictedDto | ReadOnlyAccessFullAccessDto;
     networkAccess: boolean;
     excludeTmpdirEnvVar: boolean;
     excludeSlashTmp: boolean;
@@ -1430,9 +1428,18 @@ export type ThreadOpenResponseDto = {
 
 export type ThreadTurnItemsResponseDto = {
     /**
-     * Items belonging to the turn, oldest first.
+     * Persisted completion order; may differ from live item-start order.
      */
     items: Array<UserMessageThreadItemDto | HookPromptThreadItemDto | AgentMessageThreadItemDto | FunctionCallOutputThreadItemDto | PlanThreadItemDto | ReasoningThreadItemDto | CommandExecutionThreadItemDto | FileChangeThreadItemDto | McpToolCallThreadItemDto | DynamicToolCallThreadItemDto | CollabAgentToolCallThreadItemDto | SubAgentActivityThreadItemDto | WebSearchThreadItemDto | ImageViewThreadItemDto | SleepThreadItemDto | ImageGenerationThreadItemDto | EnteredReviewModeThreadItemDto | ExitedReviewModeThreadItemDto | ContextCompactionThreadItemDto>;
+    /**
+     * True only when paging reached explicit cursor exhaustion.
+     */
+    complete: boolean;
+    /**
+     * Continue a capped read. Null alone does not imply completeness.
+     */
+    nextCursor: string | null;
+    incompleteReason: 'pageLimit' | 'cursorCycle' | 'invalidResponse' | 'pagingUnavailable' | null;
 };
 
 export type ThreadTurnCountsRequestDto = {
@@ -1699,6 +1706,26 @@ export type SetThreadGoalDto = {
 
 export type StartReviewDto = {
     target: ReviewUncommittedChangesTargetDto | ReviewBaseBranchTargetDto | ReviewCommitTargetDto | ReviewCustomTargetDto;
+};
+
+export type ThreadSecurityPolicyDto = {
+    observed: boolean;
+    source: 'unknown' | 'response' | 'notification';
+    approvalPolicy: 'on-request' | 'never' | GranularApprovalPolicyDto | null;
+    sandboxPolicy: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto | null;
+    approvalsReviewer: 'user' | 'auto_review' | 'guardian_subagent' | null;
+};
+
+export type PatchThreadSecurityPolicyDto = {
+    approvalPolicy?: 'on-request' | 'never' | GranularApprovalPolicyDto;
+    sandboxPolicy?: SandboxDangerFullAccessDto | SandboxReadOnlyDto | SandboxExternalSandboxDto | SandboxWorkspaceWriteDto;
+};
+
+export type ThreadPolicyAcceptedDto = {
+    /**
+     * Queued acknowledgement only. Observe matching effective settings before starting the next turn.
+     */
+    status: 'accepted';
 };
 
 export type PendingServerRequestsResponseDto = {
@@ -3226,7 +3253,12 @@ export type ThreadsListTurnItemsData = {
         threadId: string;
         turnId: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Continue an incomplete item read after its page cap.
+         */
+        cursor?: string;
+    };
     url: '/api/threads/{threadId}/turns/{turnId}/items';
 };
 
@@ -3695,6 +3727,43 @@ export type ThreadCommandsStartReviewResponses = {
 };
 
 export type ThreadCommandsStartReviewResponse = ThreadCommandsStartReviewResponses[keyof ThreadCommandsStartReviewResponses];
+
+export type ThreadSecurityPolicyReadSecurityPolicyData = {
+    body?: never;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/security-policy';
+};
+
+export type ThreadSecurityPolicyReadSecurityPolicyResponses = {
+    200: ThreadSecurityPolicyDto;
+};
+
+export type ThreadSecurityPolicyReadSecurityPolicyResponse = ThreadSecurityPolicyReadSecurityPolicyResponses[keyof ThreadSecurityPolicyReadSecurityPolicyResponses];
+
+export type ThreadSecurityPolicyPatchSecurityPolicyData = {
+    body: PatchThreadSecurityPolicyDto;
+    path: {
+        threadId: string;
+    };
+    query?: never;
+    url: '/api/threads/{threadId}/security-policy';
+};
+
+export type ThreadSecurityPolicyPatchSecurityPolicyErrors = {
+    400: ApiErrorResponseDto;
+    409: ApiErrorResponseDto;
+};
+
+export type ThreadSecurityPolicyPatchSecurityPolicyError = ThreadSecurityPolicyPatchSecurityPolicyErrors[keyof ThreadSecurityPolicyPatchSecurityPolicyErrors];
+
+export type ThreadSecurityPolicyPatchSecurityPolicyResponses = {
+    202: ThreadPolicyAcceptedDto;
+};
+
+export type ThreadSecurityPolicyPatchSecurityPolicyResponse = ThreadSecurityPolicyPatchSecurityPolicyResponses[keyof ThreadSecurityPolicyPatchSecurityPolicyResponses];
 
 export type PendingApprovalsListPendingData = {
     body?: never;

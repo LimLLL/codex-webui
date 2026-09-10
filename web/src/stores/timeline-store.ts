@@ -4,19 +4,27 @@
  */
 import { create } from 'zustand';
 import { getSocket } from '../socket';
+import { forgetThreadPolicy } from './thread-policy-store';
 import type {
   TimelineEntry,
   TurnFailure,
   TurnItem,
   TurnPlanState,
 } from '../types/timeline';
-import type { ApprovalRequest, ResolvableApprovalDecision, UserInputRequest } from '../types/approval';
+import type {
+  ApprovalRequest,
+  ResolvableApprovalDecision,
+  UserInputRequest,
+} from '../types/approval';
 import type {
   PersistedTurnErrorDto,
   ThreadDto,
   TurnDto,
 } from '../generated/api';
-import type { ThreadTokenUsage, ThreadStatusType } from '../types/codex-notifications';
+import type {
+  ThreadTokenUsage,
+  ThreadStatusType,
+} from '../types/codex-notifications';
 import {
   normalizeThreadItem,
   type ThreadItemNormalization,
@@ -26,6 +34,11 @@ import {
   normalizeLiveTurnFailure,
   normalizePersistedTurnFailure,
 } from '../lib/turn-failure';
+import {
+  mergeRecoveredItems,
+  nextObservationSeq,
+} from '../lib/turn-item-merge';
+import { reconcileTimeline, sharesHistory } from '../lib/timeline-reconcile';
 
 const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
 const MIN_MAX_IDLE_SUBSCRIPTIONS = 5;
@@ -103,20 +116,52 @@ interface ThreadRuntimeInput {
   mode?: ThreadMode;
 }
 
-
 /** Extracts persisted plan text from shared normalizer outcomes. */
 function normalizedPlan(
   items: ThreadItemNormalization[],
 ): TurnPlanState | undefined {
-  const planText = items
-    .filter((item): item is Extract<ThreadItemNormalization, { kind: 'plan' }> => item.kind === 'plan')
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join('\n\n');
+  // Hydration and later repair must use the same per-item representation.
+  // `explanation` belongs to the structured plan tool, not the model's prose.
+  // Nothing is held yet at hydration, so no baseline can be outranked.
+  return mergePersistedPlan(undefined, items, -1);
+}
 
-  return planText
-    ? { explanation: planText, steps: [] }
-    : undefined;
+/**
+ * Folds persisted plan items into a turn's plan, per item.
+ *
+ * @param existing - Plan already held, possibly assembled from deltas
+ * @param normalized - Normalized items from a persisted snapshot
+ * @returns The merged plan, or the existing one when the snapshot has no plan
+ */
+function mergePersistedPlan(
+  existing: TurnPlanState | undefined,
+  normalized: ThreadItemNormalization[],
+  baselineSeq: number,
+): TurnPlanState | undefined {
+  const planItems = normalized.filter(
+    (item): item is Extract<ThreadItemNormalization, { kind: 'plan' }> =>
+      item.kind === 'plan' && Boolean(item.text.trim()),
+  );
+  if (planItems.length === 0) return existing;
+  const planTextByItemId = { ...(existing?.planTextByItemId ?? {}) };
+  for (const item of planItems) {
+    const live = planTextByItemId[item.itemId];
+    // The same authority table `selectPayload` applies to items. A terminal
+    // observation made after the request went out cannot be known to this
+    // snapshot, so it stands; otherwise the snapshot carries the whole
+    // accumulated text and replaces whatever fragment was held.
+    if (live?.completed && (live.observedSeq ?? 0) > baselineSeq) continue;
+    planTextByItemId[item.itemId] = {
+      text: item.text,
+      completed: true,
+      observedSeq: live?.observedSeq,
+    };
+  }
+  return {
+    explanation: existing?.explanation ?? null,
+    steps: existing?.steps ?? [],
+    planTextByItemId,
+  };
 }
 
 /** Converts persisted turns into timeline entries. */
@@ -129,7 +174,9 @@ function turnsToTimeline(turns: TurnDto[]): TimelineEntry[] {
     );
 
     const userMsg = normalized.find(
-      (item): item is Extract<ThreadItemNormalization, { kind: 'userMessage' }> =>
+      (
+        item,
+      ): item is Extract<ThreadItemNormalization, { kind: 'userMessage' }> =>
         item.kind === 'userMessage',
     );
     if (userMsg) {
@@ -249,12 +296,17 @@ function runtimeFromSelected(state: TimelineState): ThreadRuntimeState | null {
   };
 }
 
-function readRuntime(state: TimelineState, threadId: string): ThreadRuntimeState | null {
+function readRuntime(
+  state: TimelineState,
+  threadId: string,
+): ThreadRuntimeState | null {
   if (state.threadId === threadId) return runtimeFromSelected(state);
   return state.threadsById[threadId] ?? null;
 }
 
-function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineState> {
+function selectedFields(
+  runtime: ThreadRuntimeState | null,
+): Partial<TimelineState> {
   if (!runtime) {
     return {
       threadId: null,
@@ -301,7 +353,9 @@ function selectedFields(runtime: ThreadRuntimeState | null): Partial<TimelineSta
   };
 }
 
-function persistSelectedRuntime(state: TimelineState): Record<string, ThreadRuntimeState> {
+function persistSelectedRuntime(
+  state: TimelineState,
+): Record<string, ThreadRuntimeState> {
   const selected = runtimeFromSelected(state);
   if (!selected) return state.threadsById;
   return { ...state.threadsById, [selected.threadId]: selected };
@@ -312,13 +366,17 @@ function hasPendingApproval(runtime: ThreadRuntimeState | null): boolean {
   const flagBlocked =
     runtime.threadStatus?.type === 'active' &&
     runtime.threadStatus.activeFlags.includes('waitingOnApproval');
-  const cardBlocked = Object.values(runtime.approvals).some((approval) => approval.status === 'pending');
+  const cardBlocked = Object.values(runtime.approvals).some(
+    (approval) => approval.status === 'pending',
+  );
   return flagBlocked || cardBlocked;
 }
 
 function hasPendingUserInput(runtime: ThreadRuntimeState | null): boolean {
   if (!runtime) return false;
-  return Object.values(runtime.userInputRequests).some((request) => request.status === 'pending');
+  return Object.values(runtime.userInputRequests).some(
+    (request) => request.status === 'pending',
+  );
 }
 
 function touchRuntime(runtime: ThreadRuntimeState): ThreadRuntimeState {
@@ -331,13 +389,13 @@ function isSafeToCleanupIdleRuntime(
 ): runtime is ThreadRuntimeState {
   return Boolean(
     runtime &&
-      runtime.threadId !== selectedThreadId &&
-      !runtime.loading &&
-      !runtime.activeTurnId &&
-      runtime.pendingResolvedRequestIds.size === 0 &&
-      runtime.threadStatus?.type !== 'active' &&
-      !hasPendingApproval(runtime) &&
-      !hasPendingUserInput(runtime),
+    runtime.threadId !== selectedThreadId &&
+    !runtime.loading &&
+    !runtime.activeTurnId &&
+    runtime.pendingResolvedRequestIds.size === 0 &&
+    runtime.threadStatus?.type !== 'active' &&
+    !hasPendingApproval(runtime) &&
+    !hasPendingUserInput(runtime),
   );
 }
 
@@ -353,8 +411,13 @@ function compareIdleCleanupCandidates(
 }
 
 /** Ensures a turn entry exists in timeline for a given turnId (needed for request-only cards). */
-function ensureTurnEntry(timeline: TimelineEntry[], turnId: string): TimelineEntry[] {
-  if (timeline.some((entry) => entry.kind === 'turn' && entry.turnId === turnId)) {
+function ensureTurnEntry(
+  timeline: TimelineEntry[],
+  turnId: string,
+): TimelineEntry[] {
+  if (
+    timeline.some((entry) => entry.kind === 'turn' && entry.turnId === turnId)
+  ) {
     return timeline;
   }
   return [...timeline, { kind: 'turn', turnId, items: [], completed: false }];
@@ -371,7 +434,9 @@ function bindPendingUserMessage(
   timeline: TimelineEntry[],
   turnId: string,
 ): TimelineEntry[] {
-  if (timeline.some((entry) => entry.kind === 'user' && entry.turnId === turnId)) {
+  if (
+    timeline.some((entry) => entry.kind === 'user' && entry.turnId === turnId)
+  ) {
     return timeline;
   }
   const index = timeline.findLastIndex(
@@ -417,7 +482,11 @@ function updateRuntimeCurrentTurn(
     if (entry.kind !== 'turn') return runtime;
     const result = updater(entry.items, entry.completed);
     const timeline = [...runtime.timeline];
-    timeline[idx] = { ...entry, items: result.items, completed: result.completed };
+    timeline[idx] = {
+      ...entry,
+      items: result.items,
+      completed: result.completed,
+    };
     return { ...runtime, timeline };
   }
 
@@ -489,7 +558,8 @@ function absorbStrandedFailures(
 
   const parked = new Map<string, TurnFailure>();
   const keptExisting = existing.filter((entry) => {
-    if (entry.kind !== 'turnFailure' || !arriving.has(entry.turnId)) return true;
+    if (entry.kind !== 'turnFailure' || !arriving.has(entry.turnId))
+      return true;
     parked.set(entry.turnId, entry.failure);
     return false;
   });
@@ -540,8 +610,7 @@ function upsertRuntimeTurnFailure(
   failure: TurnFailure,
 ): ThreadRuntimeState {
   const existingIndex = runtime.timeline.findIndex(
-    (entry) =>
-      entry.kind === 'turnFailure' && entry.turnId === failure.turnId,
+    (entry) => entry.kind === 'turnFailure' && entry.turnId === failure.turnId,
   );
   if (existingIndex >= 0) {
     const existing = runtime.timeline[existingIndex];
@@ -571,9 +640,131 @@ function upsertRuntimeTurnFailure(
   return { ...runtime, timeline };
 }
 
-function updateRuntimeDiff(runtime: ThreadRuntimeState, turnId: string, diff: string): ThreadRuntimeState {
+interface PersistedItemsOptions {
+  /** Observation counter captured when the request was issued. */
+  baselineSeq: number;
+  /** Whether to refuse turns that are not sitting at the cheap `summary` view. */
+  requireSummaryView: boolean;
+  /** Whether the turn may be marked as holding every persisted item. */
+  markFull: boolean;
+}
+
+/**
+ * Folds a persisted item page into one turn under the shared authority rules.
+ *
+ * Shared by the completed-turn top-up and by recovery because the merge itself
+ * is identical; only the preconditions and whether the turn may be declared
+ * complete differ, and encoding those as flags keeps one implementation of the
+ * ordering and payload-selection rules.
+ */
+function applyPersistedItems(
+  runtime: ThreadRuntimeState,
+  turnId: string,
+  items: Array<Record<string, unknown>>,
+  { baselineSeq, requireSummaryView, markFull }: PersistedItemsOptions,
+): ThreadRuntimeState {
+  const normalized = items.map((item, index) =>
+    // Page-local ids must not collide with another turn's fallback ids.
+    normalizeThreadItem(item, true, `${turnId}:${index}`),
+  );
+  const timeline = [...runtime.timeline];
+  const turnIndex = timeline.findIndex(
+    (entry) => entry.kind === 'turn' && entry.turnId === turnId,
+  );
+  const user = normalized.find((item) => item.kind === 'userMessage');
+  // A turn adopted after reconnect can also have missed its prompt. Keep the
+  // prompt before its response, preserving any optimistic user row already held.
+  if (
+    turnIndex >= 0 &&
+    user?.kind === 'userMessage' &&
+    !timeline.some((entry) => entry.kind === 'user' && entry.turnId === turnId)
+  ) {
+    timeline.splice(turnIndex, 0, {
+      kind: 'user',
+      turnId,
+      content: user.message.text,
+      ...(user.message.images.length > 0 && { images: user.message.images }),
+    });
+  }
+  return {
+    ...runtime,
+    timeline: timeline.map((entry) => {
+      if (entry.kind !== 'turn' || entry.turnId !== turnId) return entry;
+      if (requireSummaryView && entry.itemsView !== 'summary') return entry;
+      const persisted = normalized.flatMap((item) =>
+        item.kind === 'render' || item.kind === 'unknown' ? [item.item] : [],
+      );
+      return {
+        ...entry,
+        items: mergeRecoveredItems(persisted, entry.items, { baselineSeq }),
+        // Plan text is repaired per item, not per turn. Skipping the whole plan
+        // whenever the turn already had one meant a plan truncated mid-stream
+        // by a disconnect could never be repaired: the streamed prefix counted
+        // as "already have it". Each persisted plan item carries its own whole
+        // accumulated text, so it replaces that item's fragment and leaves
+        // items this snapshot does not mention alone.
+        plan: mergePersistedPlan(entry.plan, normalized, baselineSeq),
+        ...(markFull && { itemsView: 'full' as const }),
+      };
+    }),
+  };
+}
+
+/**
+ * Writes one plan item's text into a turn, replacing whatever it held.
+ *
+ * @param runtime - Thread runtime to update
+ * @param turnId - Turn owning the plan
+ * @param itemId - Plan item whose text is authoritative
+ * @param text - The whole accumulated text for that item
+ * @returns The runtime with that plan item replaced, creating its turn if needed
+ */
+function setRuntimePlanText(
+  runtime: ThreadRuntimeState,
+  turnId: string,
+  itemId: string,
+  text: string,
+): ThreadRuntimeState {
+  // The terminal event can be the first one seen after a disconnect.
+  const timeline = [...ensureTurnEntry(runtime.timeline, turnId)];
+  const idx = timeline.findIndex(
+    (entry) => entry.kind === 'turn' && entry.turnId === turnId,
+  );
+  if (idx < 0) return runtime;
+  const entry = timeline[idx];
+  if (entry.kind !== 'turn') return runtime;
+  const held = entry.plan?.planTextByItemId?.[itemId];
+  if (held?.completed && held.text === text) return runtime;
+  timeline[idx] = {
+    ...entry,
+    plan: {
+      explanation: entry.plan?.explanation ?? null,
+      steps: entry.plan?.steps ?? [],
+      planTextByItemId: {
+        ...(entry.plan?.planTextByItemId ?? {}),
+        // A terminal plan payload carries the whole accumulated text, so this
+        // is a replacement. Stamping it is what lets a later snapshot tell that
+        // this was observed after the snapshot's request went out.
+        [itemId]: {
+          text,
+          completed: true,
+          observedSeq: nextObservationSeq(),
+        },
+      },
+    },
+  };
+  return { ...runtime, timeline };
+}
+
+function updateRuntimeDiff(
+  runtime: ThreadRuntimeState,
+  turnId: string,
+  diff: string,
+): ThreadRuntimeState {
   const timeline = runtime.timeline.map((entry) =>
-    entry.kind === 'turn' && entry.turnId === turnId ? { ...entry, diff } : entry,
+    entry.kind === 'turn' && entry.turnId === turnId
+      ? { ...entry, diff }
+      : entry,
   );
   return { ...runtime, timeline };
 }
@@ -590,7 +781,14 @@ function updateRuntimePlan(
     const entry = runtime.timeline[idx];
     if (entry.kind !== 'turn') return runtime;
     const timeline = [...runtime.timeline];
-    timeline[idx] = { ...entry, plan };
+    timeline[idx] = {
+      ...entry,
+      plan: {
+        ...plan,
+        // A progress update owns steps/explanation, not model plan-item text.
+        planTextByItemId: plan.planTextByItemId ?? entry.plan?.planTextByItemId,
+      },
+    };
     return { ...runtime, timeline };
   }
   return {
@@ -640,14 +838,21 @@ interface TimelineState {
   isThreadLoading: (threadId: string) => boolean;
   hasPendingApproval: (threadId: string) => boolean;
 
-  setActiveThread: (threadId: string, cwd?: string | null, title?: string | null) => void;
+  setActiveThread: (
+    threadId: string,
+    cwd?: string | null,
+    title?: string | null,
+  ) => void;
   setReadOnlyThread: (thread: ThreadDto) => void;
   clearThread: () => void;
   hydrateTimeline: (turns: TurnDto[], cwd?: string | null) => void;
   setThreadTitle: (title: string | null) => void;
   addUserMessage: (text: string, images?: string[]) => void;
   addSystemError: (message: string) => void;
-  addSystemMessage: (message: string, severity?: 'info' | 'warning' | 'error') => void;
+  addSystemMessage: (
+    message: string,
+    severity?: 'info' | 'warning' | 'error',
+  ) => void;
   upsertTurnFailure: (failure: TurnFailure) => void;
 
   toggleReasoning: (itemId: string) => void;
@@ -671,17 +876,26 @@ interface TimelineState {
   collapseReasoning: (itemId: string) => void;
   addApproval: (approval: ApprovalRequest) => void;
   addUserInputRequest: (request: UserInputRequest) => void;
-  resolveApproval: (requestId: string | number, decision: ResolvableApprovalDecision) => void;
+  resolveApproval: (
+    requestId: string | number,
+    decision: ResolvableApprovalDecision,
+  ) => void;
   resolveUserInputRequest: (requestId: string | number) => void;
   setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
   setThreadStatus: (status: ThreadStatusType | null) => void;
   setActiveTurnId: (turnId: string | null) => void;
   clearActiveTurn: () => void;
-  hydrateTokenUsage: (turns: Array<{ turnId: string; usage: ThreadTokenUsage }>) => void;
+  hydrateTokenUsage: (
+    turns: Array<{ turnId: string; usage: ThreadTokenUsage }>,
+  ) => void;
   hydrateTurnDiffs: (turns: Array<{ turnId: string; diff: string }>) => void;
   resolveApprovalByRequestId: (requestId: string | number) => void;
 
-  hydrateTimelineForThread: (threadId: string, turns: TurnDto[], cwd?: string | null) => void;
+  hydrateTimelineForThread: (
+    threadId: string,
+    turns: TurnDto[],
+    cwd?: string | null,
+  ) => void;
   hydrateOpenedThread: (params: {
     threadId: string;
     turnsNewestFirst: TurnDto[];
@@ -696,8 +910,14 @@ interface TimelineState {
   ) => void;
   setHistoryLoadingForThread: (threadId: string, loading: boolean) => void;
   markThreadDeletedRemotely: (threadId: string, message: string) => void;
-  hydrateTokenUsageForThread: (threadId: string, turns: Array<{ turnId: string; usage: ThreadTokenUsage }>) => void;
-  hydrateTurnDiffsForThread: (threadId: string, turns: Array<{ turnId: string; diff: string }>) => void;
+  hydrateTokenUsageForThread: (
+    threadId: string,
+    turns: Array<{ turnId: string; usage: ThreadTokenUsage }>,
+  ) => void;
+  hydrateTurnDiffsForThread: (
+    threadId: string,
+    turns: Array<{ turnId: string; diff: string }>,
+  ) => void;
   hydrateTurnErrorsForThread: (
     threadId: string,
     errors: PersistedTurnErrorDto[],
@@ -716,32 +936,104 @@ interface TimelineState {
     itemId: string,
     updater: (existing: TurnItem | undefined) => TurnItem,
   ) => void;
-  /** Replaces a summary turn's items with the full set fetched on demand. */
+  /** Tops a completed summary turn up with the full set fetched on demand. */
   applyFullTurnItemsForThread: (
     threadId: string,
     turnId: string,
     items: Array<Record<string, unknown>>,
   ) => void;
-  updateTurnDiffForThread: (threadId: string, turnId: string, diff: string) => void;
-  updateTurnPlanForThread: (threadId: string, turnId: string, plan: TurnPlanState) => void;
-  appendPlanDeltaForThread: (threadId: string, turnId: string, itemId: string, delta: string) => void;
+  /**
+   * Repairs a turn from persisted items without declaring its history complete.
+   *
+   * Used for a turn that is still running and for turns repaired after a
+   * reconnect, where more items may still arrive.
+   */
+  applyRecoveredTurnItemsForThread: (
+    threadId: string,
+    turnId: string,
+    items: Array<Record<string, unknown>>,
+    baselineSeq: number,
+  ) => void;
+  /**
+   * Settles turn lifecycle from freshly read turn headers.
+   *
+   * Items and lifecycle are separate facts on separate notifications, so
+   * repairing a transcript after a disconnect does not repair the spinner. Only
+   * turns the headers actually name are touched, and only forwards.
+   */
+  settleTurnLifecycleForThread: (
+    threadId: string,
+    turns: Array<{ id: string; status: TurnDto['status'] }>,
+  ) => void;
+  updateTurnDiffForThread: (
+    threadId: string,
+    turnId: string,
+    diff: string,
+  ) => void;
+  updateTurnPlanForThread: (
+    threadId: string,
+    turnId: string,
+    plan: TurnPlanState,
+  ) => void;
+  appendPlanDeltaForThread: (
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    delta: string,
+  ) => void;
+  /**
+   * Replaces one plan item's text with its authoritative accumulated value.
+   *
+   * Plan text streams as deltas like any other item, so a fragment missed
+   * during a disconnect leaves a truncated plan on screen. The terminal payload
+   * carries the whole text rather than a tail, which makes repair a
+   * replacement — appending it would duplicate everything received so far.
+   */
+  setPlanTextForThread: (
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    text: string,
+  ) => void;
   setLoadingForThread: (threadId: string, loading: boolean) => void;
   addApprovalForThread: (threadId: string, approval: ApprovalRequest) => void;
-  addUserInputRequestForThread: (threadId: string, request: UserInputRequest) => void;
-  resolveApprovalForThread: (threadId: string, requestId: string | number, decision: ResolvableApprovalDecision) => void;
-  resolveUserInputRequestForThread: (threadId: string, requestId: string | number) => void;
-  setTokenUsageForThread: (threadId: string, turnId: string, usage: ThreadTokenUsage) => void;
-  setThreadStatusForThread: (threadId: string, status: ThreadStatusType | null) => void;
+  addUserInputRequestForThread: (
+    threadId: string,
+    request: UserInputRequest,
+  ) => void;
+  resolveApprovalForThread: (
+    threadId: string,
+    requestId: string | number,
+    decision: ResolvableApprovalDecision,
+  ) => void;
+  resolveUserInputRequestForThread: (
+    threadId: string,
+    requestId: string | number,
+  ) => void;
+  setTokenUsageForThread: (
+    threadId: string,
+    turnId: string,
+    usage: ThreadTokenUsage,
+  ) => void;
+  setThreadStatusForThread: (
+    threadId: string,
+    status: ThreadStatusType | null,
+  ) => void;
   setActiveTurnIdForThread: (threadId: string, turnId: string | null) => void;
   clearActiveTurnForThread: (threadId: string) => void;
-  addSystemMessageForThread: (threadId: string, message: string, severity?: 'info' | 'warning' | 'error', turnId?: string) => void;
-  addSystemErrorForThread: (threadId: string, message: string) => void;
-  upsertTurnFailureForThread: (
+  addSystemMessageForThread: (
     threadId: string,
-    failure: TurnFailure,
+    message: string,
+    severity?: 'info' | 'warning' | 'error',
+    turnId?: string,
   ) => void;
+  addSystemErrorForThread: (threadId: string, message: string) => void;
+  upsertTurnFailureForThread: (threadId: string, failure: TurnFailure) => void;
   setThreadTitleForThread: (threadId: string, title: string | null) => void;
-  resolveApprovalByRequestIdForThread: (threadId: string, requestId: string | number) => void;
+  resolveApprovalByRequestIdForThread: (
+    threadId: string,
+    requestId: string | number,
+  ) => void;
 }
 
 export const useTimelineStore = create<TimelineState>((set, get) => {
@@ -752,9 +1044,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     set((state) => {
       const base = readRuntime(state, threadId) ?? createRuntime({ threadId });
       const runtime = touchRuntime(updater(base));
-      const threadsById = { ...persistSelectedRuntime(state), [threadId]: runtime };
+      const threadsById = {
+        ...persistSelectedRuntime(state),
+        [threadId]: runtime,
+      };
       const patch: Partial<TimelineState> = { threadsById };
-      if (state.threadId === threadId) Object.assign(patch, selectedFields(runtime));
+      if (state.threadId === threadId)
+        Object.assign(patch, selectedFields(runtime));
       return patch;
     });
   };
@@ -810,7 +1106,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
             threadsById,
           };
         }
-        const runtime = touchRuntime(threadsById[threadId] ?? createRuntime({ threadId }));
+        const runtime = touchRuntime(
+          threadsById[threadId] ?? createRuntime({ threadId }),
+        );
         return {
           ...selectedFields(runtime),
           selectedThreadId: threadId,
@@ -894,11 +1192,15 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       const evictedThreadIds: string[] = [];
 
       set((state) => {
-        const candidates: Array<{ threadId: string; lastActivityAt: number }> = [];
+        const candidates: Array<{ threadId: string; lastActivityAt: number }> =
+          [];
         for (const threadId of state.subscribedThreadIds) {
           const runtime = readRuntime(state, threadId);
           if (isSafeToCleanupIdleRuntime(runtime, state.threadId)) {
-            candidates.push({ threadId, lastActivityAt: runtime.lastActivityAt });
+            candidates.push({
+              threadId,
+              lastActivityAt: runtime.lastActivityAt,
+            });
           }
         }
 
@@ -921,6 +1223,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
       const socket = getSocket();
       for (const threadId of evictedThreadIds) {
+        forgetThreadPolicy(threadId);
         socket.emit('thread.unsubscribe', { threadId });
       }
     },
@@ -931,21 +1234,30 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     getThreadRuntime: (threadId) => readRuntime(get(), threadId),
-    isThreadLoading: (threadId) => readRuntime(get(), threadId)?.loading ?? false,
-    hasPendingApproval: (threadId) => hasPendingApproval(readRuntime(get(), threadId)),
+    isThreadLoading: (threadId) =>
+      readRuntime(get(), threadId)?.loading ?? false,
+    hasPendingApproval: (threadId) =>
+      hasPendingApproval(readRuntime(get(), threadId)),
 
     setActiveThread: (threadId, cwd, title) => {
       get().ensureThreadState({ threadId, cwd, title, mode: 'live' });
       get().selectThread(threadId);
       getSocket().emit('thread.subscribe', { threadId });
-      set((state) => ({ subscribedThreadIds: new Set(state.subscribedThreadIds).add(threadId) }));
+      set((state) => ({
+        subscribedThreadIds: new Set(state.subscribedThreadIds).add(threadId),
+      }));
       get().cleanupIdleThreadSubscriptions();
     },
 
     setReadOnlyThread: (thread) => {
       const title = thread.name ?? thread.preview ?? null;
       get().unsubscribeThread(thread.id);
-      get().ensureThreadState({ threadId: thread.id, cwd: thread.cwd, title, mode: 'readOnly' });
+      get().ensureThreadState({
+        threadId: thread.id,
+        cwd: thread.cwd,
+        title,
+        mode: 'readOnly',
+      });
       // The failed writable open creates a live runtime before this degraded
       // path runs. `ensureThreadState` intentionally preserves existing state,
       // so the mode must be changed explicitly before selecting the snapshot.
@@ -980,7 +1292,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ...runtime,
         timeline: [
           ...runtime.timeline,
-          { kind: 'user' as const, content: text, ...(images?.length && { images }) },
+          {
+            kind: 'user' as const,
+            content: text,
+            ...(images?.length && { images }),
+          },
         ],
         loading: true,
       }));
@@ -993,7 +1309,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
     addSystemMessage: (message, severity = 'info') => {
       const threadId = selectedThread();
-      if (threadId) get().addSystemMessageForThread(threadId, message, severity);
+      if (threadId)
+        get().addSystemMessageForThread(threadId, message, severity);
     },
 
     upsertTurnFailure: (failure) => {
@@ -1019,7 +1336,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
     updateTurnItem: (turnId, itemId, updater) => {
       const threadId = selectedThread();
-      if (threadId) get().updateTurnItemForThread(threadId, turnId, itemId, updater);
+      if (threadId)
+        get().updateTurnItemForThread(threadId, turnId, itemId, updater);
     },
 
     updateTurnDiff: (turnId, diff) => {
@@ -1034,7 +1352,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
     appendPlanDelta: (turnId, itemId, delta) => {
       const threadId = selectedThread();
-      if (threadId) get().appendPlanDeltaForThread(threadId, turnId, itemId, delta);
+      if (threadId)
+        get().appendPlanDeltaForThread(threadId, turnId, itemId, delta);
     },
 
     setLoading: (loading) => {
@@ -1061,14 +1380,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       });
     },
 
-    addApproval: (approval) => get().addApprovalForThread(approval.threadId, approval),
+    addApproval: (approval) =>
+      get().addApprovalForThread(approval.threadId, approval),
 
     addUserInputRequest: (request) =>
       get().addUserInputRequestForThread(request.threadId, request),
 
     resolveApproval: (requestId, decision) => {
       const threadId = selectedThread();
-      if (threadId) get().resolveApprovalForThread(threadId, requestId, decision);
+      if (threadId)
+        get().resolveApprovalForThread(threadId, requestId, decision);
     },
 
     resolveUserInputRequest: (requestId) => {
@@ -1108,7 +1429,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
     resolveApprovalByRequestId: (requestId) => {
       const threadId = selectedThread();
-      if (threadId) get().resolveApprovalByRequestIdForThread(threadId, requestId);
+      if (threadId)
+        get().resolveApprovalByRequestIdForThread(threadId, requestId);
     },
 
     hydrateTimelineForThread: (threadId, turns, cwd) => {
@@ -1148,27 +1470,43 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         // the history silently shrinks again.
         //
         // The page is kept only when it introduces nothing this client does not
-        // already hold. If it carries a turn we have never seen, the thread has
-        // moved on elsewhere and the server's view wins outright; merging
-        // partially would risk stitching two different moments together.
+        // already hold.
         const knownTurnIds = collectKnownTurnIds(runtime.timeline);
         const pageIsSubsumed =
           runtime.hydrated &&
           turns.length > 0 &&
           turns.every((turn) => knownTurnIds.has(turn.id));
 
+        const pageEntries = ensureRequestTurnEntries(
+          turnsToTimeline(turns),
+          runtime.approvals,
+          runtime.userInputRequests,
+        );
+        // A thread not yet hydrated can still hold entries: subscription and
+        // this request run concurrently, so notifications for a turn that is
+        // running right now may already have been written. Replacing wholesale
+        // here is what erased them on a refresh mid-turn.
+        //
+        // Once hydrated, the two are reconciled only when they overlap. Without
+        // a shared turn they are disconnected windows of a thread that moved on
+        // elsewhere, and interleaving them would keep every entry while hiding
+        // the gap between them — so the server's view still wins outright, as
+        // it did before, and its cursor is adopted so the gap stays pageable.
+        const reconcilable =
+          !runtime.hydrated || sharesHistory(pageEntries, runtime.timeline);
+
         return {
           ...runtime,
           threadCwd: cwd ?? runtime.threadCwd,
           loading: false,
-          timeline: pageIsSubsumed
-            ? runtime.timeline
-            : ensureRequestTurnEntries(
-                turnsToTimeline(turns),
-                runtime.approvals,
-                runtime.userInputRequests,
-              ),
-          activeTurnId: null,
+          // Known turn ids do not imply known contents or lifecycle. Keep the
+          // paging cursor below, but still reconcile a repeat open's evidence.
+          timeline: reconcilable
+            ? reconcileTimeline(pageEntries, runtime.timeline)
+            : pageEntries,
+          // Left to the caller, which can compare the page against what is
+          // already known. Clearing it here dropped a `turn/started` that
+          // arrived while this request was in flight.
           hydrated: true,
           // Keeping the existing cursor matters as much as keeping the entries:
           // the cursor from a fresh open points just before the newest page, so
@@ -1210,7 +1548,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     setHistoryLoadingForThread: (threadId, historyLoading) => {
-      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, historyLoading }));
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        historyLoading,
+      }));
     },
 
     /**
@@ -1237,21 +1578,45 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       }));
     },
 
+    // Token usage and turn diffs are not app-server state this client reads a
+    // second view of: app-server exposes no historical read for either, and the
+    // rows come from this project's own database, written by the backend from
+    // the same notifications the browser receives. The stored copy is therefore
+    // a RECORDING of live, one hop behind it, and can never hold something the
+    // socket did not already deliver. Its whole purpose is to survive a refresh
+    // or a disconnected window.
+    //
+    // So the rule is fill-only, and no ordering machinery is needed to justify
+    // it. Both of these used to replace instead, which reverted a value that
+    // arrived while the request was in flight. `hydrateTurnErrorsForThread`
+    // below already merged, which is why it never had the bug.
     hydrateTokenUsageForThread: (threadId, turns) => {
-      const byTurn: Record<string, ThreadTokenUsage> = {};
-      for (const turn of turns) byTurn[turn.turnId] = turn.usage;
-      applyThreadUpdate(threadId, (runtime) => ({
-        ...runtime,
-        tokenUsageByTurn: byTurn,
-        latestTokenUsage: turns.at(-1)?.usage ?? null,
-      }));
+      applyThreadUpdate(threadId, (runtime) => {
+        const tokenUsageByTurn = { ...runtime.tokenUsageByTurn };
+        let filled = false;
+        for (const turn of turns) {
+          if (turn.turnId in tokenUsageByTurn) continue;
+          tokenUsageByTurn[turn.turnId] = turn.usage;
+          filled = true;
+        }
+        return {
+          ...runtime,
+          tokenUsageByTurn,
+          // The newest turn's usage drives the context gauge. A live value is
+          // already the newest by construction, so the recording only supplies
+          // one when there is nothing to supersede.
+          latestTokenUsage:
+            runtime.latestTokenUsage ??
+            (filled ? (turns.at(-1)?.usage ?? null) : null),
+        };
+      });
     },
 
     hydrateTurnDiffsForThread: (threadId, turns) => {
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         timeline: runtime.timeline.map((entry) => {
-          if (entry.kind !== 'turn') return entry;
+          if (entry.kind !== 'turn' || entry.diff !== undefined) return entry;
           const match = turns.find((turn) => turn.turnId === entry.turnId);
           return match ? { ...entry, diff: match.diff } : entry;
         }),
@@ -1273,71 +1638,100 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     updateCurrentTurnForThread: (threadId, turnId, updater) => {
-      applyThreadUpdate(threadId, (runtime) => updateRuntimeCurrentTurn(runtime, turnId, updater));
+      applyThreadUpdate(threadId, (runtime) =>
+        updateRuntimeCurrentTurn(runtime, turnId, updater),
+      );
     },
 
     updateTurnItemForThread: (threadId, turnId, itemId, updater) => {
-      applyThreadUpdate(threadId, (runtime) => updateRuntimeTurnItem(runtime, turnId, itemId, updater));
+      applyThreadUpdate(threadId, (runtime) =>
+        updateRuntimeTurnItem(runtime, turnId, itemId, (existing) => {
+          const next = updater(existing);
+          // Stamp only a write that actually changed something. A guarded delta
+          // returns `existing` untouched, and re-stamping that would make a
+          // stale event look to a recovery merge like fresh evidence that
+          // outranks the snapshot.
+          return next === existing
+            ? next
+            : { ...next, observedSeq: nextObservationSeq() };
+        }),
+      );
     },
 
     applyFullTurnItemsForThread: (threadId, turnId, items) => {
-      applyThreadUpdate(threadId, (runtime) => ({
-        ...runtime,
-        timeline: runtime.timeline.map((entry) => {
-          if (entry.kind !== 'turn' || entry.turnId !== turnId) return entry;
-          // The request may have been in flight while live notifications
-          // rebuilt this turn. A persisted snapshot is older than anything
-          // that streamed in, so it may only fill gaps — never overwrite.
-          if (entry.itemsView !== 'summary') return entry;
-          const normalized = items.map((item, index) =>
-            normalizeThreadItem(item, true, `${turnId}:${index}`),
-          );
-          const parsed = normalized.flatMap((item) =>
-            item.kind === 'render' || item.kind === 'unknown'
-              ? [item.item]
-              : [],
-          );
-          const liveItemIds = new Set(entry.items.map((item) => item.itemId));
-          const restored = parsed.filter(
-            (item) => !liveItemIds.has(item.itemId),
-          );
-          return {
-            ...entry,
-            // Live items keep their position and their streamed state; the
-            // snapshot only contributes what the summary view had withheld.
-            items: [...restored, ...entry.items],
-            plan: entry.plan ?? normalizedPlan(normalized),
-            // Marking it full is what stops the top-up from firing again.
-            itemsView: 'full' as const,
-          };
+      applyThreadUpdate(threadId, (runtime) =>
+        applyPersistedItems(runtime, turnId, items, {
+          // This snapshot was fetched at an unknown moment, so it cannot claim
+          // to be newer than a terminal observation already on screen. It still
+          // repairs fragments, which is the point of topping a turn up.
+          baselineSeq: -1,
+          requireSummaryView: true,
+          markFull: true,
         }),
-      }));
+      );
+    },
+
+    applyRecoveredTurnItemsForThread: (
+      threadId,
+      turnId,
+      items,
+      baselineSeq,
+    ) => {
+      applyThreadUpdate(threadId, (runtime) =>
+        applyPersistedItems(runtime, turnId, items, {
+          baselineSeq,
+          // A running turn holds no `summary` marker, and a reconnect repairs
+          // turns at every detail level, so the top-up's precondition would
+          // reject exactly the cases recovery exists for.
+          requireSummaryView: false,
+          // More items will still stream into a running turn. Calling it `full`
+          // is what stops the completed-turn top-up firing later, and this
+          // snapshot is not that.
+          markFull: false,
+        }),
+      );
     },
     updateTurnDiffForThread: (threadId, turnId, diff) => {
-      applyThreadUpdate(threadId, (runtime) => updateRuntimeDiff(runtime, turnId, diff));
+      applyThreadUpdate(threadId, (runtime) =>
+        updateRuntimeDiff(runtime, turnId, diff),
+      );
     },
 
     updateTurnPlanForThread: (threadId, turnId, plan) => {
-      applyThreadUpdate(threadId, (runtime) => updateRuntimePlan(runtime, turnId, plan));
+      applyThreadUpdate(threadId, (runtime) =>
+        updateRuntimePlan(runtime, turnId, plan),
+      );
     },
 
     appendPlanDeltaForThread: (threadId, turnId, itemId, delta) => {
       if (!delta) return;
       applyThreadUpdate(threadId, (runtime) => {
-        const patchPlan = (plan?: TurnPlanState): TurnPlanState => ({
-          explanation: plan?.explanation ?? null,
-          steps: plan?.steps ?? [],
-          planTextByItemId: {
-            ...(plan?.planTextByItemId ?? {}),
-            [itemId]: `${plan?.planTextByItemId?.[itemId] ?? ''}${delta}`,
-          },
-        });
+        const patchPlan = (plan?: TurnPlanState): TurnPlanState => {
+          const held = plan?.planTextByItemId?.[itemId];
+          return {
+            explanation: plan?.explanation ?? null,
+            steps: plan?.steps ?? [],
+            planTextByItemId: {
+              ...(plan?.planTextByItemId ?? {}),
+              [itemId]: {
+                text: `${held?.text ?? ''}${delta}`,
+                completed: false,
+                observedSeq: nextObservationSeq(),
+              },
+            },
+          };
+        };
         const idx = runtime.timeline.findIndex(
           (entry) => entry.kind === 'turn' && entry.turnId === turnId,
         );
         if (idx >= 0) {
           const entry = runtime.timeline[idx];
           if (entry.kind !== 'turn') return runtime;
+          // A delta that arrives after the terminal payload is stale by
+          // construction: that payload already carries the whole accumulated
+          // text, so appending would duplicate its tail and reopen a finished
+          // plan item. This is `acceptsStreamedUpdate` applied to plan text.
+          if (entry.plan?.planTextByItemId?.[itemId]?.completed) return runtime;
           const timeline = [...runtime.timeline];
           timeline[idx] = { ...entry, plan: patchPlan(entry.plan) };
           return { ...runtime, timeline };
@@ -1346,10 +1740,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           ...runtime,
           timeline: [
             ...runtime.timeline,
-            { kind: 'turn' as const, turnId, items: [], completed: false, plan: patchPlan() },
+            {
+              kind: 'turn' as const,
+              turnId,
+              items: [],
+              completed: false,
+              plan: patchPlan(),
+            },
           ],
         };
       });
+    },
+
+    setPlanTextForThread: (threadId, turnId, itemId, text) => {
+      applyThreadUpdate(threadId, (runtime) =>
+        setRuntimePlanText(runtime, turnId, itemId, text),
+      );
     },
 
     setLoadingForThread: (threadId, loading) => {
@@ -1359,11 +1765,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addApprovalForThread: (threadId, approval) => {
       applyThreadUpdate(threadId, (runtime) => {
         const requestKey = String(approval.requestId);
-        const alreadyResolved = runtime.pendingResolvedRequestIds.has(requestKey);
+        const alreadyResolved =
+          runtime.pendingResolvedRequestIds.has(requestKey);
         const finalApproval = alreadyResolved
           ? { ...approval, status: 'resolved' as const }
           : approval;
-        const pendingResolvedRequestIds = new Set(runtime.pendingResolvedRequestIds);
+        const pendingResolvedRequestIds = new Set(
+          runtime.pendingResolvedRequestIds,
+        );
         if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
         return {
           ...runtime,
@@ -1377,16 +1786,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addUserInputRequestForThread: (threadId, request) => {
       applyThreadUpdate(threadId, (runtime) => {
         const requestKey = String(request.requestId);
-        const alreadyResolved = runtime.pendingResolvedRequestIds.has(requestKey);
+        const alreadyResolved =
+          runtime.pendingResolvedRequestIds.has(requestKey);
         const finalRequest: UserInputRequest = alreadyResolved
           ? { ...request, status: 'resolved' }
           : request;
-        const pendingResolvedRequestIds = new Set(runtime.pendingResolvedRequestIds);
+        const pendingResolvedRequestIds = new Set(
+          runtime.pendingResolvedRequestIds,
+        );
         if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
         return {
           ...runtime,
           timeline: ensureTurnEntry(runtime.timeline, request.turnId),
-          userInputRequests: { ...runtime.userInputRequests, [requestKey]: finalRequest },
+          userInputRequests: {
+            ...runtime.userInputRequests,
+            [requestKey]: finalRequest,
+          },
           pendingResolvedRequestIds,
         };
       });
@@ -1432,7 +1847,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     setThreadStatusForThread: (threadId, status) => {
-      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, threadStatus: status }));
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        threadStatus: status,
+      }));
     },
 
     setActiveTurnIdForThread: (threadId, turnId) => {
@@ -1446,10 +1864,70 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     clearActiveTurnForThread: (threadId) => {
-      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, activeTurnId: null, loading: false }));
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        activeTurnId: null,
+        loading: false,
+      }));
     },
 
-    addSystemMessageForThread: (threadId, message, severity = 'info', turnId?) => {
+    settleTurnLifecycleForThread: (threadId, turns) => {
+      applyThreadUpdate(threadId, (runtime) => {
+        const statusById = new Map(turns.map((turn) => [turn.id, turn.status]));
+        const timeline = runtime.timeline.map((entry) => {
+          if (entry.kind !== 'turn') return entry;
+          const status = statusById.get(entry.turnId);
+          // A turn the headers do not mention is not evidence of anything: the
+          // read is bounded, so an older turn is simply out of range.
+          if (status === undefined || status === 'inProgress') return entry;
+          // Forward-only, like every other lifecycle write. Marking an already
+          // completed turn completed is a no-op worth skipping so the entry
+          // keeps its identity and the transcript does not re-render.
+          return entry.completed ? entry : { ...entry, completed: true };
+        });
+
+        // The active pointer is only cleared on evidence about that exact turn.
+        // The headers name the turns that exist; one this read did not return
+        // says nothing, and clearing on that would resurrect the stuck-spinner
+        // bug in the opposite direction — a turn that started during the gap
+        // and is genuinely running would be declared finished.
+        const activeStatus = runtime.activeTurnId
+          ? statusById.get(runtime.activeTurnId)
+          : undefined;
+        const activeEnded =
+          activeStatus !== undefined && activeStatus !== 'inProgress';
+        // A turn reported running that this client does not know about started
+        // during the gap. Adopting it restores the composer's running state.
+        const terminalTurnIds = new Set(
+          timeline.flatMap((entry) =>
+            entry.kind === 'turn' && entry.completed ? [entry.turnId] : [],
+          ),
+        );
+        const running = turns.find(
+          (turn) =>
+            turn.status === 'inProgress' && !terminalTurnIds.has(turn.id),
+        );
+        const activeTurnId = activeEnded
+          ? (running?.id ?? null)
+          : (runtime.activeTurnId ?? running?.id ?? null);
+
+        return {
+          ...runtime,
+          timeline: activeTurnId
+            ? ensureTurnEntry(timeline, activeTurnId)
+            : timeline,
+          activeTurnId,
+          loading: activeTurnId !== null,
+        };
+      });
+    },
+
+    addSystemMessageForThread: (
+      threadId,
+      message,
+      severity = 'info',
+      turnId?,
+    ) => {
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         timeline: [
@@ -1464,7 +1942,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         ...runtime,
         timeline: [
           ...runtime.timeline,
-          { kind: 'system' as const, content: `Error: ${message}`, severity: 'error' as const },
+          {
+            kind: 'system' as const,
+            content: `Error: ${message}`,
+            severity: 'error' as const,
+          },
         ],
         loading: false,
       }));
@@ -1477,7 +1959,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     setThreadTitleForThread: (threadId, title) => {
-      applyThreadUpdate(threadId, (runtime) => ({ ...runtime, threadTitle: title }));
+      applyThreadUpdate(threadId, (runtime) => ({
+        ...runtime,
+        threadTitle: title,
+      }));
     },
 
     resolveApprovalByRequestIdForThread: (threadId, requestId) => {
@@ -1496,7 +1981,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
         const userInput = runtime.userInputRequests[requestKey];
         if (userInput) {
-          const resolved: UserInputRequest = { ...userInput, status: 'resolved' };
+          const resolved: UserInputRequest = {
+            ...userInput,
+            status: 'resolved',
+          };
           return {
             ...runtime,
             userInputRequests: {
@@ -1508,7 +1996,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
         return {
           ...runtime,
-          pendingResolvedRequestIds: new Set(runtime.pendingResolvedRequestIds).add(requestKey),
+          pendingResolvedRequestIds: new Set(
+            runtime.pendingResolvedRequestIds,
+          ).add(requestKey),
         };
       });
     },
@@ -1516,8 +2006,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 });
 
 /** Selects data from the currently visible thread runtime. */
-export function useSelectedThreadState<T>(selector: (runtime: ThreadRuntimeState | null) => T): T {
-  return useTimelineStore((state) => selector(state.threadId ? readRuntime(state, state.threadId) : null));
+export function useSelectedThreadState<T>(
+  selector: (runtime: ThreadRuntimeState | null) => T,
+): T {
+  return useTimelineStore((state) =>
+    selector(state.threadId ? readRuntime(state, state.threadId) : null),
+  );
 }
 
 /** Selects data from a specific thread runtime. */

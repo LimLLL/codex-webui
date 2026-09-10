@@ -57,7 +57,7 @@ describe('ThreadSettingsObserverService', () => {
     expect(service.readObservedModel('t1')).toBe('gpt-5');
   });
 
-  it('records accepted updates when app-server emits no settings change', () => {
+  it('does not invent an observation from a queued acknowledgement', () => {
     service.recordAcceptedCollaborationMode(
       't1',
       {
@@ -72,10 +72,10 @@ describe('ThreadSettingsObserverService', () => {
     );
 
     expect(service.readCollaborationMode('t1')).toEqual({
-      observed: true,
-      source: 'accepted',
-      mode: 'default',
-      model: 'gpt-5',
+      observed: false,
+      source: 'unknown',
+      mode: null,
+      model: null,
       reasoningEffort: null,
     });
   });
@@ -229,12 +229,91 @@ describe('ThreadSettingsObserverService', () => {
     expect(service.readDisplacedEffort('t1')).toEqual({ value: null });
     expect(service.readDisplacedEffort('never-touched')).toBeNull();
   });
+
+  it('keeps all notified settings when a stale response seed arrives later', () => {
+    const settings = threadSettings('plan', 'new-model', 'high');
+    service.recordThreadSettings('t1', settings);
+    service.seedResponse('t1', {
+      cwd: '/old',
+      model: 'old-model',
+      modelProvider: 'old-provider',
+      serviceTier: 'old-tier',
+      reasoningEffort: 'low',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+      sandbox: { type: 'dangerFullAccess' },
+    });
+    expect(service.readSettings('t1')?.settings).toEqual(settings);
+    expect(service.readSecurityPolicy('t1')).toEqual({
+      observed: true,
+      source: 'notification',
+      approvalPolicy: 'never',
+      sandboxPolicy: settings.sandboxPolicy,
+      approvalsReviewer: 'user',
+    });
+  });
+
+  it('seeds security without inventing a collaboration-mode observation', () => {
+    service.seedResponse('t1', {
+      cwd: '/workspace',
+      model: 'model',
+      modelProvider: 'openai',
+      serviceTier: null,
+      reasoningEffort: null,
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      sandbox: { type: 'readOnly', networkAccess: false },
+    });
+    expect(service.readSecurityPolicy('t1')).toMatchObject({
+      observed: true,
+      source: 'response',
+      approvalPolicy: 'on-request',
+    });
+    expect(service.readCollaborationMode('t1').observed).toBe(false);
+  });
+
+  it('does not overwrite a full notification when a partial mutation is acknowledged', () => {
+    const before = service.readSettings('t1');
+    const settings = threadSettings('default', 'new-model', 'high');
+    service.recordThreadSettings('t1', settings);
+    service.recordAcceptedCollaborationMode(
+      't1',
+      {
+        mode: 'plan',
+        settings: {
+          model: 'old-model',
+          reasoning_effort: 'medium',
+          developer_instructions: null,
+        },
+      },
+      { value: 'xhigh' },
+      before,
+    );
+    expect(service.readSettings('t1')?.settings).toEqual(settings);
+    expect(service.readDisplacedEffort('t1')).toBeNull();
+  });
+
+  it('forgets effective security when the thread unloads', () => {
+    service.recordThreadSettings(
+      't1',
+      threadSettings('default', 'model', 'high'),
+    );
+    notificationHandler?.({
+      method: 'thread/closed',
+      params: { threadId: 't1' },
+    });
+    expect(service.readSecurityPolicy('t1')).toMatchObject({
+      observed: false,
+      source: 'unknown',
+      approvalPolicy: null,
+    });
+  });
 });
 
 function threadSettings(
   mode: 'plan' | 'default',
   model: string,
-  effort: string | null,
+  effort: v2.ThreadSettings['effort'],
 ): v2.ThreadSettings {
   return {
     cwd: '/workspace',

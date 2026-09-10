@@ -83,8 +83,11 @@ through `thread/settings/update` and never injects it into `turn/start`.
 app-server exposes no side-effect-free read for the current mode: neither
 `thread/start` nor `thread/resume` returns `collaborationMode`. The backend
 therefore keeps an in-memory observed-settings cache fed by
-`thread/settings/updated` notifications and by its own accepted writes, and
-reports `observed: false` when it genuinely does not know.
+`thread/settings/updated` notifications and reports `observed: false` when it
+does not know. An accepted write is only a queued acknowledgement: it records
+displaced effort but never replaces the observed settings object. Security
+settings additionally have start/resume/fork seeds; see
+[thread-policy-recovery.md](thread-policy-recovery.md).
 
 Consequences the UI must honor:
 

@@ -107,7 +107,7 @@ export function MentionPopover({ open, browseRelative, filtered, isLoading, sele
                     type="button"
                     title={t('Attach to chat')}
                     onClick={() => onSelect(entry)}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:opacity-100"
+                    className="hover-reveal shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
                   >
                     <Paperclip className="h-3 w-3" />
                   </button>

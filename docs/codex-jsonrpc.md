@@ -39,10 +39,10 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 
 ## App-server 扩展能力
 
-部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
+部分运行时可用方法未出现在当前生成的 `ClientRequest` union 中。**schema 未导出 ≠ 运行时不可用**，判定属于哪一种要靠实测（`codex_probe/`，见 [README](../codex_probe/README.md)）——探针的 `requestRaw()` 就是为此保留的显式逃生口，它的调用点集合即「已知可用但未导出」的清单。后端只为已实测且已接入的字段定义窄类型，不提供任意 JSON-RPC passthrough：
 
 - `collaborationMode/list`：`ThreadCommandsService.listCollaborationModes()` 读取 preset 列表，返回 `data`/`modes` 两种已知列表包裹形态。
-- `thread/settings/update`：`ThreadCommandsService.setCollaborationMode()` 只写 `collaborationMode`，要求先从 app-server 观察到或从 start/resume/fork 响应缓存中解析出非空 model；`developer_instructions:null` 交给 app-server 使用内置 mode 指令。
+- `thread/settings/update`：两个调用方，各写各的窄字段集。`ThreadCommandsService.setCollaborationMode()` 只写 `collaborationMode`，要求先从 app-server 观察到或从 start/resume/fork 响应缓存中解析出非空 model；`developer_instructions:null` 交给 app-server 使用内置 mode 指令。`ThreadSecurityPolicyController` 只写 `approvalPolicy`/`sandboxPolicy`。**未知字段被静默忽略**（实测：拼错的字段返回 OK 且无任何效果），所以 REST 边界必须做白名单校验——否则一个拼写错误就是一次无声的空操作。已实测该方法接受 `approvalPolicy`/`sandboxPolicy`/`approvalsReviewer`/`cwd`/`model`/`modelProvider`/`serviceTier`/`effort`/`summary`/`personality`/`collaborationMode`，且改动会被**下一个真实模型轮次**消费。
 - `thread/fork.deferGoalContinuation`：`ThreadsService.forkThread()` 仅在 REST body 显式 `carryGoal:true` 时发送，且不支持 `ephemeral:true`。
 
 `ThreadSettingsObserverService` 监听 `thread/settings/updated` notification，并在 app-server generation ready 时清空缓存。由于 app-server 没有无副作用读取当前 collaboration mode 的接口，`GET /api/threads/:id/collaboration-mode` 在未观察到设置时返回 `observed:false`，不会通过写操作探测状态。
@@ -92,3 +92,7 @@ client → initialized {}  (notification, no id)
 - `process` 参数名与 Node.js 全局 `process` 冲突，日志相关代码用 `globalThis.process.cwd()`
 - WriteStream 用 append 模式，进程重启不覆盖
 - 进程 close 时清理所有 pending promise 并关闭 log stream
+
+## Settings freshness and item recovery
+
+`ThreadSettingsObserverService` retains complete effective-settings notifications. Start/resume/fork responses seed only unobserved threads; repeat opens project the current observation after their awaited reads. A queued mutation never becomes an invented effective-settings snapshot. Bounded item reads expose incomplete outcomes instead of silently returning truncated history. See [thread-policy-recovery.md](thread-policy-recovery.md) for the REST contract and measured durability limits.

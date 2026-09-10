@@ -31,7 +31,7 @@ codex app-server (server request, 有 id)
 
 | Server Request Method                   | 审批类型                 | 关键参数                                                                                               |
 | --------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `item/commandExecution/requestApproval` | 命令执行 / 终端输入      | kind (`command`/`writeStdin`), approvalId, command, cwd, reason, availableDecisions, proposedExecpolicyAmendment, proposedNetworkPolicyAmendments |
+| `item/commandExecution/requestApproval` | 命令执行 / 终端输入      | kind (`command`/`writeStdin`), approvalId, command, cwd, reason, availableDecisions, proposedExecpolicyAmendment, proposedNetworkPolicyAmendments, additionalPermissions, networkApprovalContext |
 | `item/fileChange/requestApproval`       | 文件变更                 | reason, grantRoot                                                                                      |
 | `item/tool/requestUserInput`            | 用户输入（EXPERIMENTAL） | questions: [{id, header, question, isOther, isSecret, options}]                                        |
 
@@ -120,5 +120,28 @@ app-server → item/tool/requestUserInput (questions[])
 - server request 的 `id` 必须原样回传，app-server 靠它关联响应
 - `serverRequest/resolved` 通知 → 按 requestId 匹配 approvals 或 userInputRequests → 标记 resolved
 - `pendingResolvedRequestIds` 处理乱序到达：resolved 先于 hydrate 时暂存，hydrate 时自动标记
+- **响应必须用 `throwOnError: true` 发出。** 生成的客户端默认以 `{ data, error }` 解析而不抛出，且本项目的 error interceptor 是 `return error` 而非 `throw`，所以失败的响应（另一台设备先答的 409、app-server 重启期间的 503）会照常走进 `.then()`，把卡片标成 Accepted 而服务端什么也没做。响应失败的请求保持未解决，等待权威证据。
 - 删除中的 thread 会拒绝新的审批响应；相关 pending 请求由删除执行器标记为 `cancelled`
 - **抑制必须可逆**：删除期间到达的 server request 只是不广播，DB 行保持 `pending`，并由 gateway 暂存。删除守卫释放时（`ThreadDeletionRegistryService.onRelease`）逐条比对 DB：仍为 `pending` 的重放到 thread room，已 `cancelled` 的丢弃。判据用 DB 状态而非删除结果，因为被真正删掉的 thread 其请求必然已在本地清理阶段取消 —— 这样重放天然不会为已消失的会话弹出卡片
+
+## Backend payload fidelity
+
+SQLite persistence and websocket forwarding retain request params unchanged, including experimental `additionalPermissions` and network-only `networkApprovalContext`. Filesystem access modes and structured paths survive REST recovery intact.
+
+A **special** filesystem path is an object union in the pinned schema — `root`,
+`minimal`, `project_roots` with a sub-path, `tmpdir`, `slash_tmp`, `unknown`
+with its own path — and never a string. A client testing it for a string
+therefore discards every structured scope, and an overlay whose only entry was
+one collapses to null and vanishes from the card entirely. The scope tag is the
+security-relevant part (`root` and `tmpdir` authorize very different things) and
+is parsed and rendered rather than flattened to the word "special". Omitted network permission data remains unspecified; it is never normalized to unrestricted access. Backend contract tests cover both transports. See [thread-policy-recovery.md](thread-policy-recovery.md).
+
+## Startup and reconnect recovery
+
+`pending-approvals-sync.ts` reconciles approvals and user-input requests with the
+backend pending set. Absence is resolution evidence only for requests held
+before the read and unchanged since then. Existing cards keep their decisions;
+new events cannot be cleared by an older empty snapshot. A scoped sync changes
+only those conversations, including when it supersedes an older overlapping
+read. This does not infer which decision another device made: recovered
+resolution stays neutral (`resolved`).

@@ -59,11 +59,30 @@ interface ModelState {
   setModelOverride: (model: string | null) => void;
   setEffortOverride: (effort: ReasoningEffort | null) => void;
   setServiceTierOverride: (tier: string | null | undefined) => void;
-  setObservedThreadEffort: (
+  /**
+   * Observation counter for each thread's recorded settings.
+   *
+   * Two sources write these maps and they are not equally fresh: a
+   * `thread/settings/updated` notification reports the change as it happens,
+   * while an open response is a snapshot taken when the request was served. If
+   * the notification lands while that request is in flight, the older response
+   * would overwrite it and the picker would show settings the conversation had
+   * already left. Stamping the evidence is what makes the two comparable.
+   */
+  observedSettingsSeqByThread: Record<string, number>;
+  /**
+   * Records a thread's observed effort and service tier together.
+   *
+   * @param threadId - Conversation the evidence describes
+   * @param settings - Effort and tier as reported
+   * @param seq - Counter at request issue or notification arrival, never at response application
+   * @returns Nothing; an older observation is discarded
+   */
+  setObservedThreadSettings: (
     threadId: string,
-    effort: ReasoningEffort | null,
+    settings: { effort: ReasoningEffort | null; serviceTier: string | null },
+    seq: number,
   ) => void;
-  setObservedThreadServiceTier: (threadId: string, tier: string | null) => void;
   forgetObservedThreadEffort: (threadId: string) => void;
   clearOverrides: () => void;
 }
@@ -73,25 +92,31 @@ export const useModelStore = create<ModelState>((set) => ({
   effortOverride: null,
   observedEffortByThread: {},
   observedServiceTierByThread: {},
+  observedSettingsSeqByThread: {},
   serviceTierOverride: undefined,
 
   setModelOverride: (model) => set({ modelOverride: model }),
   setEffortOverride: (effort) => set({ effortOverride: effort }),
   setServiceTierOverride: (tier) => set({ serviceTierOverride: tier }),
-  setObservedThreadEffort: (threadId, effort) =>
-    set((state) => ({
-      observedEffortByThread: {
-        ...state.observedEffortByThread,
-        [threadId]: effort,
-      },
-    })),
-  setObservedThreadServiceTier: (threadId, tier) =>
-    set((state) => ({
-      observedServiceTierByThread: {
-        ...state.observedServiceTierByThread,
-        [threadId]: tier,
-      },
-    })),
+  setObservedThreadSettings: (threadId, settings, seq) =>
+    set((state) => {
+      const held = state.observedSettingsSeqByThread[threadId];
+      if (held !== undefined && held > seq) return state;
+      return {
+        observedEffortByThread: {
+          ...state.observedEffortByThread,
+          [threadId]: settings.effort,
+        },
+        observedServiceTierByThread: {
+          ...state.observedServiceTierByThread,
+          [threadId]: settings.serviceTier,
+        },
+        observedSettingsSeqByThread: {
+          ...state.observedSettingsSeqByThread,
+          [threadId]: seq,
+        },
+      };
+    }),
   // Drops every observed setting for a thread. The guard checks both maps: a
   // thread can have an observed tier without an observed effort, and keying the
   // early return on effort alone would strand the tier entry.
@@ -99,14 +124,18 @@ export const useModelStore = create<ModelState>((set) => ({
     set((state) => {
       const hasEffort = threadId in state.observedEffortByThread;
       const hasTier = threadId in state.observedServiceTierByThread;
-      if (!hasEffort && !hasTier) return state;
+      if (!hasEffort && !hasTier && !(threadId in state.observedSettingsSeqByThread))
+        return state;
       const next = { ...state.observedEffortByThread };
       const nextTiers = { ...state.observedServiceTierByThread };
       delete next[threadId];
       delete nextTiers[threadId];
+      const nextSeqs = { ...state.observedSettingsSeqByThread };
+      delete nextSeqs[threadId];
       return {
         observedEffortByThread: next,
         observedServiceTierByThread: nextTiers,
+        observedSettingsSeqByThread: nextSeqs,
       };
     }),
   clearOverrides: () =>

@@ -129,6 +129,7 @@ export class ThreadsBranchingService {
     }
     this.assertThreadIsBranchable(source.thread, sourceThreadId);
 
+    const settingsGeneration = this.resumeRegistry.getGeneration();
     let forkResponse: v2.ThreadForkResponse;
     try {
       forkResponse = await this.forkBeforeTurn(sourceThreadId, editedTurnId);
@@ -213,8 +214,12 @@ export class ThreadsBranchingService {
         { threadId: sourceThreadId, childThreadId },
       );
     }
+    this.resumeRegistry.cacheResponse(
+      childThreadId,
+      forkResponse,
+      settingsGeneration,
+    );
     this.resumeRegistry.markResumed(childThreadId);
-    this.resumeRegistry.cacheResponse(childThreadId, forkResponse);
     return { fork: forkResponse, ...recorded };
   }
 

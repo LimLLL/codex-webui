@@ -28,6 +28,7 @@ describe('ThreadsService', () => {
     ensureOpened: vi.fn(),
     markResumed: vi.fn(),
     cacheResponse: vi.fn(),
+    getGeneration: vi.fn(() => 1),
     forget: vi.fn(),
   };
   const mockBranches = {

@@ -11,7 +11,11 @@ import { showSnackbar } from '@/stores/snackbar-store';
 import { handleNotification, type NotificationContext } from './notification-handlers';
 import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors, threadsResumeThread } from '@/generated/api/sdk.gen';
 import { parseApprovalRequest } from '@/lib/approval-parsers';
+import { recoverThreadAfterReconnect, supersedeRecovery } from '@/lib/thread-recovery';
+import { nextObservationSeq } from '@/lib/turn-item-merge';
+import { forgetThreadPolicy, refreshThreadPolicy, settleIfObserved } from '@/stores/thread-policy-store';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
+import { syncPendingApprovals } from '@/lib/pending-approvals-sync';
 import { applyOpenResponse } from './use-thread-open';
 import i18n from '@/i18n';
 
@@ -34,9 +38,34 @@ export function useCodexSocket(enabled = true) {
 
     const socket = getSocket();
 
+    // The first `connect` needs no repair: nothing has been missed yet, and the
+    // open path recovers the running turn on its own. Only a genuine reconnect
+    // implies a window in which notifications were dropped.
+    let hasConnectedBefore = false;
     const handleConnect = () => {
       setConnected(true);
-      useTimelineStore.getState().resubscribeAll();
+      const store = useTimelineStore.getState();
+      store.resubscribeAll();
+      if (hasConnectedBefore) {
+        // Socket.IO guarantees ordering, not replay of events sent while this
+        // client was away, so every subscribed conversation has to re-read the
+        // durable history for the turns that could have moved during the gap.
+        for (const threadId of store.subscribedThreadIds) {
+          recoverThreadAfterReconnect(threadId);
+          // The security policy has the same gap and no other repair path: its
+          // only live source is `thread/settings/updated`, so a change made by
+          // the CLI or another tab during the outage would otherwise leave the
+          // badge asserting a policy the conversation is no longer under.
+          void refreshThreadPolicy(threadId).then(() =>
+            settleIfObserved(threadId),
+          );
+        }
+        // Approvals reach this client only as socket events, so the gap loses
+        // both halves of their lifecycle: one raised while away never appears,
+        // and one answered on another device is never cleared.
+        void syncPendingApprovals(store.subscribedThreadIds);
+      }
+      hasConnectedBefore = true;
     };
     const handleDisconnect = () => setConnected(false);
 
@@ -48,9 +77,23 @@ export function useCodexSocket(enabled = true) {
       // Read live rather than captured: this closure outlives many selections.
       getSelectedThreadId: () => useTimelineStore.getState().threadId,
       queryClient,
-      forgetThreads: (threadIds) => useTimelineStore.getState().forgetThreads(threadIds),
-      markThreadDeletedRemotely: (threadId, message) =>
-        useTimelineStore.getState().markThreadDeletedRemotely(threadId, message),
+      forgetThreads: (threadIds) => {
+        // Evicting a runtime while a recovery is outstanding would otherwise
+        // let that response recreate the conversation it just discarded. Policy
+        // state lives in its own store and needs the same treatment, or a
+        // destroyed conversation leaves behind an observation and a running
+        // confirmation timer.
+        for (const threadId of threadIds) {
+          supersedeRecovery(threadId);
+          forgetThreadPolicy(threadId);
+        }
+        useTimelineStore.getState().forgetThreads(threadIds);
+      },
+      markThreadDeletedRemotely: (threadId, message) => {
+        supersedeRecovery(threadId);
+        forgetThreadPolicy(threadId);
+        useTimelineStore.getState().markThreadDeletedRemotely(threadId, message);
+      },
       updateCurrentTurn: (turnId, updater) => {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().updateCurrentTurnForThread(threadId, turnId, updater);
@@ -120,6 +163,27 @@ export function useCodexSocket(enabled = true) {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().clearActiveTurnForThread(threadId);
       },
+      setPlanText: (turnId, itemId, text) => {
+        const threadId = ctx.threadId;
+        if (threadId) useTimelineStore.getState().setPlanTextForThread(threadId, turnId, itemId, text);
+      },
+      getActiveTurnId: () => {
+        const threadId = ctx.threadId;
+        if (!threadId) return null;
+        return useTimelineStore.getState().getThreadRuntime(threadId)?.activeTurnId ?? null;
+      },
+      isTurnTerminal: (turnId) => {
+        const threadId = ctx.threadId;
+        if (!threadId) return false;
+        const runtime = useTimelineStore.getState().getThreadRuntime(threadId);
+        // An unknown turn is not terminal. Treating it as terminal would drop
+        // the first `turn/started` of every turn this client has yet to see.
+        return (
+          runtime?.timeline.some(
+            (entry) => entry.kind === 'turn' && entry.turnId === turnId && entry.completed,
+          ) ?? false
+        );
+      },
       setThreadTitle: (title) => {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().setThreadTitleForThread(threadId, title);
@@ -152,6 +216,10 @@ export function useCodexSocket(enabled = true) {
 
       if (event.type === 'appServerRestarting') {
         for (const threadId of liveThreadIds) {
+          // Any recovery still in flight was baselined against the old process
+          // generation. Its response must not be applied on top of whatever the
+          // restarted server reports.
+          supersedeRecovery(threadId);
           store.clearActiveTurnForThread(threadId);
           store.setThreadStatusForThread(threadId, { type: 'systemError' });
           store.addSystemMessageForThread(
@@ -185,6 +253,7 @@ export function useCodexSocket(enabled = true) {
         // Restore full thread state via deduped resume, then hydrate dependent data sequentially.
         // Recovery after an app-server restart, not a user opening anything:
         // the active-branch pointer must keep naming what they last chose.
+        const openBaselineSeq = nextObservationSeq();
         void threadsResumeThread({
           path: { threadId },
           query: { recordActive: false },
@@ -194,7 +263,7 @@ export function useCodexSocket(enabled = true) {
             // Shared with the route and the refresh-recovery path: the response
             // carries a recent page of turns rather than the whole history, and
             // three separate readings of that shape is how one of them goes stale.
-            applyOpenResponse(data);
+            applyOpenResponse(data, openBaselineSeq);
             // Hydrate after timeline is in place to avoid race.
             const [tokenRes, diffRes, errorRes] = await Promise.allSettled([
               tokenUsageReadThreadTokenUsage({ path: { threadId } }),

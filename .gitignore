@@ -61,3 +61,13 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .codex
 CLAUDE.md
 codex-schema/
+# Probe runtime: a real config with real keys, plus a throwaway CODEX_HOME and
+# scratch workspace that codex fills with rollouts, sessions and a database.
+codex_probe/config.toml
+codex_probe/home/
+codex_probe/workspace/
+# The editor's TS server will emit next to the sources if it ever resolves these
+# files through a project without `noEmit`.
+codex_probe/**/*.js
+codex_probe/**/*.d.ts
+codex_probe/**/*.js.map

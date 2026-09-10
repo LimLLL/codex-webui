@@ -37,6 +37,9 @@ export function useTurnItemsTopUp({
   const applyFullTurnItems = useTimelineStore(
     (s) => s.applyFullTurnItemsForThread,
   );
+  const applyRecoveredTurnItems = useTimelineStore(
+    (s) => s.applyRecoveredTurnItemsForThread,
+  );
   const enabled = Boolean(threadId) && itemsView === 'summary' && completed;
 
   const { data } = useQuery({
@@ -44,17 +47,40 @@ export function useTurnItemsTopUp({
       path: { threadId: threadId ?? '', turnId },
     }),
     enabled,
-    // Persisted history for a completed turn never changes, so refetching it
-    // would only ever return the same bytes.
-    staleTime: Infinity,
+    // A complete read of a finished turn never changes, so refetching it would
+    // only ever return the same bytes. A partial read is a different matter and
+    // must stay refetchable — see below.
+    staleTime: (query) => (query.state.data?.complete ? Infinity : 0),
   });
 
   useEffect(() => {
     if (!threadId || !data?.items) return;
-    applyFullTurnItems(
+    if (data.complete) {
+      applyFullTurnItems(
+        threadId,
+        turnId,
+        data.items as Array<Record<string, unknown>>,
+      );
+      return;
+    }
+    // An incomplete read must not be published as the turn's full history. The
+    // endpoint reports its own completeness, and an early stop — paging
+    // unavailable, a cursor that ran out — can return zero items. Marking that
+    // `full` retired the turn from ever being topped up again, so a transcript
+    // truncated by one bad response stayed truncated for the session.
+    //
+    // What it holds is still worth merging under the recovery rules, where a
+    // snapshot repairs gaps without claiming authority over what is on screen.
+    // Query data may have come from an earlier request or the shared cache.
+    // Its issue-time baseline is unknown, so conservatively retain every
+    // terminal observation, just like the full top-up. Fragments still repair
+    // by replacement. Stamping the response NOW would falsely rank it above
+    // notifications received while the request was in flight.
+    applyRecoveredTurnItems(
       threadId,
       turnId,
       data.items as Array<Record<string, unknown>>,
+      -1,
     );
-  }, [threadId, turnId, data, applyFullTurnItems]);
+  }, [threadId, turnId, data, applyFullTurnItems, applyRecoveredTurnItems]);
 }

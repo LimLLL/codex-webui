@@ -361,3 +361,18 @@
 - [ ] 真实多 agent 调度和 approval/user-input 暂停组合的集成覆盖。
 - [ ] 修复页错误状态与 raw/表单切换往返的组件级渲染测试。
 - [ ] auto-resume 父子顺序恢复目前为全串行；兄弟会话可并行，加载会话多时恢复偏慢。
+
+## Thread 策略与恢复
+
+- [x] 前后端两半均已落地（[契约](thread-policy-recovery.md)）。后端：安全设置观测值、按会话排队的变更、严格的载荷白名单、显式的 item 分页完整性、带权限字段的审批传输测试。前端：把 item 权威、turn 生命周期、历史覆盖范围三件事拆开；打开会话时按 turn 分组对账；open 与重连共用一个恢复协调器，且同时修复 turn 生命周期而不只修 item；审批内联进它所属的执行 item；per-thread 策略以观测顺序确认。**真实模型轮次的执行已实测**，不再是待验证项：会话在 `on-request`/只读下请求了审批，改为 `never`/完全访问后同一任务不再询问（`pnpm probe live-policy`）。
+- [x] 协议探针从一次性脚本升为纳入版本管理、受类型检查的代码（`codex_probe/`，见 [README](../codex_probe/README.md)）。方法与其参数由生成的 `ClientRequest` 在类型层相关联，拼错的调用在 spawn 前就失败；每次运行使用隔离的 CODEX_HOME；只用钉住的二进制。
+- [x] **策略观测值有了生命周期**。此前只在「从未观测过」时读一次，唯一刷新来源是 `thread/settings/updated`；断线期间由 CLI 或另一个客户端改的策略收不到通知，重连后无路径补读，徽章长期显示旧值且 Send 据此放行。现在打开完成（含重启恢复）及重连会补读策略，会话销毁或空闲驱逐时清掉观测值与确认计时器（`forgetPolicy` 此前在生产代码里从未被调用），`observed:false` 不再算作「已读过」因而不再永久卡在 unknown，仅最新发出的读取失败才会把已有证据标记为 `stale` 并在徽章上说明是「最后已知」而非当前生效。
+- [x] **open 响应不再用旧快照复活已结束的轮次**。响应是服务端处理请求那一刻的快照；若该轮次的 `turn/completed` 在请求在途期间已到达，旧实现会把指针重新点亮、composer 永远转圈。现在 open 路径与 `settleTurnLifecycleForThread` 采用同一条守卫：本地已终态的 turn 不被快照里的 running 状态复活。effort / serviceTier 的 seed 也不再无条件写入——observed 设置带上观测序号，手动打开、启动恢复及重启恢复都用请求发出前递增的基线打戳，期间到达的 `thread/settings/updated` 因而更新、不会被旧响应覆盖。
+- [x] **plan 文本纳入 item 权威模型**。`planTextByItemId` 从 `Record<itemId, string>` 改为携带 `completed` 与 `observedSeq`，与 `TurnItemBase` 一致：终态之后到达的 delta 被拒绝（此前会追加出重复尾巴），持久快照按与 `selectPayload` 相同的规则让位于更新的终态观测。
+- [x] **重连恢复补齐两处缺口**。断线期间新开的轮次此前只恢复生命周期、不取内容，composer 显示在跑而该轮次渲染为空；现在被接管的活跃轮次先建立 turn 行，再一并取回 item 和提示词；即使读取头期间已有实时事件建立了行，也仍会补取缺失内容，同页普通旧历史不额外读取。审批只经 socket 送达，断线会同时丢掉两端：期间发起的不出现，期间在别的设备上被应答的不消失；现在重连按服务端的 pending 集合对账，启动路径与重连路径共用同一个 `syncPendingApprovals`。缺席仅解决请求发出前已有且未改变的 pending 卡片，已有决定不被旧快照重新打开；重叠读取按会话范围淘汰旧响应。
+- [x] **shell 轮次稳定性对照实测**（`pnpm probe turn-item-finality`）：0.153.2 上，同一 completed shell 轮次的完整 item 载荷在后续 shell 轮次和已加载线程的 `thread/resume` 后一致。比较完整载荷并要求成功读取和 resume，不再仅比较输出长度，也不外推为所有模型轮次永久不变。
+- [ ] **completed turn 永久缓存仍缺全面证据**：vendored README 的 `subAgentActivity` 条目描述了父轮次结束后追加 activity 的情况，shell 对照未覆盖；需实测模型/子代理迟到事件与 cold resume，再决定 item 查询缓存和重连失效策略。
+- [ ] **整个轮次在断线期间开始并结束时仍会遗漏**：恢复只接管活跃轮次；未知 completed 头不会生成转录，现有 older-history cursor 也到不了这段新历史。需要协调最近页刷新、转录合并及分页边界。
+- [ ] **pending 同步的挂载生命周期**：从启动 effect 抽取后不再接受原来的 `cancelled` 检查，登出或卸载后的迟到响应仍可能写入 store。需要为共享同步入口约定取消/会话生命周期。
+- [ ] **过期策略的显示与发送行为待确认**：当前 last-known 说明仅在策略弹层里，闭合徽章和 Send 不因 stale 单独改变；是否强化提示或阻止发送属于产品取舍。
+- [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。

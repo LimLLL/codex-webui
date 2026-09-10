@@ -47,6 +47,14 @@ codex app-server (stdout JSONL)
 
 `thread/settings/updated`、`thread/goal/updated`、`thread/goal/cleared` 以及 inline review 产生的 `turn/*` / `item/*` notification 走同一个 `codex.notification` 通道，按 `params.threadId` 投递到对应 room。除上述错误投影外，后端不改写事件。
 
+`thread/settings/updated` 是**确认安全策略已生效的唯一信号**——PATCH 返回的是排队确认而非生效证明——因此该 handler 除刷新 collaboration mode 外还会解除 composer 对 Send 的扣留。它走的是**直接读取**而非失效查询：实测在一次读取仍在飞时触发失效，**总共只产生一次请求**，通知前的响应体成了缓存答案，这条确认就此丢失。读取在**发出时**打序，因此更早发出的读取无法覆盖更晚的。
+
+通知丢失时前端不会无限期扣住，也不会靠猜：等待有界，到期后**先读一次**再判——读回值等于请求值即确认；不等于则报「未生效」并把徽章退回实测值；读不到才报「未知」。这三种结局是不同的事实，不能互相顶替。详见 [thread-policy-recovery.md](thread-policy-recovery.md)。
+
+重连（非首次 `connect`）会对每个已订阅会话触发一次恢复：Socket.IO 保证顺序但**不重放**断线期间的事件，因此断线前活跃的 turn（即使期间已完成）以及仍持有未完成 item 的 turn 都会重新读取持久历史并按 item 权威规则合并。
+
+恢复的**另一半是 turn 生命周期**：item 与 lifecycle 由不同通知承载，断线期间完成的 turn 把 `turn/completed` 发进了空处，只补 item 会让转录正确而 composer 永远转圈。因此重连同时以 `itemsView: notLoaded` 重读最近的 turn 头并收敛 `completed` / 活跃指针 / loading——只前进、只对头里确实出现的 turn 下结论、并接管断线期间新开的运行中 turn。两者并行发出。重连还会推进 recovery epoch，作废所有以断线前状态为基线的在飞恢复。
+
 ## Notification Dispatcher 架构
 
 前端使用 `notification-handlers.ts` 的 method→handler dispatch map 处理所有 ~50 个 ServerNotification 方法，分三个 Tier：
@@ -59,9 +67,9 @@ codex app-server (stdout JSONL)
 | `item/agentMessage/delta` | 追加 agent 回答文本（打字机效果）|
 | `item/commandExecution/outputDelta` | 追加命令输出 |
 | `item/fileChange/outputDelta` | 追加文件变更 patch 内容 |
-| `item/started` / `item/completed` | 共用纯 `normalizeThreadItem`；覆盖全部 19 个 protocol item（user/plan 为 dedicated outcome），未知类型产生安全可见 fallback |
+| `item/started` / `item/completed` | 共用纯 `normalizeThreadItem`；覆盖全部 19 个 protocol item（user/plan 为 dedicated outcome），未知类型产生安全可见 fallback。**plan 的终态载荷不再被丢弃**：按 item id 整体替换该 plan 项的文本——终态带的是全量累积文本而非尾巴，此前丢弃它使被断线截断的 plan 永远修不回来 |
 | `turn/diff/updated` | 更新 turn 级别聚合 diff |
-| `turn/completed` | 标记 turn 完成；failed 时 upsert 结构化 TurnFailure；停止 loading，失效 thread list |
+| `turn/completed` | 标记 turn 完成；failed 时 upsert 结构化 TurnFailure；失效 thread list。**只有它命名的 turn 就是当前活跃 turn 时才停 loading、清活跃指针**——迟到或重放的 `turn/completed` 指向更早的 turn 时无条件清理，会在另一个 turn 仍在流式输出时放行 Send 并撤掉转圈 |
 
 ### Tier 1 — 高价值通知
 
@@ -84,7 +92,7 @@ codex app-server (stdout JSONL)
 | `thread/archived` | active thread → 系统条目; debounced 失效 thread list |
 | `thread/unarchived` | debounced 失效 thread list |
 | `thread/deleted` | 清除该 thread 的全部本地 runtime 与订阅；debounced 失效 thread list + branch trees。当前打开的会话例外：只加系统条目，不清 runtime（见下）。**判据必须用 `ctx.getSelectedThreadId()`，不能用 `ctx.threadId`** —— 分发器在调用 handler 前会把 `ctx.threadId` 设成该通知自身的 threadId，用它比较恒为真，会导致 runtime 永不清理，且给从未打开过的会话追加系统条目还会凭空建出幽灵 runtime |
-| `turn/started` | 初始化空 turn block, 设置 loading |
+| `turn/started` | 保留该 turn 已有内容（恢复可能已装入持久 item），设置 loading 与活跃指针。**已知终态的 turn 直接返回**：只守住条目本身不够，重放的 `turn/started` 会把 composer 推回一个再也出不来的运行态，因为配对的 `turn/completed` 早已消费掉 |
 | `thread/compacted` | active thread → info 系统条目 |
 | `model/rerouted` | active thread → warning 系统条目 + info toast |
 
@@ -170,3 +178,11 @@ dev 模式 `console.debug`，不静默丢弃。
 目录应用复用 `codex.lifecycle` 的 restarting/unavailable/ready/autoResumeCompleted。ready 必须晚于 durable accepted；审批请求沿用 generation expiry。AutoResumeService 恢复期间占用 backend admission，先恢复父线程，再恢复 owner-controlled 子线程，全部保留 `recordActive:false`，不重放 turn。详见 [model-catalog.md](model-catalog.md)。
 
 本连接接收的 turn/review 工作在 transport 消费匹配的 `turn/completed` 后释放目录重启阻塞；`thread/status/changed:idle` 不释放。早于 RPC response 的终态同样处理。未知外部事件不构造本地接收事实；无法关联的手动压缩/goal continuation 等待真实 `thread/closed` 或 process close，没有定时过期。停进程前的拒绝不发 unavailable，避免错误取消现有审批。
+
+### Reconnect freshness
+
+After resubscribing, the client repairs turn lifecycle/items, re-reads each
+subscribed conversation's security policy, and synchronizes its pending approval
+and user-input requests. These reads preserve evidence received while they are
+in flight; see [thread-policy-recovery.md](thread-policy-recovery.md) for the
+ordering rules and the remaining gap for turns completed entirely while offline.
