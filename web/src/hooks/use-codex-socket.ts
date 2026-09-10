@@ -9,7 +9,7 @@ import { useConnectionStore } from '../stores/connection-store';
 import { useTimelineStore } from '../stores/timeline-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { handleNotification, type NotificationContext } from './notification-handlers';
-import { tokenUsageReadThreadTokenUsage, turnDiffReadThreadTurnDiffs, turnErrorsReadThreadTurnErrors, threadsResumeThread } from '@/generated/api/sdk.gen';
+import { threadsResumeThread } from '@/generated/api/sdk.gen';
 import { parseApprovalRequest } from '@/lib/approval-parsers';
 import { recoverThreadAfterReconnect, supersedeRecovery } from '@/lib/thread-recovery';
 import { nextObservationSeq } from '@/lib/turn-item-merge';
@@ -258,27 +258,18 @@ export function useCodexSocket(enabled = true) {
           path: { threadId },
           query: { recordActive: false },
         })
-          .then(async ({ data }) => {
+          .then(({ data }) => {
             if (!data) return;
             // Shared with the route and the refresh-recovery path: the response
             // carries a recent page of turns rather than the whole history, and
             // three separate readings of that shape is how one of them goes stale.
+            //
+            // The auxiliary datasets are deliberately NOT fetched again here.
+            // Applying the open response already reads all three, and it does so
+            // after the timeline is in place — which is the ordering this call
+            // site used to duplicate them for. Issuing them twice cost every
+            // restart-recovered conversation three wasted round trips.
             applyOpenResponse(data, openBaselineSeq);
-            // Hydrate after timeline is in place to avoid race.
-            const [tokenRes, diffRes, errorRes] = await Promise.allSettled([
-              tokenUsageReadThreadTokenUsage({ path: { threadId } }),
-              turnDiffReadThreadTurnDiffs({ path: { threadId } }),
-              turnErrorsReadThreadTurnErrors({ path: { threadId } }),
-            ]);
-            if (tokenRes.status === 'fulfilled' && tokenRes.value.data) {
-              store.hydrateTokenUsageForThread(threadId, tokenRes.value.data.turns);
-            }
-            if (diffRes.status === 'fulfilled' && diffRes.value.data) {
-              store.hydrateTurnDiffsForThread(threadId, diffRes.value.data.turns);
-            }
-            if (errorRes.status === 'fulfilled' && errorRes.value.data) {
-              store.hydrateTurnErrorsForThread(threadId, errorRes.value.data.errors);
-            }
           })
           .catch(() =>
             store.addSystemMessageForThread(

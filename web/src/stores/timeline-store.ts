@@ -287,7 +287,7 @@ function runtimeFromSelected(state: TimelineState): ThreadRuntimeState | null {
     threadStatus: state.threadStatus,
     activeTurnId: state.activeTurnId,
     pendingResolvedRequestIds: state.pendingResolvedRequestIds,
-    hydrated: true,
+    hydrated: state.hydrated,
     historyCursor: state.historyCursor,
     historyLoading: state.historyLoading,
     readOnlyReason: state.readOnlyReason,
@@ -323,6 +323,7 @@ function selectedFields(
       threadStatus: null,
       activeTurnId: null,
       pendingResolvedRequestIds: new Set<string>(),
+      hydrated: false,
       historyCursor: null,
       historyLoading: false,
       readOnlyReason: null,
@@ -345,6 +346,7 @@ function selectedFields(
     threadStatus: runtime.threadStatus,
     activeTurnId: runtime.activeTurnId,
     pendingResolvedRequestIds: runtime.pendingResolvedRequestIds,
+    hydrated: runtime.hydrated,
     historyCursor: runtime.historyCursor,
     historyLoading: runtime.historyLoading,
     readOnlyReason: runtime.readOnlyReason,
@@ -820,6 +822,16 @@ interface TimelineState {
   threadStatus: ThreadStatusType | null;
   activeTurnId: string | null;
   pendingResolvedRequestIds: Set<string>;
+  /**
+   * Mirrors the selected thread's real hydration state.
+   *
+   * This used to be absent here and hardcoded true when the flat selection was
+   * read back as a runtime, which asserted that merely selecting a thread had
+   * loaded it. Selection is not loading: a thread can be selected while its
+   * transcript has never been fetched, and the flat state is written back into
+   * `threadsById`, so the false claim was persisted rather than just misread.
+   */
+  hydrated: boolean;
   historyCursor: string | null;
   historyLoading: boolean;
   readOnlyReason: string | null;
@@ -1077,6 +1089,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     threadStatus: null,
     activeTurnId: null,
     pendingResolvedRequestIds: new Set(),
+    hydrated: false,
     historyCursor: null,
     historyLoading: false,
     readOnlyReason: null,

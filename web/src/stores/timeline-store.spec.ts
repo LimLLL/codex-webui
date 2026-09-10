@@ -943,3 +943,49 @@ describe('failures hydrated before their turn was paged in', () => {
     expect(failures).toHaveLength(1);
   });
 });
+
+describe('selection is not hydration', () => {
+  // Selecting a thread used to report it hydrated, because the flat selected
+  // state had no hydration field and the runtime projection hardcoded `true`.
+  // That is not a read-only misreport: the flat state is persisted back into
+  // `threadsById` on every update, so one selection permanently marked a
+  // never-loaded thread as loaded.
+  it('does not report a selected but never-loaded thread as hydrated', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    store.selectThread('t1');
+
+    expect(useTimelineStore.getState().getThreadRuntime('t1')!.hydrated).toBe(
+      false,
+    );
+  });
+
+  it('does not persist a false hydration claim when selection moves away', () => {
+    const store = useTimelineStore.getState();
+    store.ensureThreadState({ threadId: 't1' });
+    store.ensureThreadState({ threadId: 't2' });
+    store.selectThread('t1');
+    // Any update while selected writes the flat state back into threadsById.
+    useTimelineStore.getState().setThreadTitleForThread('t1', 'still empty');
+    useTimelineStore.getState().selectThread('t2');
+
+    expect(useTimelineStore.getState().getThreadRuntime('t1')!.hydrated).toBe(
+      false,
+    );
+  });
+
+  it('reports hydrated once the thread has actually been opened', () => {
+    const store = useTimelineStore.getState();
+    store.selectThread('t1');
+    useTimelineStore.getState().hydrateOpenedThread({
+      threadId: 't1',
+      turnsNewestFirst: [answeredTurn('turn-1', 'hi')],
+      historyCursor: null,
+      readOnlyReason: null,
+    });
+
+    expect(useTimelineStore.getState().getThreadRuntime('t1')!.hydrated).toBe(
+      true,
+    );
+  });
+});
