@@ -7,6 +7,8 @@ import { create } from 'zustand';
 export type SnackbarSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface SnackbarAction {
+  /** Exact human interaction, so its retirement also clears queued prompts. */
+  attentionKey?: string;
   label: string;
   onClick: () => void;
 }
@@ -67,7 +69,7 @@ export const useSnackbarStore = create<SnackbarState>((set, get) => ({
 
     // Promote from queue if there's space
     const promoted: SnackbarItem[] = [];
-    const remainingQueue = [...queue];
+    const remainingQueue = queue.filter((s) => s.id !== id);
     while (nextVisible.length + promoted.length < MAX_VISIBLE && remainingQueue.length > 0) {
       promoted.push(remainingQueue.shift()!);
     }

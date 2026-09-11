@@ -139,3 +139,65 @@ describe('requested permission scopes', () => {
     ]);
   });
 });
+
+describe('file approval review subject', () => {
+  const fileApproval = (reviewSubject: unknown) =>
+    parseApprovalRequest({
+      requestId: 7,
+      method: 'item/fileChange/requestApproval',
+      params: { threadId: 't', turnId: 'turn', itemId: 'patch' },
+      reviewSubject,
+      generation: 3,
+    });
+
+  it('keeps every proposed file, including a rename destination', () => {
+    expect(
+      fileApproval({
+        type: 'fileChange',
+        changes: [
+          {
+            path: '/w/alpha.txt',
+            kind: { type: 'update', move_path: '/w/renamed.txt' },
+            diff: '@@\n-A\n+B\n',
+          },
+          { path: '/w/beta.txt', kind: { type: 'delete' }, diff: '-B\n' },
+        ],
+      })?.reviewChanges,
+    ).toEqual([
+      {
+        path: '/w/alpha.txt',
+        diff: '@@\n-A\n+B\n',
+        changeKind: 'update',
+        movePath: '/w/renamed.txt',
+      },
+      { path: '/w/beta.txt', diff: '-B\n', changeKind: 'delete' },
+    ]);
+  });
+
+  it('reports an unshowable subject as null rather than as an empty set', () => {
+    // Each of these means "the changes cannot be displayed". An empty array
+    // would render a card claiming files are being written while listing none,
+    // which is the state the Accept button must never appear over.
+    expect(fileApproval(null)?.reviewChanges).toBeNull();
+    expect(fileApproval(undefined)?.reviewChanges).toBeNull();
+    expect(fileApproval({ type: 'fileChange', changes: [] })?.reviewChanges).toBeNull();
+    expect(fileApproval({ type: 'somethingElse' })?.reviewChanges).toBeNull();
+  });
+
+  it('carries the generation so a reused request ID is a different request', () => {
+    expect(fileApproval(null)?.generation).toBe(3);
+  });
+});
+
+it('rejects the whole approval subject if any proposed file cannot be rendered faithfully', () => {
+  const valid = { path: 'visible', kind: { type: 'add' }, diff: '+shown' };
+  for (const invalid of [null, { kind: { type: 'delete' }, diff: '-hidden' },
+    { path: 'hidden', kind: { type: 'delete' } },
+    { path: 'hidden', kind: { type: 'unknown' }, diff: '-hidden' },
+    { path: 'hidden', kind: { type: 'update', move_path: 12 }, diff: '-hidden' }]) {
+    const approval = parseApprovalRequest({ requestId: 'r', method: 'item/fileChange/requestApproval',
+      params: { threadId: 't', turnId: 'turn', itemId: 'item' },
+      reviewSubject: { type: 'fileChange', changes: [valid, invalid] } });
+    expect(approval?.reviewChanges).toBeNull();
+  }
+});

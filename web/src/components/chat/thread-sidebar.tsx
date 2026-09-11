@@ -72,6 +72,7 @@ export function ThreadSidebar() {
   const approvals = useTimelineStore((s) => s.approvals);
   const threadStatus = useTimelineStore((s) => s.threadStatus);
   const threadsById = useTimelineStore((s) => s.threadsById);
+  const subscribedThreadIds = useTimelineStore((s) => s.subscribedThreadIds);
   const setActiveThread = useTimelineStore((s) => s.setActiveThread);
   const clearThread = useTimelineStore((s) => s.clearThread);
   const setThreadTitle = useTimelineStore((s) => s.setThreadTitle);
@@ -387,8 +388,13 @@ export function ThreadSidebar() {
       .map(readRuntime)
       .filter((runtime) => runtime !== undefined);
 
-    const isRunning = treeRuntimes.some((runtime) => runtime.loading);
-    const activeFlags = treeRuntimes.flatMap((runtime) =>
+    // Cached lifecycle stops advancing when the transcript leaves its room.
+    // It cannot override the backend's current status for a background member.
+    const observedRuntimes = (row?.memberThreadIds ?? [thread.id])
+      .filter((id) => subscribedThreadIds.has(id)).map(readRuntime)
+      .filter((runtime) => runtime !== undefined);
+    const isRunning = observedRuntimes.some((runtime) => runtime.loading);
+    const activeFlags = observedRuntimes.flatMap((runtime) =>
       runtime.threadStatus?.type === 'active' ? runtime.threadStatus.activeFlags : [],
     );
     const localPendingCount = treeRuntimes.reduce(
@@ -410,7 +416,7 @@ export function ThreadSidebar() {
     // "Generating" = thread active but not blocked on any user-facing request.
     const generating =
       (Boolean(row?.running) ||
-        treeRuntimes.some((runtime) => runtime.threadStatus?.type === 'active')) &&
+        observedRuntimes.some((runtime) => runtime.threadStatus?.type === 'active')) &&
       !waitingOnApproval &&
       !waitingOnUserInput;
 
@@ -420,7 +426,7 @@ export function ThreadSidebar() {
         thread={thread}
         archived={archived}
         isActive={thread.id === highlightedThreadId && activeView === 'chat'}
-        destructiveDisabled={isRunning}
+        destructiveDisabled={isRunning || Boolean(row?.running)}
         actionPending={forkThread.isPending || unarchiveThread.isPending}
         running={generating || isRunning}
         pendingApproval={waitingOnApproval}

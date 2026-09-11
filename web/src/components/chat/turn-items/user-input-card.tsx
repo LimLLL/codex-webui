@@ -1,9 +1,10 @@
 /** Renders an app-server item/tool/requestUserInput card for structured user input. */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { CheckCircle, Loader2, MessageCircleQuestion } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { samePendingRequest } from '@/lib/pending-request-identity';
 import { pendingApprovalsRespond } from '@/generated/api/sdk.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
 import type { UserInputQuestion, UserInputRequest } from '@/types/approval';
@@ -58,7 +59,8 @@ function isComplete(questions: UserInputQuestion[], draft: DraftState): boolean 
 
 export function UserInputCard({ request }: Props) {
   const { t } = useTranslation();
-  const resolveUserInputRequest = useTimelineStore((s) => s.resolveUserInputRequest);
+  const resolveUserInputRequest = useTimelineStore((s) => s.resolveUserInputRequestForThread);
+  const busy = useRef(false);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(request.questions));
   const [submitting, setSubmitting] = useState(false);
 
@@ -94,7 +96,10 @@ export function UserInputCard({ request }: Props) {
   };
 
   const handleSubmit = () => {
-    if (!canSubmit) return;
+    if (!canSubmit || busy.current) return;
+    const held = useTimelineStore.getState().getThreadRuntime(request.threadId)?.userInputRequests[String(request.requestId)];
+    if (held && (!samePendingRequest(held, request) || held.status !== 'pending')) return;
+    busy.current = true;
     setSubmitting(true);
     // `throwOnError` is required for the same reason as the approval controls:
     // without it a refused submission resolves, `.then` clears the card, and the
@@ -104,9 +109,12 @@ export function UserInputCard({ request }: Props) {
       body: { result: { answers } },
       throwOnError: true,
     })
-      .then(() => resolveUserInputRequest(request.requestId))
+      .then(() => {
+        const current = useTimelineStore.getState().getThreadRuntime(request.threadId)?.userInputRequests[String(request.requestId)];
+        if (current && samePendingRequest(current, request)) resolveUserInputRequest(request.threadId, request.requestId);
+      })
       .catch(() => undefined)
-      .finally(() => setSubmitting(false));
+      .finally(() => { busy.current = false; setSubmitting(false); });
   };
 
   return (

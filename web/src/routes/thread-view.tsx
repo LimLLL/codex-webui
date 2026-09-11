@@ -97,17 +97,17 @@ export function ThreadView() {
     try {
       const [response, initialTurnsPage] = await Promise.all([
         queryClient.fetchQuery(
-          threadsReadThreadOptions({ path: { threadId: targetId } }),
+          { ...threadsReadThreadOptions({ path: { threadId: targetId } }), staleTime: 0 },
         ),
         queryClient.fetchQuery(
-          threadsListTurnsOptions({
+          { ...threadsListTurnsOptions({
             path: { threadId: targetId },
             query: {
               limit: HISTORY_PAGE_SIZE,
               sortDirection: 'desc',
               itemsView: 'summary',
             },
-          }),
+          }), staleTime: 0 },
         ),
       ]);
       // Guard: user may have navigated away during the fetch.
@@ -124,18 +124,20 @@ export function ThreadView() {
   // Selection and the loading decision live in the opener, which suppresses the
   // loading state when this client already holds the conversation hydrated.
   useEffect(() => {
+    let cancelled = false;
     openThread.mutate(
       { path: { threadId } },
       {
         onError: () => {
           // Only fall back to an archived snapshot if this thread is still the
           // one on screen — the user may have navigated during the request.
-          if (useTimelineStore.getState().threadId === threadId) {
+          if (!cancelled && useTimelineStore.getState().threadId === threadId) {
             void tryReadArchived(threadId);
           }
         },
       },
     );
+    return () => { cancelled = true; useTimelineStore.getState().unsubscribeThread(threadId); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 

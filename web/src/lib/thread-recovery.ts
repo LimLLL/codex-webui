@@ -23,9 +23,18 @@
  * `turn/completed` into the void. Recovering only its items leaves the
  * transcript correct and the composer spinning forever.
  */
-import { threadsListTurnItems, threadsListTurns } from '@/generated/api/sdk.gen';
+import {
+  threadsListTurnItems,
+  threadsListTurns,
+} from '@/generated/api/sdk.gen';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { currentObservationSeq } from '@/lib/turn-item-merge';
+import type { ThreadTurnsPageDto } from '@/generated/api';
+import {
+  currentRecoveryEpoch,
+  supersedeRecovery,
+} from './thread-recovery-epoch';
+export { supersedeRecovery } from './thread-recovery-epoch';
 
 /**
  * Recoveries currently in flight, keyed by thread, turn and epoch.
@@ -46,30 +55,21 @@ const RECOVERY_PAGE_LIMIT = 10;
 const LIFECYCLE_PAGE_LIMIT = 20;
 
 /**
- * Recovery epoch per thread. A newer recovery supersedes an older one, so a
- * slow response cannot apply a snapshot taken before a restart or a reopen.
- */
-const epochs = new Map<string, number>();
-let epochCounter = 0;
-
-/** Invalidates outstanding recoveries for a thread. */
-export function supersedeRecovery(threadId: string): void {
-  epochs.set(threadId, ++epochCounter);
-}
-
-/**
  * Fetches and merges one turn's persisted items.
  *
  * @param threadId - Conversation owning the turn
  * @param turnId - Turn to repair
  * @returns Resolves when the snapshot has been applied, or skipped as unusable
  */
-export function recoverTurnItems(threadId: string, turnId: string): Promise<void> {
+export function recoverTurnItems(
+  threadId: string,
+  turnId: string,
+): Promise<void> {
   // Both baselines are captured before the request goes out. The observation
   // counter decides which side of a conflict is newer; the epoch decides
   // whether this recovery still belongs to the current view of the thread.
   const baselineSeq = currentObservationSeq();
-  const epoch = epochs.get(threadId) ?? 0;
+  const epoch = currentRecoveryEpoch(threadId);
   const key = `${threadId}:${turnId}:${epoch}`;
   const existing = inFlight.get(key);
   if (existing) return existing;
@@ -100,7 +100,7 @@ export function recoverTurnItems(threadId: string, turnId: string): Promise<void
       // Re-validate rather than trusting the pre-request check: the
       // conversation can be deleted, evicted or superseded while this is in
       // flight, and applying then would rebuild state the user discarded.
-      if ((epochs.get(threadId) ?? 0) !== epoch) return;
+      if (currentRecoveryEpoch(threadId) !== epoch) return;
       const store = useTimelineStore.getState();
       if (!store.getThreadRuntime(threadId)) return;
       store.applyRecoveredTurnItemsForThread(
@@ -123,45 +123,87 @@ export function recoverTurnItems(threadId: string, turnId: string): Promise<void
 }
 
 /**
- * Re-reads recent turn headers and settles the lifecycle they report.
- *
- * Headers only — `notLoaded` carries no items, so this is cheap and cannot
- * fight the item merge. Turn status is the one fact a reconnecting client
- * cannot derive from anything it already holds.
- *
- * @param threadId - Conversation whose turn lifecycle may have moved
+ * Reads recent history in page order, including holes between already-held
+ * turns. The issue-time anchor prevents a new live row from hiding an older
+ * gap. Paging is bounded; disconnected windows retain a real history cursor.
+ * Only returned statuses can settle lifecycle: absence is never deletion.
  */
 async function recoverTurnLifecycle(
   threadId: string,
   itemTargets: Set<string>,
+  initialPage?: ThreadTurnsPageDto,
 ): Promise<void> {
-  const epoch = epochs.get(threadId) ?? 0;
+  const epoch = currentRecoveryEpoch(threadId);
+  const before = useTimelineStore.getState().getThreadRuntime(threadId);
+  if (!before) return;
+  const known = new Set(
+    before.timeline.flatMap((entry) =>
+      entry.kind === 'turn' ? [entry.turnId] : [],
+    ),
+  );
   try {
-    const { data } = await threadsListTurns({
-      path: { threadId },
-      query: { itemsView: 'notLoaded', limit: LIFECYCLE_PAGE_LIMIT },
-    });
-    if (!data?.data?.length) return;
-    if ((epochs.get(threadId) ?? 0) !== epoch) return;
+    const turns: ThreadTurnsPageDto['data'] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < RECOVERY_PAGE_LIMIT; page++) {
+      const data: ThreadTurnsPageDto | undefined =
+        page === 0 && initialPage
+          ? initialPage
+          : (
+              await threadsListTurns({
+                path: { threadId },
+                query: {
+                  itemsView: 'summary',
+                  limit: LIFECYCLE_PAGE_LIMIT,
+                  sortDirection: 'desc',
+                  cursor: cursor ?? undefined,
+                },
+              })
+            ).data;
+      if (!data) return;
+      if (currentRecoveryEpoch(threadId) !== epoch) return;
+      const seen = new Set(turns.map((turn) => turn.id));
+      turns.push(...data.data.filter((turn) => !seen.has(turn.id)));
+      const previous: string | null = cursor;
+      cursor = data.nextCursor;
+      if (
+        known.size === 0 ||
+        data.data.some((turn) => known.has(turn.id)) ||
+        !cursor ||
+        cursor === previous ||
+        data.data.length === 0
+      )
+        break;
+    }
     const store = useTimelineStore.getState();
     const runtime = store.getThreadRuntime(threadId);
-    if (!runtime) return;
-
-    store.settleTurnLifecycleForThread(
+    if (!runtime || currentRecoveryEpoch(threadId) !== epoch) return;
+    if (turns.length === 0) return;
+    store.hydrateOpenedThread({
       threadId,
-      data.data.map((turn) => ({ id: turn.id, status: turn.status })),
-    );
-
-    // Also fetch a running turn first seen during this header request. A live
-    // item or approval may already have created its row, but that is not proof
-    // its pre-reconnect items were fetched. Only this recovery's targets are.
-    const adopted = store.getThreadRuntime(threadId)?.activeTurnId ?? null;
-    if (adopted && !itemTargets.has(adopted)) {
-      void recoverTurnItems(threadId, adopted);
+      turnsNewestFirst: turns,
+      historyCursor: cursor,
+      readOnlyReason: runtime.readOnlyReason,
+      knownTurnIdsAtRead: known,
+    });
+    store.settleTurnLifecycleForThread(threadId, turns);
+    const repairs: Promise<void>[] = [];
+    for (const turn of turns.slice(0, LIFECYCLE_PAGE_LIMIT)) {
+      // Older summary rows use the existing on-demand item top-up when viewed.
+      // Summary suffices for older history on a first open. Turns missed from
+      // an existing window and running turns also need their completed items.
+      if (
+        !itemTargets.has(turn.id) &&
+        (turn.status === 'inProgress' ||
+          (known.size > 0 && !known.has(turn.id)))
+      ) {
+        itemTargets.add(turn.id);
+        repairs.push(recoverTurnItems(threadId, turn.id));
+      }
     }
+    await Promise.all(repairs);
   } catch {
-    // Same contract as item recovery: a failed read changes nothing. The turn
-    // keeps whatever lifecycle it had, which is no worse than before the call.
+    // Failure supplies no lifecycle/absence evidence. A subsequent open or
+    // reconnect can retry; partially fetched header windows are not adopted.
   }
 }
 
@@ -179,11 +221,15 @@ async function recoverTurnLifecycle(
  *
  * @param threadId - Conversation to repair
  */
-export function recoverThreadAfterReconnect(threadId: string): void {
+export async function recoverThreadAfterReconnect(
+  threadId: string,
+  initialPage?: ThreadTurnsPageDto,
+): Promise<void> {
   const runtime = useTimelineStore.getState().getThreadRuntime(threadId);
   if (!runtime) return;
 
   supersedeRecovery(threadId);
+  useTimelineStore.getState().setHistoryLoadingForThread(threadId, false);
 
   const targets = new Set<string>();
   if (runtime.activeTurnId) targets.add(runtime.activeTurnId);
@@ -191,14 +237,21 @@ export function recoverThreadAfterReconnect(threadId: string): void {
     if (entry.kind !== 'turn') continue;
     if (
       entry.items.some((item) => !item.completed) ||
-      Object.values(entry.plan?.planTextByItemId ?? {}).some((item) => !item.completed)
+      Object.values(entry.plan?.planTextByItemId ?? {}).some(
+        (item) => !item.completed,
+      )
     ) {
       targets.add(entry.turnId);
     }
   }
-  for (const turnId of targets) void recoverTurnItems(threadId, turnId);
+  const repairs = [...targets].map((turnId) =>
+    recoverTurnItems(threadId, turnId),
+  );
   // Runs alongside rather than after: the two repair independent facts, and
   // making lifecycle wait on item paging would keep a finished turn spinning
   // for the length of the slowest transcript repair.
-  void recoverTurnLifecycle(threadId, targets);
+  await Promise.all([
+    ...repairs,
+    recoverTurnLifecycle(threadId, targets, initialPage),
+  ]);
 }

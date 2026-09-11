@@ -8,6 +8,8 @@ import type {
   RequestedPermissions,
 } from '@/types/approval';
 import type { PendingServerRequestDto } from '@/generated/api';
+import type { FileChangeEntry } from '@/types/timeline';
+import { normalizeFileChanges } from '@/lib/thread-item-normalizer';
 
 const rawSimpleDecisions = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 
@@ -155,6 +157,41 @@ interface ApprovalParserInput {
   threadId?: unknown;
   turnId?: unknown;
   itemId?: unknown;
+  /** Backend-attached review context; absent for payloads that predate it. */
+  reviewSubject?: unknown;
+  generation?: unknown;
+}
+
+/**
+ * Reads the backend's review subject for a file approval.
+ *
+ * Returns `null` for anything that is not a well-formed file subject, which
+ * deliberately includes the backend's own "I could not retain it" null. Both
+ * mean the same thing to the user — the changes cannot be shown — and a card
+ * that guessed otherwise would offer Accept for writes nobody could see.
+ *
+ * @param value - The `reviewSubject` field from a live event or a pending row
+ * @returns The proposed changes, or null when none can be shown
+ */
+function parseReviewChanges(value: unknown): FileChangeEntry[] | null {
+  if (value === null || typeof value !== 'object') return null;
+  const subject = value as Record<string, unknown>;
+  if (subject.type !== 'fileChange') return null;
+  // Transcript normalization is deliberately tolerant. A decision must not
+  // silently authorize entries that parser skipped or fields it defaulted.
+  if (!Array.isArray(subject.changes) || !subject.changes.every((raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return false;
+    const change = raw as Record<string, unknown>;
+    if (typeof change.path !== 'string' || !change.path || typeof change.diff !== 'string') return false;
+    if (!change.kind || typeof change.kind !== 'object') return false;
+    const kind = change.kind as Record<string, unknown>;
+    return kind.type === 'add' || kind.type === 'delete' ||
+      (kind.type === 'update' && (kind.move_path === null || typeof kind.move_path === 'string'));
+  })) return null;
+  const changes = normalizeFileChanges(subject.changes);
+  // An empty set is not a renderable subject: it would draw a card claiming
+  // files are being written while listing none.
+  return changes.length > 0 ? changes : null;
 }
 
 function optionalString(value: unknown): string | null {
@@ -176,6 +213,8 @@ export function parseApprovalRequest(
   const turnId = optionalString(params.turnId) ?? optionalString(input.turnId);
   const itemId = optionalString(params.itemId) ?? optionalString(input.itemId);
   if (!threadId || !turnId || !itemId) return null;
+  const generation =
+    typeof input.generation === 'number' ? input.generation : null;
 
   if (input.method === 'item/commandExecution/requestApproval') {
     // The protocol documents `command` as the default for servers that omit
@@ -190,6 +229,7 @@ export function parseApprovalRequest(
       threadId,
       turnId,
       itemId,
+      generation,
       status: 'pending',
       command: optionalString(params.command),
       cwd: optionalString(params.cwd),
@@ -219,9 +259,15 @@ export function parseApprovalRequest(
       threadId,
       turnId,
       itemId,
+      generation,
       status: 'pending',
       reason: optionalString(params.reason),
       grantRoot: optionalString(params.grantRoot),
+      // Always set, never left undefined: a file approval that cannot show its
+      // changes has to be distinguishable from one whose payload predates the
+      // subject, because only the first is safe to render with an Accept button
+      // withheld rather than with the item stream as a fallback.
+      reviewChanges: parseReviewChanges(input.reviewSubject),
     };
   }
 
@@ -248,5 +294,9 @@ export function approvalFromPending(
     threadId: request.threadId,
     turnId: request.turnId,
     itemId: request.itemId,
+    // The recovered subject is byte-identical to the live one by contract, so
+    // a card rebuilt after a refresh shows exactly what the live card showed.
+    reviewSubject: request.reviewSubject,
+    generation: request.generation,
   });
 }

@@ -69,6 +69,7 @@ export function userInputFromPending(
 
   return {
     requestId: request.requestId,
+    generation: request.generation,
     kind: 'userInput',
     threadId: request.threadId,
     turnId,
@@ -81,6 +82,7 @@ export function userInputFromPending(
 /** Builds a UserInputRequest from a live socket serverRequest event. */
 export function userInputFromSocket(request: {
   id: number | string;
+  generation?: number;
   params: Record<string, unknown>;
 }): UserInputRequest | null {
   const { params } = request;
@@ -97,6 +99,7 @@ export function userInputFromSocket(request: {
 
   return {
     requestId: request.id,
+    generation: request.generation,
     kind: 'userInput',
     threadId: params.threadId,
     turnId: params.turnId,

@@ -11,6 +11,7 @@
  *
  * Long commands are collapsible — never truncated for safety.
  */
+import { pendingRequestKey } from '@/lib/pending-request-identity';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -119,7 +120,7 @@ export function CommandItem({ item, approvals = [] }: Props) {
       )}
 
       {approvals.map((approval) => (
-        <AttachedApproval key={String(approval.requestId)} approval={approval} hostCommand={item.command} />
+        <AttachedApproval key={pendingRequestKey(approval)} approval={approval} hostCommand={item.command} />
       ))}
     </div>
   );

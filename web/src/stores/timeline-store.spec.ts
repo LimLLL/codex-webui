@@ -13,7 +13,7 @@ const emit = vi.fn();
 // The store reaches for the socket singleton on subscribe/forget paths; a real
 // one would try to open a websocket under jsdom.
 vi.mock('../socket', () => ({
-  getSocket: () => ({ emit, on: vi.fn(), off: vi.fn() }),
+  getSocket: () => ({ emit, timeout: () => ({ emit }), connected: true, on: vi.fn(), off: vi.fn() }),
 }));
 
 const { useTimelineStore } = await import('./timeline-store');
@@ -192,11 +192,11 @@ describe('reopening a thread', () => {
   });
 });
 
-describe('locally recorded datasets fill gaps but never overwrite live', () => {
+describe('unbaselined recordings preserve existing observations', () => {
   // Token usage and turn diffs have no historical read on app-server; the rows
   // come from this project's own database, written from the same notifications
-  // the browser already received. The recording is therefore never newer than
-  // live, and a hydrate that lands after one must not revert it.
+  // the backend received. These calls have no read baseline, so existing
+  // observations remain protected; baselined gap repair is tested separately.
   it('keeps a token usage value that arrived while the read was in flight', () => {
     const store = useTimelineStore.getState();
     store.ensureThreadState({ threadId: 't1' });
@@ -595,6 +595,36 @@ describe('approval request identity', () => {
     expect(runtime.pendingResolvedRequestIds.has('late-request')).toBe(false);
   });
 
+  it('does not reopen an answered request when the same delivery repeats', () => {
+    // Attention now reaches every authenticated browser, a deletion guard
+    // replays what it withheld, and recovery reads the same row back — so one
+    // request legitimately arrives several times. Resetting an answered card to
+    // pending would offer the decision a second time and let the user act on a
+    // request the server has already closed.
+    const store = useTimelineStore.getState();
+    store.addApprovalForThread('t1', approval('replayed', { generation: 4 }));
+    store.resolveApprovalForThread('t1', 'replayed', 'declined');
+    store.addApprovalForThread('t1', approval('replayed', { generation: 4 }));
+
+    expect(
+      useTimelineStore.getState().getThreadRuntime('t1')!.approvals.replayed
+        .status,
+    ).toBe('declined');
+  });
+
+  it('treats the same request ID from a new generation as a new request', () => {
+    // Request IDs restart with the app-server child process, so an ID answered
+    // before a restart says nothing about the one that reuses it afterwards.
+    const store = useTimelineStore.getState();
+    store.addApprovalForThread('t1', approval('7', { generation: 1 }));
+    store.resolveApprovalForThread('t1', '7', 'declined');
+    store.addApprovalForThread('t1', approval('7', { generation: 2 }));
+
+    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
+    expect(runtime.approvals['7'].status).toBe('pending');
+    expect(runtime.approvals['7'].generation).toBe(2);
+  });
+
   it('preserves the approval callback turn across timeline hydration', () => {
     const store = useTimelineStore.getState();
     store.addApprovalForThread(
@@ -732,10 +762,8 @@ describe('forgetThreads', () => {
 
   it('leaves the socket room for a subscribed doomed thread', () => {
     const store = useTimelineStore.getState();
-    // Subscribing happens on open; selecting another thread leaves the first
-    // subscribed in the background, which is the state deletion has to unwind.
+    // Deleting the currently subscribed transcript must leave its room.
     store.setActiveThread('background');
-    useTimelineStore.getState().setActiveThread('other');
     emit.mockClear();
 
     useTimelineStore.getState().forgetThreads(['background']);
@@ -988,4 +1016,45 @@ describe('selection is not hydration', () => {
       true,
     );
   });
+});
+
+it('leaves the previous transcript room without evicting its cached content', () => {
+  const store = useTimelineStore.getState();
+  store.setActiveThread('first');
+  store.hydrateOpenedThread({ threadId: 'first', turnsNewestFirst: [answeredTurn('turn', 'kept')], historyCursor: null, readOnlyReason: null });
+  store.setActiveThread('second');
+  expect(useTimelineStore.getState().subscribedThreadIds).toEqual(new Set(['second']));
+  expect(emit).toHaveBeenCalledWith('thread.unsubscribe', { threadId: 'first' });
+  expect(store.getThreadRuntime('first')?.timeline.length).toBeGreaterThan(0);
+  store.selectThread(null);
+  expect(useTimelineStore.getState().subscribedThreadIds.size).toBe(0);
+});
+
+it('refreshes pre-gap diffs while preserving a diff observed during the read', () => {
+  const store = useTimelineStore.getState();
+  store.hydrateOpenedThread({ threadId: 't', turnsNewestFirst: [answeredTurn('turn', 'hi')], historyCursor: null, readOnlyReason: null });
+  store.updateTurnDiffForThread('t', 'turn', 'partial');
+  const baseline = store.getThreadRuntime('t')!;
+  store.hydrateTurnDiffsForThread('t', [{ turnId: 'turn', diff: 'completed' }], baseline);
+  expect(store.getThreadRuntime('t')?.timeline.find((entry) => entry.kind === 'turn')?.diff).toBe('completed');
+  const later = store.getThreadRuntime('t')!;
+  store.updateTurnDiffForThread('t', 'turn', 'live-after-read');
+  store.hydrateTurnDiffsForThread('t', [{ turnId: 'turn', diff: 'stale' }], later);
+  expect(store.getThreadRuntime('t')?.timeline.find((entry) => entry.kind === 'turn')?.diff).toBe('live-after-read');
+});
+
+it('replaces pre-gap token usage but preserves a live update received during the read', () => {
+  const store = useTimelineStore.getState();
+  const partial = { totalTokens: 1 } as unknown as ThreadTokenUsage;
+  const finished = { totalTokens: 20 } as unknown as ThreadTokenUsage;
+  const live = { totalTokens: 30 } as unknown as ThreadTokenUsage;
+  store.setTokenUsageForThread('t', 'turn', partial);
+  const baseline = store.getThreadRuntime('t')!;
+  store.hydrateTokenUsageForThread('t', [{ turnId: 'turn', usage: finished }], baseline);
+  expect(store.getThreadRuntime('t')?.latestTokenUsage).toBe(finished);
+  const later = store.getThreadRuntime('t')!;
+  store.setTokenUsageForThread('t', 'turn', live);
+  store.hydrateTokenUsageForThread('t', [{ turnId: 'turn', usage: finished }], later);
+  expect(store.getThreadRuntime('t')?.tokenUsageByTurn.turn).toBe(live);
+  expect(store.getThreadRuntime('t')?.latestTokenUsage).toBe(live);
 });

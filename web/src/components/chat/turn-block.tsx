@@ -2,6 +2,7 @@
  * Renders a single AI turn as a unified block.
  * Contains all items (reasoning, tool calls, messages) under one avatar.
  */
+import { pendingRequestKey } from '@/lib/pending-request-identity';
 import { Bot, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
@@ -113,7 +114,7 @@ function ItemWithRequests({
   });
 
   const inputCard = userInputRequest ? (
-    <UserInputCard key={String(userInputRequest.requestId)} request={userInputRequest} />
+    <UserInputCard key={pendingRequestKey(userInputRequest)} request={userInputRequest} />
   ) : null;
 
   switch (item.type) {
@@ -151,18 +152,23 @@ function ItemWithRequests({
           {inputCard}
         </>
       );
-    case 'fileChange':
+    case 'fileChange': {
+      const files = approvals.filter((approval) => approval.kind === 'fileChange');
+      const primary = files.find((approval) => approval.status === 'pending') ?? files[0];
       return (
         <>
           <FileChangeItem
             item={item}
-            approval={approvals.find(
-              (approval) => approval.kind === 'fileChange',
-            )}
+            approval={primary}
           />
+          {/* Item identity must not hide another independently answerable RPC. */}
+          {files.filter((approval) => approval !== primary).map((approval) => (
+            <ApprovalItem key={pendingRequestKey(approval)} approval={approval} />
+          ))}
           {inputCard}
         </>
       );
+    }
     case 'contextCompaction':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
@@ -384,13 +390,13 @@ export function TurnBlock({ entry }: Props) {
 
         {unattachedApprovals.map((approval) => (
           <ApprovalItem
-            key={String(approval.requestId)}
+            key={pendingRequestKey(approval)}
             approval={approval}
           />
         ))}
 
         {unattachedInputs.map((req) => (
-          <UserInputCard key={String(req.requestId)} request={req} />
+          <UserInputCard key={pendingRequestKey(req)} request={req} />
         ))}
 
         {entry.diff && <DiffViewer diff={entry.diff} />}

@@ -898,5 +898,16 @@
   "Cyber-permissive variant of our latest frontier agentic coding model for advanced, authorized cybersecurity research.": "最新前沿智能体编码模型的网络安全放宽版本，面向高级的、已获授权的网络安全研究。",
   "Automatic approval review model for Codex.": "Codex 的自动审批复核模型。",
   "Showing the last known policy — it could not be re-read just now.": "当前显示最后已知的策略，刚才未能重新读取。",
-  "2x speed, increased usage": "2 倍速度，用量更高"
+  "2x speed, increased usage": "2 倍速度，用量更高",
+  "Input needed in {{thread}}": "{{thread}} 需要输入",
+  "Changes unavailable — decline only": "变更内容不可用 — 只能拒绝",
+  "No diff provided for this file.": "该文件未提供 diff。",
+  "{{count}} files": "{{count}} 个文件",
+  "The proposed changes could not be retrieved, so they cannot be shown here.": "无法取回待审批的变更内容，因此这里无法展示。",
+  "Declining is the only safe answer; the agent can propose them again.": "拒绝是唯一安全的答复；智能体可以重新提出这些变更。",
+  "State recovery failed after resume.": "恢复会话后状态修复失败。",
+  "Input Requested": "请求输入",
+  "Answer": "回答",
+  "Other answer": "其它回答",
+  "Submit": "提交"
 }

@@ -72,10 +72,14 @@ function stringValue(value: unknown, fallback = ''): string {
  * `{type:'update', move_path}` — not a string, so a rename carries its
  * destination there and nowhere else.
  *
- * @param value - The payload's `changes` field, of unknown shape
+ * Exported because the same shape reaches the client twice: inside a
+ * `fileChange` item, and as the review subject the backend attaches to a file
+ * approval. Two parsers for one protocol shape is two things to keep in step.
+ *
+ * @param value - A payload's `changes` field, of unknown shape
  * @returns One entry per proposed file, skipping entries with no path
  */
-function normalizeFileChanges(value: unknown): FileChangeEntry[] {
+export function normalizeFileChanges(value: unknown): FileChangeEntry[] {
   if (!Array.isArray(value)) return [];
   const entries: FileChangeEntry[] = [];
   for (const raw of value) {

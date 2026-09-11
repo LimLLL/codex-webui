@@ -12,7 +12,6 @@ import {
   mcpServersListServersQueryKey,
   threadCommandsReadCollaborationModeQueryKey,
   threadCommandsReadGoalQueryKey,
-  threadsListThreadsQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
 import type { RateLimitSnapshotDto } from '@/generated/api';
 import {
@@ -20,8 +19,6 @@ import {
   settleIfObserved,
 } from '@/stores/thread-policy-store';
 import {
-  invalidateBranchTreesSoon,
-  invalidateThreadListSoon,
   queryHasId,
 } from '@/lib/query-invalidation';
 import { useAccountStore } from '@/stores/account-store';
@@ -295,8 +292,6 @@ const handleTurnCompleted: Handler = (params, ctx) => {
   if (!turnId) return;
 
   if (!hasThreadScope(params, ctx)) {
-    // Still invalidate thread list for non-active threads
-    void ctx.queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
     return;
   }
 
@@ -315,7 +310,6 @@ const handleTurnCompleted: Handler = (params, ctx) => {
     ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, turn.error));
   }
 
-  void ctx.queryClient.invalidateQueries({ queryKey: threadsListThreadsQueryKey() });
 };
 
 /**
@@ -498,9 +492,7 @@ const handleMcpStartupStatusUpdated: Handler = (params, ctx) => {
 // Tier 2 — Thread/Turn lifecycle
 // ---------------------------------------------------------------------------
 
-const handleThreadStarted: Handler = (_params, ctx) => {
-  invalidateThreadListSoon(ctx.queryClient);
-};
+const handleThreadStarted: Handler = () => {}; // Overview has its own global hint.
 
 const handleThreadStatusChanged: Handler = (params, ctx) => {
   const threadId = params.threadId as string | undefined;
@@ -513,7 +505,6 @@ const handleThreadStatusChanged: Handler = (params, ctx) => {
       ctx.addSystemMessage(i18n.t('Thread encountered a system error'), 'error');
     }
   }
-  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadNameUpdated: Handler = (params, ctx) => {
@@ -522,7 +513,6 @@ const handleThreadNameUpdated: Handler = (params, ctx) => {
   if (threadId && ctx.threadId === threadId) {
     ctx.setThreadTitle(name?.trim() || null);
   }
-  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadClosed: Handler = (params, ctx) => {
@@ -530,7 +520,6 @@ const handleThreadClosed: Handler = (params, ctx) => {
   if (ctx.threadId === threadId) {
     ctx.addSystemMessage(i18n.t('Thread closed'), 'info');
   }
-  invalidateThreadListSoon(ctx.queryClient);
 };
 
 const handleThreadArchived: Handler = (params, ctx) => {
@@ -538,12 +527,9 @@ const handleThreadArchived: Handler = (params, ctx) => {
   if (ctx.threadId === threadId) {
     ctx.addSystemMessage(i18n.t('Thread archived'), 'warning');
   }
-  invalidateThreadListSoon(ctx.queryClient);
 };
 
-const handleThreadUnarchived: Handler = (_params, ctx) => {
-  invalidateThreadListSoon(ctx.queryClient);
-};
+const handleThreadUnarchived: Handler = () => {};
 
 /**
  * Drops a thread the app-server destroyed, whoever asked for it.
@@ -579,8 +565,6 @@ const handleThreadDeleted: Handler = (params, ctx) => {
     ctx.forgetThreads([threadId]);
   }
 
-  invalidateThreadListSoon(ctx.queryClient);
-  invalidateBranchTreesSoon(ctx.queryClient);
 };
 
 const handleTurnStarted: Handler = (params, ctx) => {

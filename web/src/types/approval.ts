@@ -1,4 +1,5 @@
 /** Types for Codex approval workflow (server-initiated requests). */
+import type { FileChangeEntry } from '@/types/timeline';
 
 export type ApprovalDecision =
   | 'accepted'
@@ -97,6 +98,28 @@ export interface ApprovalRequest {
   reason?: string | null;
   /** Root path the agent wants write access to (fileChange only). */
   grantRoot?: string | null;
+  /**
+   * App-server process generation this request belongs to.
+   *
+   * Request IDs restart with the child process, so the same ID can name a
+   * different request after a restart. Retirement is matched on the pair.
+   */
+  generation?: number | null;
+  /**
+   * The files this approval would write (fileChange only).
+   *
+   * Supplied by the backend rather than read from the item stream, because the
+   * pending item is measurably absent from history while its approval is
+   * outstanding — a client that never received the conversation's items has no
+   * other way to see what it is being asked to allow.
+   *
+   * Tri-state, and the distinction is the point:
+   *  - array — the complete proposed change set
+   *  - `null` — this IS a file approval and the changes could not be shown.
+   *    Accepting is refused by the backend; only Decline/Cancel are offered.
+   *  - `undefined` — not a file approval, or a payload predating the subject.
+   */
+  reviewChanges?: FileChangeEntry[] | null;
   /** Server-provided list of allowed decisions (command/writeStdin only). */
   availableDecisions?: RawCommandDecision[] | null;
   /** Server-proposed exec policy amendment patterns (command only). */
@@ -136,6 +159,8 @@ export interface UserInputQuestion {
 export interface UserInputRequest {
   /** JSON-RPC request ID — must be included in the response. */
   requestId: number | string;
+  /** Process generation, paired with the RPC id for replay and retirement. */
+  generation?: number | null;
   kind: 'userInput';
   threadId: string;
   turnId: string;

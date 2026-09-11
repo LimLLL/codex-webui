@@ -6,10 +6,12 @@
  * not merely wasteful: two refetch rounds land at different times, and any list
  * whose ordering depends on the data — the sidebar folds branches into their
  * root row and lifts the root's timestamp — visibly reshuffles once per round.
- * Coalescing on a shared timer makes one action produce one refetch.
+ * A bounded shared window coalesces bursts without starving continuous activity.
  */
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import {
+  threadCommandsReadGoalQueryKey,
+  threadCommandsReadCollaborationModeQueryKey,
   threadsListBranchTreesQueryKey,
   threadsListOverviewQueryKey,
   threadsListThreadsQueryKey,
@@ -32,7 +34,8 @@ const timersByClient = new WeakMap<
 >();
 
 /**
- * Schedules one invalidation per client and bucket, restarting on every call.
+ * Schedules one invalidation per client and bucket with a bounded delay.
+ * Continuous global activity must not postpone the timer indefinitely.
  *
  * @param queryClient - Client to invalidate against
  * @param bucket - Identity of the timer to share
@@ -50,22 +53,38 @@ function scheduleInvalidate(
   }
 
   const pending = timers.get(bucket);
-  if (pending) clearTimeout(pending);
+  if (pending) return;
   timers.set(
     bucket,
     setTimeout(() => {
-      timers.delete(bucket);
-      for (const queryKey of queryKeys) {
-        void queryClient.invalidateQueries({ queryKey });
-      }
+      void (async () => {
+        // Invalidating an initial fetch can join its pre-hint snapshot. Wait
+        // for that fetch to settle, then issue the read the hint actually owes.
+        // Keep this bucket occupied while waiting so bursts share that work.
+        await Promise.allSettled(
+          queryKeys.flatMap((queryKey) =>
+            queryClient
+              .getQueryCache()
+              .findAll({ queryKey })
+              .flatMap((query) =>
+                query.state.fetchStatus === 'fetching' && query.promise
+                  ? [query.promise]
+                  : [],
+              ),
+          ),
+        );
+        timers.delete(bucket);
+        for (const queryKey of queryKeys)
+          void queryClient.invalidateQueries({ queryKey });
+      })();
     }, DEBOUNCE_MS),
   );
 }
 
 /**
- * Refreshes every conversation-list variant shortly after the last caller.
+ * Refreshes every conversation-list variant within a bounded coalescing window.
  *
- * Both keys are scheduled on one timer rather than two. The sidebar reads the
+ * These projections share one timer. The sidebar reads the
  * server-collapsed overview while other surfaces still read the flat list, and
  * letting them land on independent schedules is precisely the mixed-moment
  * render this helper exists to prevent.
@@ -74,10 +93,12 @@ export function invalidateThreadListSoon(queryClient: QueryClient): void {
   scheduleInvalidate(queryClient, 'threadList', [
     threadsListOverviewQueryKey(),
     threadsListThreadsQueryKey(),
+    threadsListBranchTreesQueryKey(),
+    [{ _id: 'threadsReadBranchTree' }],
   ]);
 }
 
-/** Refreshes the branch topology shortly after the last caller. */
+/** Refreshes the branch topology within a bounded coalescing window. */
 export function invalidateBranchTreesSoon(queryClient: QueryClient): void {
   scheduleInvalidate(queryClient, 'branchTrees', [
     threadsListBranchTreesQueryKey(),
@@ -131,4 +152,17 @@ export function queryHasId(
     '_id' in first &&
     (first as { _id?: unknown })._id === id
   );
+}
+
+/** Re-read viewed settings whose room events may have been missed while away. */
+export function invalidateThreadDetails(
+  queryClient: QueryClient,
+  threadId: string,
+): void {
+  for (const queryKey of [
+    threadCommandsReadGoalQueryKey({ path: { threadId } }),
+    threadCommandsReadCollaborationModeQueryKey({ path: { threadId } }),
+  ]) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
 }

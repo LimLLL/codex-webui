@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import { getSocket } from '../socket';
-import { forgetThreadPolicy } from './thread-policy-store';
+import { forgetThreadPolicy, useThreadPolicyStore } from './thread-policy-store';
 import type {
   TimelineEntry,
   TurnFailure,
@@ -39,6 +39,9 @@ import {
   nextObservationSeq,
 } from '../lib/turn-item-merge';
 import { reconcileTimeline, sharesHistory } from '../lib/timeline-reconcile';
+import { samePendingRequest } from '../lib/pending-request-identity';
+import { invalidateThreadEpoch } from '../lib/thread-recovery-epoch';
+import { excludePendingReads } from '../lib/pending-read-coverage';
 
 const DEFAULT_MAX_IDLE_SUBSCRIPTIONS = 30;
 const MIN_MAX_IDLE_SUBSCRIPTIONS = 5;
@@ -393,6 +396,8 @@ function isSafeToCleanupIdleRuntime(
     runtime &&
     runtime.threadId !== selectedThreadId &&
     !runtime.loading &&
+    !runtime.historyLoading &&
+    useThreadPolicyStore.getState().pendingByThread[runtime.threadId]?.outcome !== 'pending' &&
     !runtime.activeTurnId &&
     runtime.pendingResolvedRequestIds.size === 0 &&
     runtime.threadStatus?.type !== 'active' &&
@@ -840,7 +845,7 @@ interface TimelineState {
 
   ensureThreadState: (input: ThreadRuntimeInput) => void;
   selectThread: (threadId: string | null) => void;
-  resubscribeAll: () => void;
+  resubscribeAll: (onSubscribed?: (threadId: string) => void) => void;
   unsubscribeThread: (threadId: string) => void;
   forgetThreads: (threadIds: string[]) => void;
   setMaxIdleSubscriptions: (limit: number) => void;
@@ -854,7 +859,7 @@ interface TimelineState {
     threadId: string,
     cwd?: string | null,
     title?: string | null,
-  ) => void;
+  ) => Promise<boolean>;
   setReadOnlyThread: (thread: ThreadDto) => void;
   clearThread: () => void;
   hydrateTimeline: (turns: TurnDto[], cwd?: string | null) => void;
@@ -899,6 +904,7 @@ interface TimelineState {
   clearActiveTurn: () => void;
   hydrateTokenUsage: (
     turns: Array<{ turnId: string; usage: ThreadTokenUsage }>,
+    baseline?: ThreadRuntimeState,
   ) => void;
   hydrateTurnDiffs: (turns: Array<{ turnId: string; diff: string }>) => void;
   resolveApprovalByRequestId: (requestId: string | number) => void;
@@ -913,6 +919,8 @@ interface TimelineState {
     turnsNewestFirst: TurnDto[];
     historyCursor: string | null;
     readOnlyReason: string | null;
+    /** Turn identities captured before the newest-page read, not live arrivals. */
+    knownTurnIdsAtRead?: ReadonlySet<string>;
     cwd?: string | null;
   }) => void;
   prependHistoryForThread: (
@@ -925,10 +933,12 @@ interface TimelineState {
   hydrateTokenUsageForThread: (
     threadId: string,
     turns: Array<{ turnId: string; usage: ThreadTokenUsage }>,
+    baseline?: ThreadRuntimeState,
   ) => void;
   hydrateTurnDiffsForThread: (
     threadId: string,
     turns: Array<{ turnId: string; diff: string }>,
+    baseline?: ThreadRuntimeState,
   ) => void;
   hydrateTurnErrorsForThread: (
     threadId: string,
@@ -1045,6 +1055,7 @@ interface TimelineState {
   resolveApprovalByRequestIdForThread: (
     threadId: string,
     requestId: string | number,
+    generation?: number,
   ) => void;
 }
 
@@ -1110,6 +1121,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     },
 
     selectThread: (threadId) => {
+      for (const subscribed of get().subscribedThreadIds) {
+        if (subscribed !== threadId) get().unsubscribeThread(subscribed);
+      }
       set((state) => {
         const threadsById = persistSelectedRuntime(state);
         if (!threadId) {
@@ -1130,15 +1144,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       });
     },
 
-    resubscribeAll: () => {
+    resubscribeAll: (onSubscribed) => {
       const socket = getSocket();
       for (const threadId of get().subscribedThreadIds) {
-        socket.emit('thread.subscribe', { threadId });
+        socket.emit('thread.subscribe', { threadId }, (reply: { ok?: boolean }) => {
+          if (reply?.ok) onSubscribed?.(threadId);
+        });
       }
     },
 
     unsubscribeThread: (threadId) => {
-      getSocket().emit('thread.unsubscribe', { threadId });
+      const socket = getSocket();
+      if (socket.connected) socket.emit('thread.unsubscribe', { threadId });
       set((state) => {
         const subscribedThreadIds = new Set(state.subscribedThreadIds);
         subscribedThreadIds.delete(threadId);
@@ -1161,12 +1178,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     forgetThreads: (threadIds) => {
       const doomed = new Set(threadIds);
       if (doomed.size === 0) return;
+      excludePendingReads(doomed);
 
       const socket = getSocket();
       const subscribed = get().subscribedThreadIds;
       for (const threadId of doomed) {
+        invalidateThreadEpoch(threadId);
         if (subscribed.has(threadId)) {
-          socket.emit('thread.unsubscribe', { threadId });
+          if (socket.connected) socket.emit('thread.unsubscribe', { threadId });
         }
       }
 
@@ -1203,11 +1222,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         limit ?? get().maxIdleSubscriptions,
       );
       const evictedThreadIds: string[] = [];
+      const subscribedBefore = get().subscribedThreadIds;
 
       set((state) => {
         const candidates: Array<{ threadId: string; lastActivityAt: number }> =
           [];
-        for (const threadId of state.subscribedThreadIds) {
+        // Every held runtime, not only the subscribed ones. Attention delivery
+        // creates state for conversations this browser never subscribed to and
+        // may never open, so scanning subscriptions alone would leave exactly
+        // those to accumulate for the life of the session. The safety predicate
+        // still refuses to evict anything running or awaiting a decision.
+        for (const threadId of Object.keys(persistSelectedRuntime(state))) {
           const runtime = readRuntime(state, threadId);
           if (isSafeToCleanupIdleRuntime(runtime, state.threadId)) {
             candidates.push({
@@ -1235,9 +1260,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       });
 
       const socket = getSocket();
+      excludePendingReads(evictedThreadIds);
       for (const threadId of evictedThreadIds) {
+        invalidateThreadEpoch(threadId);
         forgetThreadPolicy(threadId);
-        socket.emit('thread.unsubscribe', { threadId });
+        if (socket.connected && subscribedBefore.has(threadId)) socket.emit('thread.unsubscribe', { threadId });
       }
     },
 
@@ -1255,11 +1282,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     setActiveThread: (threadId, cwd, title) => {
       get().ensureThreadState({ threadId, cwd, title, mode: 'live' });
       get().selectThread(threadId);
-      getSocket().emit('thread.subscribe', { threadId });
       set((state) => ({
         subscribedThreadIds: new Set(state.subscribedThreadIds).add(threadId),
       }));
       get().cleanupIdleThreadSubscriptions();
+      const socket = getSocket();
+      // Do not buffer room changes while disconnected. Reconnect joins the
+      // final desired room; the opener can independently paint its HTTP page.
+      if (!socket.connected) return Promise.resolve(false);
+      return new Promise<boolean>((resolve) => {
+        socket.timeout(10_000).emit('thread.subscribe', { threadId },
+          (error: Error | null, reply?: { ok?: boolean }) => resolve(!error && Boolean(reply?.ok)));
+      });
     },
 
     setReadOnlyThread: (thread) => {
@@ -1474,6 +1508,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       historyCursor,
       readOnlyReason,
       cwd,
+      knownTurnIdsAtRead,
     }) => {
       const turns = [...turnsNewestFirst].reverse();
       applyThreadUpdate(threadId, (runtime) => {
@@ -1505,8 +1540,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         // elsewhere, and interleaving them would keep every entry while hiding
         // the gap between them — so the server's view still wins outright, as
         // it did before, and its cursor is adopted so the gap stays pageable.
+        const baselineTimeline = knownTurnIdsAtRead
+          ? runtime.timeline.filter((entry) => entry.kind !== 'system' && entry.turnId && knownTurnIdsAtRead.has(entry.turnId))
+          : runtime.timeline;
         const reconcilable =
-          !runtime.hydrated || sharesHistory(pageEntries, runtime.timeline);
+          turns.length === 0 || (knownTurnIdsAtRead ? knownTurnIdsAtRead.size === 0 : !runtime.hydrated) ||
+          sharesHistory(turnsToTimeline(turns), baselineTimeline);
+        // Keep live observations made after the read even if the old cached
+        // window no longer overlaps. Approval-only rows are not history anchors.
+        const newer = knownTurnIdsAtRead ? runtime.timeline.filter((entry) =>
+          entry.kind !== 'system' && (!entry.turnId || !knownTurnIdsAtRead.has(entry.turnId))) : [];
 
         return {
           ...runtime,
@@ -1516,7 +1559,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           // paging cursor below, but still reconcile a repeat open's evidence.
           timeline: reconcilable
             ? reconcileTimeline(pageEntries, runtime.timeline)
-            : pageEntries,
+            : reconcileTimeline(pageEntries, newer),
           // Left to the caller, which can compare the page against what is
           // already known. Clearing it here dropped a `turn/started` that
           // arrived while this request was in flight.
@@ -1524,7 +1567,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           // Keeping the existing cursor matters as much as keeping the entries:
           // the cursor from a fresh open points just before the newest page, so
           // adopting it would offer to re-fetch history already on screen.
-          historyCursor: pageIsSubsumed ? runtime.historyCursor : historyCursor,
+          historyCursor: (pageIsSubsumed || (reconcilable && runtime.hydrated)) ? runtime.historyCursor : historyCursor,
           historyLoading: false,
           readOnlyReason,
         };
@@ -1577,6 +1620,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
      * show a spinner that never resolves.
      */
     markThreadDeletedRemotely: (threadId, message) => {
+      excludePendingReads([threadId]);
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         deletedRemotely: true,
@@ -1591,24 +1635,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       }));
     },
 
-    // Token usage and turn diffs are not app-server state this client reads a
-    // second view of: app-server exposes no historical read for either, and the
-    // rows come from this project's own database, written by the backend from
-    // the same notifications the browser receives. The stored copy is therefore
-    // a RECORDING of live, one hop behind it, and can never hold something the
-    // socket did not already deliver. Its whole purpose is to survive a refresh
-    // or a disconnected window.
-    //
-    // So the rule is fill-only, and no ordering machinery is needed to justify
-    // it. Both of these used to replace instead, which reverted a value that
-    // arrived while the request was in flight. `hydrateTurnErrorsForThread`
-    // below already merged, which is why it never had the bug.
-    hydrateTokenUsageForThread: (threadId, turns) => {
+    // The backend keeps receiving while this browser is away. Its recording
+    // can advance values already cached here; only observations made after the
+    // read began outrank that recording. Unbaselined callers remain fill-only.
+    hydrateTokenUsageForThread: (threadId, turns, baseline) => {
       applyThreadUpdate(threadId, (runtime) => {
         const tokenUsageByTurn = { ...runtime.tokenUsageByTurn };
         let filled = false;
         for (const turn of turns) {
-          if (turn.turnId in tokenUsageByTurn) continue;
+          if (turn.turnId in tokenUsageByTurn && (!baseline ||
+            tokenUsageByTurn[turn.turnId] !== baseline.tokenUsageByTurn[turn.turnId])) continue;
           tokenUsageByTurn[turn.turnId] = turn.usage;
           filled = true;
         }
@@ -1619,17 +1655,20 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           // already the newest by construction, so the recording only supplies
           // one when there is nothing to supersede.
           latestTokenUsage:
-            runtime.latestTokenUsage ??
-            (filled ? (turns.at(-1)?.usage ?? null) : null),
+            baseline && runtime.latestTokenUsage === baseline.latestTokenUsage
+              ? (turns.at(-1)?.usage ?? runtime.latestTokenUsage)
+              : runtime.latestTokenUsage ?? (filled ? (turns.at(-1)?.usage ?? null) : null),
         };
       });
     },
 
-    hydrateTurnDiffsForThread: (threadId, turns) => {
+    hydrateTurnDiffsForThread: (threadId, turns, baseline) => {
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         timeline: runtime.timeline.map((entry) => {
-          if (entry.kind !== 'turn' || entry.diff !== undefined) return entry;
+          if (entry.kind !== 'turn') return entry;
+          const previous = baseline?.timeline.find((row) => row.kind === 'turn' && row.turnId === entry.turnId);
+          if (entry.diff !== undefined && (!baseline || previous?.kind !== 'turn' || previous.diff !== entry.diff)) return entry;
           const match = turns.find((turn) => turn.turnId === entry.turnId);
           return match ? { ...entry, diff: match.diff } : entry;
         }),
@@ -1778,8 +1817,15 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addApprovalForThread: (threadId, approval) => {
       applyThreadUpdate(threadId, (runtime) => {
         const requestKey = String(approval.requestId);
+        // The same request now arrives more than once by design: live delivery
+        // reaches every authenticated browser, a guard release replays what it
+        // withheld, and recovery reads the same row back. Ingestion therefore
+        // has to be idempotent in the one direction that matters — an answered
+        // card must never be reset to pending and offered for decision again.
+        const existing = runtime.approvals[requestKey] ?? runtime.userInputRequests[requestKey];
+        if (existing && samePendingRequest(existing, approval)) return runtime;
         const alreadyResolved =
-          runtime.pendingResolvedRequestIds.has(requestKey);
+          approval.generation == null && runtime.pendingResolvedRequestIds.has(requestKey);
         const finalApproval = alreadyResolved
           ? { ...approval, status: 'resolved' as const }
           : approval;
@@ -1791,6 +1837,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           ...runtime,
           timeline: ensureTurnEntry(runtime.timeline, approval.turnId),
           approvals: { ...runtime.approvals, [requestKey]: finalApproval },
+          userInputRequests: Object.fromEntries(Object.entries(runtime.userInputRequests).filter(([id]) => id !== requestKey)),
           pendingResolvedRequestIds,
         };
       });
@@ -1799,8 +1846,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
     addUserInputRequestForThread: (threadId, request) => {
       applyThreadUpdate(threadId, (runtime) => {
         const requestKey = String(request.requestId);
+        const existing = runtime.userInputRequests[requestKey] ?? runtime.approvals[requestKey];
+        if (existing && samePendingRequest(existing, request)) return runtime;
         const alreadyResolved =
-          runtime.pendingResolvedRequestIds.has(requestKey);
+          request.generation == null && runtime.pendingResolvedRequestIds.has(requestKey);
         const finalRequest: UserInputRequest = alreadyResolved
           ? { ...request, status: 'resolved' }
           : request;
@@ -1811,6 +1860,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         return {
           ...runtime,
           timeline: ensureTurnEntry(runtime.timeline, request.turnId),
+          approvals: Object.fromEntries(Object.entries(runtime.approvals).filter(([id]) => id !== requestKey)),
           userInputRequests: {
             ...runtime.userInputRequests,
             [requestKey]: finalRequest,
@@ -1978,11 +2028,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       }));
     },
 
-    resolveApprovalByRequestIdForThread: (threadId, requestId) => {
+    resolveApprovalByRequestIdForThread: (threadId, requestId, generation) => {
       const requestKey = String(requestId);
+      // Global retirement is also sent for suppressed requests this browser
+      // never saw. It must not create immortal empty runtimes/tombstones.
+      if (generation !== undefined && !get().getThreadRuntime(threadId)) return;
       applyThreadUpdate(threadId, (runtime) => {
         const approval = runtime.approvals[requestKey];
         if (approval) {
+          if (approval.status !== 'pending' || (generation !== undefined &&
+            !samePendingRequest(approval, { requestId, generation }))) return runtime;
           return {
             ...runtime,
             approvals: {
@@ -1994,6 +2049,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
 
         const userInput = runtime.userInputRequests[requestKey];
         if (userInput) {
+          if (userInput.status !== 'pending' || (generation !== undefined &&
+            !samePendingRequest(userInput, { requestId, generation }))) return runtime;
           const resolved: UserInputRequest = {
             ...userInput,
             status: 'resolved',
@@ -2007,6 +2064,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           };
         }
 
+        if (generation !== undefined) return runtime;
         return {
           ...runtime,
           pendingResolvedRequestIds: new Set(

@@ -11,7 +11,8 @@
  * There is exactly one owner now: the route. Every other surface navigates.
  */
 import { useCallback } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { invalidateThreadDetails } from '@/lib/query-invalidation';
 import { useTranslation } from 'react-i18next';
 import { threadsResumeThreadMutation } from '@/generated/api/@tanstack/react-query.gen';
 import {
@@ -25,7 +26,8 @@ import type {
   ThreadReadResponseDto,
   ThreadTurnsPageDto,
 } from '@/generated/api/types.gen';
-import { recoverTurnItems } from '@/lib/thread-recovery';
+import { recoverThreadAfterReconnect } from '@/lib/thread-recovery';
+import { currentRecoveryEpoch, currentThreadEpoch, invalidateThreadEpoch } from '@/lib/thread-recovery-epoch';
 import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { useTimelineStore } from '@/stores/timeline-store';
@@ -49,17 +51,23 @@ function threadLabel(thread: {
  * Kept off the open path's critical section: none of them is needed to paint
  * the conversation, and a failure in any one must not stop the other two.
  */
-function hydrateAuxiliaryData(threadId: string): void {
+export async function hydrateAuxiliaryData(threadId: string): Promise<void> {
   const store = useTimelineStore.getState();
-  void tokenUsageReadThreadTokenUsage({ path: { threadId } })
-    .then(({ data }) => data && store.hydrateTokenUsageForThread(threadId, data.turns))
-    .catch(() => undefined);
-  void turnDiffReadThreadTurnDiffs({ path: { threadId } })
-    .then(({ data }) => data && store.hydrateTurnDiffsForThread(threadId, data.turns))
-    .catch(() => undefined);
-  void turnErrorsReadThreadTurnErrors({ path: { threadId } })
-    .then(({ data }) => data && store.hydrateTurnErrorsForThread(threadId, data.errors))
-    .catch(() => undefined);
+  const baseline = store.getThreadRuntime(threadId);
+  if (!baseline) return;
+  const epoch = currentRecoveryEpoch(threadId);
+  const current = () => currentRecoveryEpoch(threadId) === epoch && Boolean(store.getThreadRuntime(threadId));
+  await Promise.all([
+  tokenUsageReadThreadTokenUsage({ path: { threadId } })
+    .then(({ data }) => data && current() && store.hydrateTokenUsageForThread(threadId, data.turns, baseline))
+    .catch(() => undefined),
+  turnDiffReadThreadTurnDiffs({ path: { threadId } })
+    .then(({ data }) => data && current() && store.hydrateTurnDiffsForThread(threadId, data.turns, baseline))
+    .catch(() => undefined),
+  turnErrorsReadThreadTurnErrors({ path: { threadId } })
+    .then(({ data }) => data && current() && store.hydrateTurnErrorsForThread(threadId, data.errors))
+    .catch(() => undefined),
+  ]);
 }
 
 /**
@@ -90,7 +98,7 @@ export function applyReadOnlySnapshot(
     cwd: response.thread.cwd,
   });
   store.setThreadStatusForThread(threadId, response.thread.status);
-  hydrateAuxiliaryData(threadId);
+  void hydrateAuxiliaryData(threadId);
 }
 
 /**
@@ -98,13 +106,19 @@ export function applyReadOnlySnapshot(
  *
  * Exported because opening is not only user-initiated: reconnecting and
  * recovering after a refresh reopen threads in the background. They must
- * interpret the response the same way, or `thread.turns` — empty by design
- * since history became metadata-first — silently renders those threads blank.
+ * interpret the response the same way, or the metadata-only `thread.turns`
+ * field silently renders those threads blank.
+ *
+ * @param response - Metadata and the initial summary page from the backend
+ * @param baselineSeq - Observation sequence captured before requesting the open
+ * @param joined - Optional room acknowledgement; triggers a fresh post-join page
+ * @returns Completion of repair reads; initial rendering happens synchronously
  */
 export function applyOpenResponse(
   response: ThreadOpenResponseDto,
   baselineSeq: number = -1,
-): void {
+  joined?: Promise<boolean>,
+): Promise<void> {
   const store = useTimelineStore.getState();
   const threadId = response.thread.id;
 
@@ -114,7 +128,7 @@ export function applyOpenResponse(
   // this was in flight. Applying anyway would recreate it — the store writes
   // through a create-if-absent helper — and put a deleted conversation back on
   // screen with content.
-  if (!store.getThreadRuntime(threadId)) return;
+  if (!store.getThreadRuntime(threadId)) return Promise.resolve();
 
   store.setThreadTitleForThread(threadId, threadLabel(response.thread));
   store.hydrateOpenedThread({
@@ -130,7 +144,7 @@ export function applyOpenResponse(
   store.setThreadStatusForThread(threadId, response.thread.status);
   // The first hook read can precede resume and report observed:false. Opening
   // (including restart recovery) is the point at which settings are available.
-  void refreshThreadPolicy(threadId).then(() => settleIfObserved(threadId));
+  const policy = refreshThreadPolicy(threadId).then(() => settleIfObserved(threadId));
 
   // Seed the composer's display-only view of this thread's resolved settings.
   // `thread/settings/updated` only fires when settings change, so without this
@@ -194,9 +208,15 @@ export function applyOpenResponse(
   // durable all the same — persistence happens per item, not per turn — so
   // they are read separately instead of leaving the transcript blank until the
   // turn ends. The per-turn top-up cannot do this: it is gated on completion.
-  if (activeTurn) void recoverTurnItems(threadId, activeTurn.id);
-
-  hydrateAuxiliaryData(threadId);
+  const epoch = currentThreadEpoch(threadId);
+  const repair = (joined ?? Promise.resolve(false)).then(async (acknowledged) => {
+    if (epoch !== currentThreadEpoch(threadId) || !store.getThreadRuntime(threadId)) return;
+    // HTTP and Socket.IO are independent. An acknowledged join needs a fresh
+    // page after it; an HTTP-only open can still repair its returned page.
+    await recoverThreadAfterReconnect(threadId, acknowledged ? undefined : response.initialTurnsPage);
+    if (epoch === currentThreadEpoch(threadId)) await hydrateAuxiliaryData(threadId);
+  });
+  return Promise.all([repair, policy]).then(() => undefined);
 }
 
 /**
@@ -208,6 +228,7 @@ export function applyOpenResponse(
  * switching conversations feel broken.
  */
 export function useOpenThread() {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   return useMutation({
@@ -215,29 +236,34 @@ export function useOpenThread() {
     onMutate: (variables) => {
       const threadId = variables.path.threadId;
       const store = useTimelineStore.getState();
-      store.setActiveThread(threadId);
+      invalidateThreadEpoch(threadId);
+      const joined = store.setActiveThread(threadId);
+      store.setHistoryLoadingForThread(threadId, false);
       const runtime = store.getThreadRuntime(threadId);
       if (!runtime?.hydrated) store.setLoadingForThread(threadId, true);
       // Captured before the request goes out, so anything observed while it is
       // in flight outranks the snapshot the response carries.
-      return { baselineSeq: nextObservationSeq() };
+      return { baselineSeq: nextObservationSeq(), epoch: currentThreadEpoch(threadId), joined };
     },
     onSuccess: (response: ThreadOpenResponseDto, _variables, context) => {
-      applyOpenResponse(response, context?.baselineSeq);
+      if (context?.epoch !== currentThreadEpoch(response.thread.id)) return;
+      const repair = applyOpenResponse(response, context?.baselineSeq, context.joined);
+      invalidateThreadDetails(queryClient, response.thread.id);
       if (response.mode === 'readOnly') {
         showSnackbar(
           t('This conversation is open in another client; opened read-only.'),
           'warning',
         );
       }
+      return repair;
     },
-    onError: (_err, variables) => {
+    onError: (_err, variables, context) => {
       // Same guard as the success path, for the same reason: the store's
       // setters create a runtime when one is absent, so clearing the loading
       // flag on a thread that was deleted mid-request would rebuild the shell
       // of a conversation that no longer exists.
       const store = useTimelineStore.getState();
-      if (store.getThreadRuntime(variables.path.threadId)) {
+      if (context?.epoch === currentThreadEpoch(variables.path.threadId) && store.getThreadRuntime(variables.path.threadId)) {
         store.setLoadingForThread(variables.path.threadId, false);
       }
     },
@@ -257,6 +283,8 @@ export function useLoadOlderHistory(threadId: string | null) {
     const runtime = store.getThreadRuntime(threadId);
     if (!runtime?.historyCursor || runtime.historyLoading) return;
 
+    const epoch = currentRecoveryEpoch(threadId);
+    const current = () => currentRecoveryEpoch(threadId) === epoch && Boolean(store.getThreadRuntime(threadId));
     store.setHistoryLoadingForThread(threadId, true);
     try {
       const { data } = await threadsListTurns({
@@ -268,6 +296,7 @@ export function useLoadOlderHistory(threadId: string | null) {
           itemsView: 'full',
         },
       });
+      if (!current()) return;
       if (!data) {
         store.setHistoryLoadingForThread(threadId, false);
         return;
@@ -276,7 +305,7 @@ export function useLoadOlderHistory(threadId: string | null) {
     } catch {
       // Leaving the cursor untouched keeps the control available for a retry;
       // clearing it would silently declare the history complete.
-      store.setHistoryLoadingForThread(threadId, false);
+      if (current()) store.setHistoryLoadingForThread(threadId, false);
     }
   }, [threadId]);
 }

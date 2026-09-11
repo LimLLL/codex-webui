@@ -47,9 +47,10 @@ export function useTurnItemsTopUp({
       path: { threadId: threadId ?? '', turnId },
     }),
     enabled,
-    // A complete read of a finished turn never changes, so refetching it would
-    // only ever return the same bytes. A partial read is a different matter and
-    // must stay refetchable — see below.
+    // Existing complete-turn cache policy. The shell stability probe does not
+    // establish immutability for late sub-agent activity or cold resumes; that
+    // measurement remains tracked in remaining-tasks.md. Partial reads stay
+    // refetchable — see below.
     staleTime: (query) => (query.state.data?.complete ? Infinity : 0),
   });
 
