@@ -107,3 +107,9 @@ redact paths: `Authorization`, `cookie`, `req.query.access_token`, `set-cookie`,
 详见 [approval.md](approval.md)。
 
 支持 accept, acceptForSession, decline, cancel + exec/network policy amendments。按钮由服务端 `availableDecisions` 动态控制。
+
+## 本地 wire audit 凭据脱敏
+
+JSON-RPC 的 JSONL 文件与 Pino 日志是两条独立路径。`serializeCodexAuditEntry` 在磁盘写入前递归脱敏 API key、access/refresh/ID token、attestation token、client secret 与 authorization 字段，支持 camelCase/snake_case。不会改写实际发送的对象，也不隐藏非凭据 boolean flag。旧日志不自动清理。
+
+外部粘贴的 ChatGPT access token 不提供 refresh 能力。收到 `account/chatgptAuthTokens/refresh` 时立即返回明确错误，提示通过现有 Settings 重新登录；不会持有或伪造 refresh token，不把机器 RPC 挂起等人类重新粘贴。见 [approval.md](approval.md)。

@@ -662,7 +662,7 @@ Notification schema 数：60
 |---|---|---|
 | Request response | `{ id, result/error }` | resolve/reject 后端 pending promise |
 | Notification | `{ method, params }` | 进入 normalizer，推送前端，必要时落库 |
-| Server request | `{ id, method, params }` | 后端或前端必须返回 response，例如审批、用户输入、token refresh |
+| Server request | `{ id, method, params }` | 后端连接内 owner 必须答复、保留或退休；浏览器只回答已实现的人机交互，未知/未实现方法明确拒绝 |
 
 ### 6.5.2 MVP 必须处理的事件组
 
@@ -787,7 +787,7 @@ type NormalizedEvent = {
 - **Raw 永远保留**：未知事件不要丢弃，标记为 `unknown`。
 - **delta 可即时渲染，但最终以 completed 校准**：例如 agent text 先拼 delta，收到 `item/completed` 后替换为最终 `item.text`。
 - **按 connection sequence 排序**：同一 app-server 连接内 stdout line/frame 顺序是事件顺序；落库时增加 `sequence_no`。
-- **server request 必须显式跟踪**：审批类请求应产生 `approval.requested`，响应后用 `serverRequest/resolved` 或 request response 生成 `approval.resolved`。
+- **server request 必须显式跟踪**：实现由 `ServerRequestOwner` 在 ingress 接管。浏览器回答引用不可变 instance，SQLite CAS 先提交 submitted，再写原连接；只有原生请求/连接生命周期确认退休，不能把本地提交当作原生 resolved。权限和 MCP 完整交互、legacy/机器方法拒绝及恢复语义见 [approval.md](approval.md)。
 - **版本字段必须存在**：`schemaVersion` 和 `codexVersion` 用于后续迁移。
 
 ## 8. PostgreSQL 数据模型

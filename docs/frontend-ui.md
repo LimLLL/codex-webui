@@ -243,7 +243,7 @@ Mobile/Tablet (< lg):
 
 - **GitDiffPanel** (`turn-items/git-diff-panel.tsx`)：封装 DiffView，集中处理 Shiki 懒加载（模块级单例）、theme（从 `useThemeStore` 读取）、Unified/Split 切换、parse 失败 raw fallback（DiffRenderBoundary error boundary）。
 - **file-change-item / file-change-set**：两种审批呈现共用完整 change-set renderer，逐文件显示路径、操作种类与 rename 目标。审批内联时优先展示 request-owned review subject，完整主体用 GitDiffPanel；未持有完整主体的普通 item 流式阶段保留 raw diff。
-- **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST，写入期间禁止重复提交，完成回调校验原 thread/generation。蓝色边框(pending) / 灰色(resolved)。
+- **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST，写入期间禁止重复提交，完成回调校验原 thread/instance；submitted 与原生 resolved 分开。蓝色边框(pending) / 灰色(resolved)。
 
 ## 审批呈现
 
@@ -261,7 +261,7 @@ Mobile/Tablet (< lg):
 | 无同轮宿主 | 保留自包含卡片（`approval-item.tsx`）；跨轮 stdin 回调即属此类 |
 | 已决议 | 收成紧凑状态条。**`resolved` 保持中性**——服务端在 turn 开始/结束/中断的生命周期清理中也会 resolve，不等于用户接受过 |
 
-文件审批在无同轮宿主时自绘完整 review subject；任何条目不可完整解析或集合为空时视为 unavailable。inline 与 standalone 均只保留 Decline/Cancel，不能用本地 item 替代缺失的请求主体。全局创建与读取共享通知决策，按 generation 退休并清掉可见或排队提示。
+文件审批在无同轮宿主时自绘完整 review subject；任何条目不可完整解析或集合为空时视为 unavailable。inline 与 standalone 均只保留 Decline/Cancel，不能用本地 item 替代缺失的请求主体。全局创建与读取共享通知决策，按 instance 退休并清掉可见或排队提示。
 
 关键约束：
 
@@ -344,7 +344,7 @@ Vite `cssTarget: ['chrome100', 'safari16', 'firefox100']`：防止 CSS minifier 
 ChatInput 内两个同级 popover，共用 `use-active-model` 解析「下一轮实际使用的模型」，避免两处各自推导后给出该模型并未声明的选项：
 
 - 左侧 `ModelSelector`：选模型 + 推理强度。
-- 右侧（token 用量环左边）`ServiceTierSelector`：选速度档位。模型未声明任何 tier 时整个控件不渲染 —— 常驻一个不可选的控件会让人以为速度可调。
+- 右侧（token 用量环左边）`ServiceTierSelector`：按模型支持过滤本地 start/resume/fork seed 与显式选择。不支持的配置不冒充 Standard；没有有效显示值时按钮只标 Speed。没有配置时仅采用受支持的目录默认值。模型未声明任何 tier 时控件不渲染。上游 `warning`（含 unsupported tier 原文）显示为系统警告，不据此编造替代档位或刷新会话。
 
 三者的 session-level overrides 都存 `model-store`，随 `turn/start` 发出。
 
@@ -431,3 +431,9 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
 - **Approval count badge**：hydrated pending approvals > 1 时显示数字（9+ 封顶），半透明黄色圆角背景
 
 策略读取失败时，SecurityPolicyBadge 弹层显示「最后已知」说明（含中文翻译）。闭合徽章与发送按钮不因 stale 单独改变；确认中的用户策略选择仍按原有规则等待。
+
+## 权限与 MCP 交互
+
+`turn-items/interaction-card.tsx` 消费后端已完整验证的 presentation。权限逐项显示 read/write、special scope、glob、固定 deny 约束，默认不勾选授予，session scope 必须显式选择。MCP 支持 primitive form 与 URL，未知扩展语义不显示部分表单或 Accept。URL 仅用户点击后打开，Continue 是另一项明确操作。
+
+所有卡片通过 `use-request-response.ts` 提交 instance-bound 决定，本浏览器成功提交的选择与 Decision submitted 分别显示；原生退休不推断用户选择或执行成功。WebSocket 先退休、HTTP 后返回时仍保留选择，并且不把终态退回 submitted。已有选择遇到后续传输失败时与 Delivery unconfirmed 一起显示。缺少 instance 的旧客户端必须刷新。`codex.serverRequestFailed` 显示客户端失败原因，既不伪装为用户 Decline，也不代替 turn/completed。

@@ -182,7 +182,7 @@ Session 级的模型 / 推理强度 / 速度档位 override，随每次 `turn/st
 
 推理强度与速度档位都是逐模型 advertise 的，切换模型时两者一并重置（`setServiceTierOverride(undefined)`），否则可能残留新模型没有的档位。
 
-两张观测表由两条路径写入：`thread/settings/updated` 通知，以及 `applyOpenResponse` 中的开线程水合。**光靠通知不够** —— 它只在设置发生变化时才发，所以重新打开或刷新后的线程会退回目录默认值：速度选择器会对一个实际跑在付费档的线程显示「标准」，而 composer 因为 override 是 `undefined` 又不发 `serviceTier`，该档位继续生效。用户会以为自己在标准速度和标准计费上。`forgetObservedThreadEffort` 同时清两张表和观测序号，且早退条件必须同时检查两者 —— 只看 effort 会漏掉只有 tier 记录的线程。
+effort 接收设置通知和 open seed；service tier 仅保留 start/resume/fork 响应提供的本地 seed。实测 tier 变更没有通知，也没有被动读取；无关设置通知不能清除或伪造 tier。通知先于响应时仍允许补齐缺失的首个 tier seed。显示按参考客户端的模型支持过滤：已有配置但不支持时显示通用 Speed，不改写成 Standard 或目录默认值；没有配置时仅采用受支持的目录默认值，显式 default 才表示 Standard。没有跨浏览器同步或为读显示而 resume。`forgetObservedThreadEffort` 同时清两张表与观测序号。
 
 ## connection-store
 
@@ -228,3 +228,11 @@ useCodexSocket → store mutation → React re-render
 完整及部分 top-up 的共享 Query 缓存都不携带请求发出时的观测基线，因此采用保守的未知基线：保留已有终态载荷，仍用持久终态修复片段；不能在响应应用时补打时间序号。
 
 Plan prose 按 item 保存 `{ text, completed, observedSeq }`，终态后拒绝 delta；恢复中的持久终态替换流式片段，但请求发出后到达的实时终态保留。
+
+## 请求实例与交互行
+
+卡片的 wire requestId 只用于本地索引，`instanceId` 才是提交、恢复、退休和迟到回调的身份。两浏览器由后端 CAS 决定胜者。`submitted` 表示本地提交，不能当成已确认执行；失败不会重开 pending。原始 `serverRequest/resolved` 不直接按裸 ID 清现代卡片。
+
+权限与 MCP 请求保存在 approvals 中，以独立 `interaction` 行渲染。行 key 使用 instance，MCP 无 turnId 时也不伪造 turn 或调用历史补页。失败说明作为带 requestInstanceId 的 system 行幂等恢复，不改变 loading/activeTurnId。
+
+`ApprovalRequest.decision` 保存本浏览器成功提交的选择，与 submitted/resolved/failed 生命周期独立。终态先到、HTTP 成功后到时只补归因，不逆转终态；同 wire ID 的新 instance 不继承旧选择。消费退休 tombstone 时删除实际查询的 instance key，重复投递不重开已退休的卡片。失败恢复的范围与 20 条上限见 [approval.md](approval.md)。

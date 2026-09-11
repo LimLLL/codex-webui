@@ -154,11 +154,11 @@ Pending reconciliation remains request-time ordered and multi-device responses
 remain first-writer-wins. A hint does not prove acceptance or resolution. The
 existing detailed `codex.notification` contract remains thread-scoped. Human
 `codex.serverRequest` events now reach the authenticated room with additive
-`generation` and `reviewSubject` fields; `conversation.pending.resolved` retires
+`instanceId`, `generation`, `reviewSubject`, `presentation` and `negativeOnlyReason` fields; `conversation.pending.resolved` retires
 them globally after committed resolution, cancellation or expiry. Token/item
 deltas emit no global invalidation.
 
-Pending reads return `{ generation, requests }`. A read whose scope intersects
+Pending reads return `{ generation, requests, failures }`; requests include submitted decisions awaiting confirmation. Responses and retirement require the immutable instance, because generation counters reset with the backend. A read whose scope intersects
 a deletion guard fails with HTTP 409 (`threads.delete_in_progress`), rather than
 returning a successful set with hidden rows that falsely appear resolved. Guard
 release emits another pending-change hint. Thus a successful response still

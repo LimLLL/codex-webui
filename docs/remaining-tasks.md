@@ -22,7 +22,7 @@
 
 - [x] `codex.serverRequest` 事件转发 (ThreadsGateway)
 - [x] `codex.serverResponse` 客户端回传 (ThreadsGateway)
-- [x] `respondToServerRequest` 回写 app-server stdin (CodexJsonRpcClient)
+- [x] 由连接内 `ServerRequestOwner` 独占 server-request 答复 authority，持久化决定提交后才回写原 app-server stdin
 
 **前端**
 
@@ -62,7 +62,7 @@
 - [x] `PendingApprovalsModule`：SQLite `pending_server_requests` 表持久化 approval
 - [x] `PendingApprovalsService`：persist → emit、generation expire、multi-device CAS（`changes === 1`）
 - [x] `PendingApprovalsController`：`GET /api/pending-approvals`、`POST /api/pending-approvals/:requestId/respond`
-- [x] `ThreadsGateway`：serverRequest 先持久化再 emit、serverResponse 通过 CAS 服务响应
+- [x] ServerRequestOwner 在 ingress 接管并交 PendingApprovalsService 持久化；ThreadsGateway 只分发成功 admission，两个响应入口均用 instance-bound CAS
 
 **前端**
 
@@ -371,7 +371,7 @@
 - [x] 前后端两半均已落地（[契约](thread-policy-recovery.md)）。后端：安全设置观测值、按会话排队的变更、严格的载荷白名单、显式的 item 分页完整性、带权限字段的审批传输测试。前端：把 item 权威、turn 生命周期、历史覆盖范围三件事拆开；打开会话时按 turn 分组对账；open 与重连共用一个恢复协调器，且同时修复 turn 生命周期而不只修 item；审批内联进它所属的执行 item；per-thread 策略以观测顺序确认。**真实模型轮次的执行已实测**，不再是待验证项：会话在 `on-request`/只读下请求了审批，改为 `never`/完全访问后同一任务不再询问（`pnpm probe live-policy`）。
 - [x] 协议探针从一次性脚本升为纳入版本管理、受类型检查的代码（`codex_probe/`，见 [README](../codex_probe/README.md)）。方法与其参数由生成的 `ClientRequest` 在类型层相关联，拼错的调用在 spawn 前就失败；每次运行使用隔离的 CODEX_HOME；只用钉住的二进制。
 - [x] **策略观测值有了生命周期**。此前只在「从未观测过」时读一次，唯一刷新来源是 `thread/settings/updated`；断线期间由 CLI 或另一个客户端改的策略收不到通知，重连后无路径补读，徽章长期显示旧值且 Send 据此放行。现在打开完成（含重启恢复）及重连会补读策略，会话销毁或空闲驱逐时清掉观测值与确认计时器（`forgetPolicy` 此前在生产代码里从未被调用），`observed:false` 不再算作「已读过」因而不再永久卡在 unknown，仅最新发出的读取失败才会把已有证据标记为 `stale` 并在徽章上说明是「最后已知」而非当前生效。
-- [x] **open 响应不再用旧快照复活已结束的轮次**。响应是服务端处理请求那一刻的快照；若该轮次的 `turn/completed` 在请求在途期间已到达，旧实现会把指针重新点亮、composer 永远转圈。现在 open 路径与 `settleTurnLifecycleForThread` 采用同一条守卫：本地已终态的 turn 不被快照里的 running 状态复活。effort / serviceTier 的 seed 也不再无条件写入——observed 设置带上观测序号，手动打开、启动恢复及重启恢复都用请求发出前递增的基线打戳，期间到达的 `thread/settings/updated` 因而更新、不会被旧响应覆盖。
+- [x] **open 响应不再用旧快照复活已结束的轮次**。响应是服务端处理请求那一刻的快照；若该轮次的 `turn/completed` 在请求在途期间已到达，旧实现会把指针重新点亮、composer 永远转圈。现在 open 路径与 `settleTurnLifecycleForThread` 采用同一条守卫：本地已终态的 turn 不被快照里的 running 状态复活。effort 的 seed 受请求发出前的观测基线保护；serviceTier 是生命周期响应的本地 seed，测量表明 tier 不发变更通知，不再以无关通知清除该值。
 - [x] **plan 文本纳入 item 权威模型**。`planTextByItemId` 从 `Record<itemId, string>` 改为携带 `completed` 与 `observedSeq`，与 `TurnItemBase` 一致：终态之后到达的 delta 被拒绝（此前会追加出重复尾巴），持久快照按与 `selectPayload` 相同的规则让位于更新的终态观测。
 - [x] **重连恢复补齐两处缺口**。断线期间新开的轮次此前只恢复生命周期、不取内容，composer 显示在跑而该轮次渲染为空；现在被接管的活跃轮次先建立 turn 行，再一并取回 item 和提示词；即使读取头期间已有实时事件建立了行，也仍会补取缺失内容，同页普通旧历史不额外读取。审批只经 socket 送达，断线会同时丢掉两端：期间发起的不出现，期间在别的设备上被应答的不消失；现在重连按服务端的 pending 集合对账，启动路径与重连路径共用同一个 `syncPendingApprovals`。缺席仅解决请求发出前已有且未改变的 pending 卡片，已有决定不被旧快照重新打开；重叠读取按会话范围淘汰旧响应。
 - [x] **shell 轮次稳定性对照实测**（`pnpm probe turn-item-finality`）：0.153.2 上，同一 completed shell 轮次的完整 item 载荷在后续 shell 轮次和已加载线程的 `thread/resume` 后一致。比较完整载荷并要求成功读取和 resume，不再仅比较输出长度，也不外推为所有模型轮次永久不变。
@@ -394,19 +394,14 @@
 - [x] 侧边栏行索引只由**正在渲染**的视图构成。被 gate 的查询仍保留缓存，索引全部三个视图会让陈旧的详情页盖掉新鲜的首页行——连 `openThreadId` 与成员集合一起盖掉，而这两者决定点击行为。逻辑抽到 `web/src/lib/sidebar-rows.ts` 并有回归测试。
 - [x] 排序时效滞后确认为**有意取舍**（2026-09-10 裁决）。恢复即时排序需要在 turn 结束时对单个会话做针对性元数据读，且需先探针确认投递时上游 `updatedAt` 是否已推进。见 [conversation-recovery.md](conversation-recovery.md)。
 - [x] 崩溃/重新附着的原生行为探针（`codex_probe/restart-recovery.ts`）：崩溃发生在 turn 进行中，实测重新附着能恢复什么、不能恢复什么。
-- [ ] 未关联的执行活动保持保守：只有相关的终态证据或关闭/删除才退休它；不得用无关的历史完成事件去剪枝。
+- [x] 未关联的执行活动保持保守：只有相关的终态证据或关闭/删除才退休它；不得用无关的历史完成事件去剪枝。已有实现及 `thread-execution-inventory.service.spec.ts` 回归测试覆盖。
 - [x] 前端刷新与按需订阅：overview 全局信号共用有界延迟失效，覆盖会话与分支查询；pending 共用可取消、含尾随读取的全局对账。页面加载由路由 opener 负责，重启只恢复正在看的转录，重连只读不 resume；三者共享历史/item/policy/auxiliary 修复。原 open applier 已有 policy 读取，现移除 wrapper 重复读取。选择与路由退出真正离开旧房间，订阅确认后补读连接前窗口；无启动期批量订阅。
 - [x] 重新生成前端 SDK 以覆盖 overview 新增的 `freshness` 字段，以及 pending 的 `reviewSubject` / `generation` 与 `{generation, requests}` 响应。
 - [ ] 归档范围契约：workspace 过滤后的 `memberThreadIds` 不包含其它工作区成员，后端却归档完整已知树；跨工作区成员的前端清理/离开当前会话仍需权威的归档范围或逐线程事件对齐，不能从未显示的旧缓存推断。
 - [ ] 用真实模型的 turn、goal 与受控子会话验证崩溃/重新附着结果；重新附着本身不承诺执行续跑。
 - [x] 二次交叉审查：归档完成使用请求发出时的成员集合，避免视图切换/刷新后遗漏隐藏分支；四组独立冷恢复探针区分 null 与实际分页、读取附着前 goal、验证模型请求确实已挂起；旧 turn 终态不删除新 goal 续跑 turn。
 - [ ] **策略变更需另行产品裁决**：活跃 goal 冷恢复后可由原生调度器开启新 turn，与已批准的活跃 goal 恢复保持一致。当前不改恢复策略、不加开关；如果要禁止无人值守续跑，需先确认产品语义与原生能力，不能假定已有"仅附着不执行"模式。
-- [ ] **`account/chatgptAuthTokens/refresh` 无人应答**（既有问题，本轮未修，但已排查清楚可达性，不再是"不知道会不会发生"）。`ServerRequest` 里三个机器面方法的实际风险并不相同：
-  - `attestation/generate` — **不可达**。`initialize` 声明的是 `requestAttestation: false`，app-server 不会发。
-  - `item/tool/call` — 需要客户端注册自己的工具，本项目没有注册，**当前不可达**；一旦将来注册就立刻变成可达。
-  - `account/chatgptAuthTokens/refresh` — **可达**。`account/` 支持 `chatgptAuthTokens` 登录方式，令牌由客户端提供，因此续期也要由客户端答复。现在没有任何应答者，该请求会一直挂着；症状是这种登录方式的凭据到期后静默失效，而不是报错。
-  修之前需要先确认：谁持有可刷新的凭据（WebUI 自己并不持有 refresh token，很可能只能把失败如实回报而非真正续期），以及答不上来时应该回什么错误形状。这不是一行能补的应答器，属于账号能力范围，需独立排期。
-
-- [ ] **审批响应身份契约**：当前响应仅带 requestId，缺 expected generation / request instance 前置条件；旧写入可在 id 重用后命中新请求。backend 重启也会重置 generation，不能把这个二元组当跨进程唯一身份。需独立后端契约修订，浏览器无法单独保证。
-- [ ] **其余人机请求的浏览器交互**：permission、MCP elicitation、legacy approvals 已全局转发，但仍缺浏览器 renderer/decision flow，不能把后端支持写成浏览器全覆盖。
-- [ ] **重连时 observed service tier 的被动读取**：现有只读元数据与 policy/mode endpoint 不返回 serviceTier；重新打开会话可由 resume 恢复，但只断 socket 时仍可能保留旧显示。需独立只读契约，不得为刷新显示而盲目冷 resume 活跃 goal。
+- [x] **Server request totality 与外部 token refresh**：每个已导出 method 在 ingress 穷尽分流，未知运行时 method 明确错误答复；外部 ChatGPT token 无 refresh 凭据，立即拒绝并提示重新登录。实测该方法会按约 10 秒超时重试，不再描述为无限等待。登录/API key/token 的本地 wire audit 投影先行脱敏，不改实际 payload。
+- [x] **审批响应身份契约**：随机 instanceId 贯穿数据库、live、pending 读取、两个响应 API 与退休。拒绝缺失身份，重复 admission 不覆写 proposal；CAS 先提交 submitted，再写原连接，原生通知确认 resolved。模糊传输失败不重开 pending、不重试。已覆盖终态先于 HTTP 的本地决定归因、instance tombstone 消费、Nest 主体捕获顺序、竞争 SQLite writer 与连接退出路径；失败恢复在 SQL 中限取当前数值 generation 和请求范围的最新 20 条（完整 backend 重启后 generation 复用的提示限制见 approval.md）。
+- [x] **其余人机请求的浏览器交互**：权限完整显示及选择编码；MCP primitive form/URL 与 nullable turn；未知扩展语义只提供 Decline/Cancel。两种 legacy approval 明确拒绝。客户端失败说明与上游 turn outcome 分开保留。
+- [x] **service tier 本地诚实显示**：测量证明不存在可用被动读，tier 变更也没有通知；不引入跨客户端同步或用于刷新显示的 resume。采用参考客户端的生命周期 seed 与模型支持过滤，unsupported 配置不冒充 Standard，并显示上游 warning。

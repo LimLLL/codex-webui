@@ -267,7 +267,7 @@ filter measurements, and the global socket invalidation contract.
 ## Pending human interactions
 
 `GET /api/pending-approvals` (optional comma-separated `threadIds`) returns
-`{ generation, requests }`. Every row retains its existing fields and adds
+`{ generation, requests, failures }`. Requests include both pending and locally submitted decisions. Every row carries its immutable `instanceId`, backend-validated `presentation`, `negativeOnlyReason`, and
 `reviewSubject`: the full `{ type: 'fileChange', changes }` for a native file
 approval, or null when the upstream request parameters already carry the subject.
 Every file change retains `path`, `diff` and the structured `kind` union, including
@@ -277,9 +277,7 @@ A scope intersecting a deletion guard returns HTTP 409 with error code
 `threads.delete_in_progress`; it returns no partial snapshot. The browser must
 preserve held requests and retry after the global pending-change hint on release.
 Internal deletion planning is unaffected. `POST /api/pending-approvals/:requestId/respond`
-retains `{ result, clientId? }`, first-writer-wins CAS and existing errors. Its
-success retires the request globally after commit, without claiming execution
-success. A file approval whose `reviewSubject` is null accepts only `decline` or
+requires `{ instanceId, result, clientId? }`; missing identities are rejected. First-writer-wins CAS commits `submitted` before transmission on the original connection. Server retirement confirms resolution separately; uncertain delivery does not reopen the decision. A file approval whose `reviewSubject` is null accepts only `decline` or
 `cancel`; anything else returns HTTP 409 `approvals.subject_unavailable` and
 leaves the request pending, so no client can approve changes it could not show. See [approval.md](approval.md#global-attention-contract) for the complete
-REST/socket contract, including generation scope and neutral retirement.
+REST/socket contract, including immutable instance identity, method-specific encoding and neutral retirement. Failure replay is limited in SQLite to the twenty most recent explanations within the requested scope and current numeric generation. This generation filter can match older backend lifetimes after the counter resets; it is not response authority.

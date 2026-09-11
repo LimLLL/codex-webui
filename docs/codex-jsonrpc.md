@@ -21,7 +21,7 @@
 | 类型 | 识别方式 | 处理 |
 |------|----------|------|
 | Response | 有 `id` + (`result` 或 `error`) | resolve/reject pending promise |
-| Server Request | 有 `id` + `method` | emit `serverRequest` 事件 |
+| Server Request | 有 `id` + `method` | `ServerRequestOwner` 先决定答复/保留/退休，成功 admission 后才通知 observers |
 | Notification | 有 `method`, 无 `id` | emit `notification` 事件 |
 
 ## 错误处理
@@ -64,6 +64,7 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 - 启动失败后的 `stop()` 超时不覆盖原始诊断（只记日志）：保留的 stderr 才是分类依据，顶替它会把确定性的目录拒绝重新变成重试循环
 - ready 在 initialize、config/read、model/list 检查及 catalog accepted 落盘后发出；受控重启与 rollback 见 [model-catalog.md](model-catalog.md)
 - `addListener()` 注册的事件监听会跨重启保留
+- 事件转发绑定原 client；旧 child 的延迟帧不获得新 generation。单一 server-request admission handler 在初始化前安装，缺少 owner 时立即拒绝。
 
 ## JSONL 审计日志
 
@@ -78,6 +79,17 @@ RPC 错误响应包含 `{ code, message, data? }`。`handleMessage()` 会抛出 
 - `dir: "in"` = 从 app-server 接收
 - 可直接用 Python `json.loads()` 逐行解析
 - misalignment 的 `detailedExplanation` 与 continuation `steer` 在写入前替换为 `[REDACTED]`；解析失败日志也不回显原始行，避免这两类 live-only 内容绕过结构化日志脱敏。
+- 登录、refresh 与 attestation 的 API key、access/refresh/ID token、token、client secret、authorization 字段递归脱敏，支持对应 snake_case 名称。仅改变 audit 投影，实际 RPC payload 不变；`refreshToken: false` 这样的 boolean flag 保留。既有日志不自动改写。
+
+## Server request totality
+
+已导出 method 的 disposition 在编译期穷尽，未导出的运行时 method 仍有错误答复。已知不支持返回 `-32000`，未知 method 返回 `-32601`，invalid payload 返回 `-32602`，admission 异常返回 `-32603`。等待人类的请求保留连接绑定 authority，没有统一超时，也不阻塞其它流量。
+
+人机请求持久化随机 instance；CAS 提交 `submitted` 后才写原 stdio 连接，正常 resolution 另行确认。数据库提交不能与传输组成可回滚事务；模糊写失败不重试、不重开 pending。详见 [approval.md](approval.md)。
+
+连接退出或 destroy 时，request owner 先退休全部请求，再由 manager 清除原 client。旧缓冲区通知仍受 client 对象身份过滤，不能影响替代连接的同号请求。`close` 订阅统一在 manager 清理前按注册顺序分发，包含启动后注册的订阅；observer 异常不阻止连接清理。backend 销毁后迟到的物理 close 可被忽略，因为请求权限已同步退休。
+
+`PendingApprovalsService` 在构造函数中注册文件主体观察，gateway 依赖该服务且到 `afterInit` 才注册转发观察，所以主体捕获先于浏览器投递。应用模块的 Nest 构造测试覆盖这个顺序，不依赖 providers 数组的书写次序。
 
 ## 初始化握手
 
@@ -95,7 +107,7 @@ client → initialized {}  (notification, no id)
 
 ## Settings freshness and item recovery
 
-`ThreadSettingsObserverService` retains complete effective-settings notifications. Start/resume/fork responses seed only unobserved threads; repeat opens project the current observation after their awaited reads. A queued mutation never becomes an invented effective-settings snapshot. Bounded item reads expose incomplete outcomes instead of silently returning truncated history. See [thread-policy-recovery.md](thread-policy-recovery.md) for the REST contract and measured durability limits.
+`ThreadSettingsObserverService` retains observable settings notifications. Service tier is a separate local seed from start/resume/fork: measurement found no tier-change notification or passive read, so unrelated notifications neither establish nor clear it. A notification arriving before the lifecycle response cannot suppress that first tier seed. No resume is introduced to refresh the display. A queued mutation never becomes an invented effective-settings snapshot. See [thread-policy-recovery.md](thread-policy-recovery.md) for other settings and bounded history recovery.
 
 ## Execution observations
 

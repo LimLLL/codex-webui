@@ -29,9 +29,11 @@ The acknowledgement alone never confirms a change. An already observed matching
 value covers a no-op without waiting for an acknowledgement or another
 notification. An in-flight turn is untouched.
 
-Start/resume/fork responses seed the observer only when no observation exists.
-Full `thread/settings/updated` notifications retain all settings, including
-security fields, and win over a seed arriving later. Repeat opens read the
+Start/resume/fork responses seed unobserved settings. Observable security fields
+from `thread/settings/updated` win over a seed arriving later. Service tier is the
+measured exception: it has no passive read or change notification, so lifecycle
+responses supply its local seed even when the first settings notification arrived
+earlier. Unrelated notifications preserve that seed. Repeat opens read the
 current observation after their asynchronous history reads. Accepted
 collaboration-mode requests no longer replace observed settings; they only
 record displaced effort for the existing Plan-mode restoration behavior.

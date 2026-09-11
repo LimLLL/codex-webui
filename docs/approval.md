@@ -1,326 +1,133 @@
-# Approval 审批流实现文档
+# Server requests 与人机交互
 
-## 概述
+## 所有权与分发
 
-当 Codex agent 需要执行命令或修改文件时，app-server 发送 server request 请求用户审批。后端先持久化到 SQLite（`pending_server_requests` 表），再通过 Socket.IO 推送给前端。用户操作后通过 REST CAS 接口响应，确保多设备场景下只有第一个 pending 请求能被处理。删除会话时，仍处于 pending 的请求在该会话真正被中断或删除后转为 `cancelled`。
+每个 stdio 连接的 `ServerRequestOwner` 在 observer 之前接管所有 server-initiated JSON-RPC request。请求必须被答复、由明确的 handler 保留，或因原连接/上游生命周期结束而退休。人类等待不阻塞其它 RPC 流量，也没有统一超时；所有浏览器离线时仍可等待恢复。
 
-## 数据流
+生成的 `ServerRequest` union 的每个 method 都在 disposition 表中显式分类，新增 variant 会造成编译错误。原始 wire envelope 的 method 仍是开放字符串：未导出的运行时方法走错误答复，不能因类型断言而被丢弃。
 
-```
-codex app-server (server request, 有 id)
-  → CodexJsonRpcClient.handleMessage() 识别为 server request
-  → emit('serverRequest', msg)
-  → CodexProcessManager event listener
-  → ThreadsGateway.handleCodexServerRequest()
-  → PendingApprovalsService.recordServerRequest() 写入 pending_server_requests
-  → 文件审批先关联完整 reviewSubject，再写入并发布；原始 params 不变
-  → 若 thread 正在删除则仍记为 pending、但不广播（含主体暂存，守卫释放时按需重放）；否则 Socket.IO emit 'codex.serverRequest' to authenticated room
-  → 前端 useCodexSocket 监听
-  → 共享 runtime parser 校验 kind / approvalId / identities / availableDecisions / amendments（lib/approval-parsers.ts）
-  → addApprovalForThread() 写入对应 thread runtime
-  → 非当前 thread 时弹 snackbar + jump-to-thread
-  → ApprovalItem / FileChangeItem 组件渲染审批卡片
-  → 用户选择操作
-  → POST /api/pending-approvals/:requestId/respond
-  → PendingApprovalsService.respondToRequest()
-  → SQLite 事务: CAS status=pending → resolved (changes===1)
-  → CodexJsonRpcClient.respondToServerRequest(id, result)
-  → app-server stdin
-```
+| Method | 处理 |
+| --- | --- |
+| `item/commandExecution/requestApproval` | command/writeStdin 卡片，受主体与 advertised decisions 限制 |
+| `item/fileChange/requestApproval` | 完整文件主体；主体缺失时仅 Decline/Cancel |
+| `item/tool/requestUserInput` | 校验完整问题集后提供输入卡片 |
+| `item/permissions/requestApproval` | 完整权限选项与显式 session scope |
+| `mcpServer/elicitation/request` | 按 mode/schema 选择完整表单、URL 或仅 Decline/Cancel |
+| `applyPatchApproval`、`execCommandApproval` | 明确拒绝 legacy 协议 |
+| `item/tool/call` | 本客户端未注册执行器，明确拒绝 |
+| `account/chatgptAuthTokens/refresh` | 无 refresh token，立即拒绝并提示重新登录 |
+| `attestation/generate` | 不提供 attestation，明确拒绝 |
+| 其它运行时 method | 明确拒绝，包括未导出的 `currentTime/read` |
 
-## 审批类型
+已知不支持的能力使用参考客户端的 `-32000`；未知 method 使用 `-32601`。无效可识别参数返回 `-32602`，admission/持久化异常返回 `-32603`。错误不回显私人参数或异常内容。网关只订阅成功 admission 的请求，不负责决定谁拥有 RPC。
 
-| Server Request Method                   | 审批类型                 | 关键参数                                                                                               |
-| --------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `item/commandExecution/requestApproval` | 命令执行 / 终端输入      | kind (`command`/`writeStdin`), approvalId, command, cwd, reason, availableDecisions, proposedExecpolicyAmendment, proposedNetworkPolicyAmendments, additionalPermissions, networkApprovalContext |
-| `item/fileChange/requestApproval`       | 文件变更                 | reason, grantRoot                                                                                      |
-| `item/tool/requestUserInput`            | 用户输入（EXPERIMENTAL） | questions: [{id, header, question, isOther, isSecret, options}]                                        |
+`human-server-requests.ts` 复用 ingress 的 method 分类。实际 admission 还验证参数是否可定位、完整显示、编码答复与恢复；“概念上是人类问题”不等于“本客户端已实现”。
 
-## 可用决策 (Decisions)
+## 身份与生命周期
 
-### 命令执行 (CommandExecutionApprovalDecision)
+每个新请求在 ingress 获得随机 `instanceId`。它与不可变 proposal 一起持久化，并贯穿：
 
-| Decision                        | UI 按钮                 | 说明               | 显示条件                                                           |
-| ------------------------------- | ----------------------- | ------------------ | ------------------------------------------------------------------ |
-| `accept`                        | Accept                  | 接受这一次         | 默认显示 / `availableDecisions` 包含                               |
-| `acceptForSession`              | Accept for session      | 本次会话全部接受   | 仅 `availableDecisions` 显式包含时显示                             |
-| `decline`                       | Decline                 | 拒绝               | 默认显示 / `availableDecisions` 包含                               |
-| `cancel`                        | Cancel                  | 取消操作           | 仅 `availableDecisions` 显式包含时显示                             |
-| `acceptWithExecpolicyAmendment` | Accept with exec policy | 接受并加入命令模式 | `availableDecisions` 包含 + `proposedExecpolicyAmendment` 非空     |
-| `applyNetworkPolicyAmendment`   | Apply (每条规则)        | 应用网络策略规则   | `availableDecisions` 包含 + `proposedNetworkPolicyAmendments` 非空 |
+- live `codex.serverRequest`；
+- REST pending 读取；
+- REST 和 Socket.IO 响应；
+- 全局提交/退休通知；
+- 浏览器去重、在途回调、恢复读取及通知关闭。
 
-### 文件变更 (FileChangeApprovalDecision)
+`generation` 仍用于本进程生命周期管理，不能作为跨 backend 重启的唯一身份。浏览器必须回传 `instanceId`；缺失时拒绝并要求刷新，不回退到“当前 generation + requestId”。
 
-| Decision           | UI 按钮            | 说明             |
-| ------------------ | ------------------ | ---------------- |
-| `accept`           | Accept             | 接受             |
-| `acceptForSession` | Accept for session | 本次会话全部接受 |
-| `decline`          | Decline            | 拒绝             |
-| `cancel`           | Cancel             | 取消             |
+数据库以 instance 为主键，旧 generation/requestId 只是索引。重复 admission 不替换 params、thread、reviewSubject 或状态。相同 wire ID 在新连接上得到不同 instance。迁移分两步生成：先添加列，再变更主键；旧记录保留 null instance，没有新的响应权限，启动时旧 pending/submitted 被置为 expired。
 
-### 安全策略
+SQLite 的 text PRIMARY KEY 允许多个 NULL，这是保留旧行的兼容行为。所有新 admission 都写入非空随机 instance；非 NULL 的唯一性在竞争连接之间同样生效：未提交写入使另一 writer 等待或返回 busy，提交后相同 instance 的插入返回唯一约束错误。无需改写旧行的身份。
 
-- **可选 decisions**：未提供 `availableDecisions` 时，仅显示 accept/decline（deny-by-default）
-- **Session 级授权**：`acceptForSession`/`cancel` 需要服务端显式提供
-- **Amendments 不可自由构造**：exec/network policy 修正内容来自服务端 `proposed*` 字段，用户只能选择接受
-- **Approval reviewer 配置**：`approvals_reviewer` / `apps.*.approvals_reviewer` 改变 app-server 将审批 review 路由给用户、automatic review 还是 guardian subagent；WebUI 只通过 Settings/Integrations 的二次确认控件写 config，不改变 approval request 的 REST 响应协议。
+| 状态 | 含义 |
+| --- | --- |
+| `pending` | 人类仍可作决定 |
+| `submitted` | 本地决定已提交，等待 app-server 生命周期证据 |
+| `resolved` | app-server 已处理或清理该请求，不暗示执行成功或用户接受 |
+| `cancelled` | 删除执行器已取消所属工作 |
+| `expired` | 原连接/后端生命周期结束，旧响应权限无效 |
+| `failed` | 本客户端拒绝，或已提交决定的传输结果无法确认 |
 
-## 前端文件
+响应入口先校验 instance、pending 状态、删除守卫、原请求约束与原连接 authority，再通过 SQLite CAS 提交 `submitted`。只有一个浏览器能提交成功。stdio 写入在数据库提交之后，不能放进一个声称可回滚传输的数据库事务中。
 
-| 文件                                              | 作用                                                                             |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `types/approval.ts`                               | ApprovalRequest, UserInputRequest, UserInputQuestion, UserInputOption 类型       |
-| `lib/user-input-parsers.ts`                       | 防御性解析 requestUserInput payload（userInputFromSocket, userInputFromPending） |
-| `stores/timeline-store.ts`                        | approvals 与 userInputRequests 均按 requestId 索引，并为 request 所属 turn 保留时间线入口 |
-| `hooks/use-codex-socket.ts`                       | 监听 `codex.serverRequest`，分发 approval / userInput / snackbar                 |
-| `components/chat/turn-items/approval-item.tsx`    | 命令执行 / Terminal Input 审批卡片，动态按钮 + proposed amendments 展示          |
-| `components/chat/turn-items/user-input-card.tsx`  | 用户输入卡片：radio/checkbox/text/password + submit                              |
-| `components/chat/turn-items/file-change-item.tsx` | 文件变更审批（内联按钮，支持全部 4 种决策）                                      |
-| `components/chat/turn-block.tsx`                  | ItemWithRequests：在对应 item 下方渲染审批/输入卡片；unattached 请求独立渲染     |
+SQLite 与 stdio 没有共同事务：提交成功不证明 app-server 已接收；写失败也不证明零字节已发送。不恢复 pending、不自动重放决定、不引入 outbox/retry。原连接关闭后所有 authority 失效。app-server 的 `serverRequest/resolved` 和对应生命周期证据负责确认退休。
 
-## 后端文件
+浏览器单独保留 `decision`，只在自己的 HTTP 提交成功后记录，不从全局退休推断其它浏览器的选择。即使 WebSocket 终态先于 HTTP 回应到达，也会补上同一 instance 的决定，保留已观察到的终态。已知决定在后续 delivery failure 时仍与「无法确认送达」一起显示；错误 HTTP 回应不能产生成功归因。
 
-| 文件                                             | 作用                                                                                    |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `codex/codex-jsonrpc-client.ts`                  | 识别 server request，提供 respondToServerRequest                                        |
-| `threads/threads.gateway.ts`                     | 持久化 serverRequest，删除期间抑制广播并在守卫释放时重放，接收 serverResponse 透传回 app-server |
-| `pending-approvals/pending-approvals.service.ts` | CAS 响应、generation expire、删除时取消 pending 请求并拒绝迟到响应                      |
+<a id="global-attention-contract"></a>
 
-## 审批卡片 UI 状态
+## 传输契约
 
-| 状态                 | 边框颜色 | 标签                              |
-| -------------------- | -------- | --------------------------------- |
-| Pending              | 黄色     | (显示操作按钮)                    |
-| Accepted             | 绿色     | "Accepted"                        |
-| Accepted for session | 绿色     | "Accepted for session" (双勾图标) |
-| Declined             | 红色     | "Declined"                        |
-| Cancelled            | 橙色     | "Cancelled"                       |
-| Resolved             | 灰色     | "Resolved" (服务端已处理)         |
+REST:
 
-## User Input Request 流程（EXPERIMENTAL）
+- `GET /api/pending-approvals?threadIds=...` 返回 `{ generation, requests, failures }`。
+- `requests` 包含 pending 与 submitted；内部 attention 计数仅统计 pending。
+- `failures` 在 SQLite 内按请求范围及当前数值 generation 筛选，最多读取 updatedAt 最新的 20 条说明，按时间顺序展示；时间相同时以 instance 排序保持稳定。历史失败行不删除，也不再全部加载进 Node 后截断。数值 generation 在完整 backend 重启后可能复用，所以该筛选不是跨 backend 生命周期的严格隔离，仍可能重放最多 20 条旧说明；它不参与响应授权。
+- `POST /api/pending-approvals/:requestId/respond` body 为 `{ instanceId, result, clientId? }`。
+- Socket.IO `codex.serverResponse` 为 `{ id, instanceId, result }`，走同一校验和 CAS。
 
-```
-app-server → item/tool/requestUserInput (questions[])
-  → PendingApprovalsService.recordServerRequest() (泛型，无需区分)
-  → Socket.IO → use-codex-socket handleCodexServerRequest
-  → userInputFromSocket() 解析 → store.addUserInputRequestForThread()
-  → UserInputCard 渲染 (radio/checkbox/text/password)
-  → 用户 submit → pendingApprovalsRespond REST
-  → PendingApprovalsService.respondToRequest() → app-server
-```
+Live 请求还包含 `generation`、`reviewSubject`、`presentation`、`negativeOnlyReason`。后两项描述后端完整校验过的交互，不能让浏览器从无法理解的字段里自行推断授权。
 
-响应格式: `{ answers: { [questionId]: { answers: string[] } } }`
+`conversation.pending.resolved` 包含 `{ instanceId, generation, requestId, threadId, status }`，其中 status 也可为 submitted。原始 `serverRequest/resolved` 通知没有 WebUI instance，因此浏览器不直接用它按裸 requestId 解决卡片。
 
-## 注意事项
+`codex.serverRequestFailed` 为 `{ instanceId, threadId, turnId, message }`。它独立记录客户端失败，不修改 turn 的 active/completed 状态。带 thread 的说明持久化在请求表，且重复恢复不会重复插入系统消息。无 thread 的账号失败即时显示，错误答复留在脱敏 wire log；其后实际 turn 错误仍由原有 turn-error 路径保存。
 
-- **所有阻塞请求都以 JSON-RPC `requestId` 为 key 存储。** 同一个 command item 可先收到 `kind: command`，之后再收到一个或多个 `kind: writeStdin` 回调；按 itemId 存储会互相覆盖。
-- `approvalId` 是 app-server 提供的审批身份并原样保留用于显示/诊断；实际响应仍必须使用 JSON-RPC `requestId`。
-- `writeStdin` 的 `itemId` 指向原 command item，但 `turnId` 是当前回调所在 turn，两者可以不同。渲染按 request 的 turn 归属：同 turn 的卡片附着到 item；item 不在当前 turn 时作为 unattached Terminal Input Approval 卡片显示，不修改原 command 的完成状态。
-- live socket 与 SQLite 恢复共用同一个 approval parser，避免刷新前后把 `writeStdin` 解释成不同类型。
-- 切换 thread 时清空 approvals/userInputRequests 状态
-- server request 的 `id` 必须原样回传，app-server 靠它关联响应
-- `serverRequest/resolved` 通知 → 按 requestId 匹配 approvals 或 userInputRequests → 标记 resolved
-- `pendingResolvedRequestIds` 处理乱序到达：resolved 先于 hydrate 时暂存，hydrate 时自动标记
-- **响应必须用 `throwOnError: true` 发出。** 生成的客户端默认以 `{ data, error }` 解析而不抛出，且本项目的 error interceptor 是 `return error` 而非 `throw`，所以失败的响应（另一台设备先答的 409、app-server 重启期间的 503）会照常走进 `.then()`，把卡片标成 Accepted 而服务端什么也没做。响应失败的请求保持未解决，等待权威证据。
-- 删除中的 thread 会拒绝新的审批响应；相关 pending 请求由删除执行器标记为 `cancelled`
-- **抑制必须可逆**：删除期间到达的 server request 只是不广播，DB 行保持 `pending`，并由 gateway 暂存。删除守卫释放时（`ThreadDeletionRegistryService.onRelease`）逐条比对 DB：仍为 `pending` 的重放到 thread room，已 `cancelled` 的丢弃。判据用 DB 状态而非删除结果，因为被真正删掉的 thread 其请求必然已在本地清理阶段取消 —— 这样重放天然不会为已消失的会话弹出卡片
+## 命令与文件审批
 
-## Backend payload fidelity
+命令通常在 execution item 内联审批。只有可证明相同的原始动作才去重；子命令、writeStdin 和网络单独主体必须显示自己的授权内容。wrapper-stripped 显示文本不用于判定相同命令。
 
-SQLite persistence and websocket forwarding retain request params unchanged, including experimental `additionalPermissions` and network-only `networkApprovalContext`. Filesystem access modes and structured paths survive REST recovery intact.
+命令支持 accept/acceptForSession/decline/cancel 及服务器提供的 exec/network policy amendment。提交的复杂 decision 必须完整匹配原请求提供的选项，不能让浏览器自由构造持久规则。未知授权语义或缺失主体限制为 Decline/Cancel。
 
-A **special** filesystem path is an object union in the pinned schema — `root`,
-`minimal`, `project_roots` with a sub-path, `tmpdir`, `slash_tmp`, `unknown`
-with its own path — and never a string. A client testing it for a string
-therefore discards every structured scope, and an overlay whose only entry was
-one collapses to null and vanishes from the card entirely. The scope tag is the
-security-relevant part (`root` and `tmpdir` authorize very different things) and
-is parsed and rendered rather than flattened to the word "special". Omitted network permission data remains unspecified; it is never normalized to unrestricted access. Backend contract tests cover both transports. See [thread-policy-recovery.md](thread-policy-recovery.md).
+`availableDecisions` 已由 pinned README 描述，在同 tag Rust 协议中标为 experimental，因此普通生成导出没有该字段也不能视为不存在。MCP 的 `enumNames` 与数组 items 的 `anyOf` 则均在当前生成类型中。
 
-## Startup and reconnect recovery
+文件 approval 的主体从 live item 捕获并归属于请求，包含每个文件、diff、对象 union 的操作种类与 rename 目标。它独立于 turn diff，也不借用历史缓存：测量表明等待审批的 file item 可能不在历史中。
 
-`pending-approvals-sync.ts` reconciles approvals and user-input requests with the
-backend pending set. Absence is resolution evidence only for requests held
-before the read and unchanged since then. Existing cards keep their decisions;
-new events cannot be cleared by an older empty snapshot. A scoped sync changes
-only those conversations, including when it supersedes an older overlapping
-read. This does not infer which decision another device made: recovered
-resolution stays neutral (`resolved`).
+主体一旦发布不再由后续 item 改写；item completion 仅释放候选，不清除等待中的 request subject。REST/live 返回隔离副本。主体缺失或不能完整解析时仍提供否定操作，两个响应入口都禁止接受不可见文件变更。Backend 重启使旧请求失效，因此主体不另建跨重启持久化层。
 
-## Global pending discovery
+## 权限请求
 
-`conversation.pending.changed` on `/ws` carries only `{ generation }` and reaches
-authenticated clients independently of conversation rooms. It requests a fresh
-pending-set read after committed creation/resolution, cancellation, and expiry
-(including backend startup). Failed response transactions emit nothing. Creation
-held by deletion defers the hint until guard release. Existing persistence, CAS
-responses, suppression and request-time reconciliation remain the authority.
-See [conversation-recovery.md](conversation-recovery.md).
+`permission-interaction.ts` 识别完整 network/filesystem profile：
 
-## Global attention contract
+- literal path、glob pattern、已知 special scope 与 project-root subpath 分别显示；
+- read/write 是可选授予项，deny 约束固定显示且不能移除；
+- filesystem grant 保留原 deny entries 与 glob scan depth；
+- 未知 scope、字段或 access 类型禁止任何授予，仍可拒绝。
 
-Room membership selects transcript consumers only. Human requests are emitted
-once to the authenticated audience on `/ws`, without joining a thread room or
-resuming a conversation. The original `codex.serverRequest` fields remain intact:
+浏览器提交 `result: { selected: string[], scope: "turn" | "session" }`。selected 只能引用 presentation 的可选 ID，不能携带自造路径。后端从原参数编码 app-server 的 `{ permissions, scope }`。未选权限不授予，session checkbox 默认为关闭；Decline 编码为空 grant，不能被解释为命令 approval 的简单 decision。
 
-```ts
-{
-  id: number | string; // original JSON-RPC ID
-  method: string;
-  params: Record<string, unknown>; // unchanged upstream parameters
-  generation: number;
-  reviewSubject: {
-    type: 'fileChange';
-    changes: Array<{
-      path: string;
-      kind: { type: 'add' } | { type: 'delete' }
-        | { type: 'update'; move_path: string | null };
-      diff: string;
-    }>;
-  } | null;
-}
-```
+## MCP elicitation
 
-Only `item/fileChange/requestApproval` needs the additional subject. Commands
-(including `writeStdin` and network-only approvals), user-input questions,
-permission requests, MCP elicitations and the legacy `applyPatchApproval` /
-`execCommandApproval` requests carry their subjects in `params`, and use
-`reviewSubject: null`. The explicit classification excludes dynamic tool calls,
-account token refresh, attestation, current-time reads and unknown methods from
-this gateway's human-request channel and pending inventory. It does not implement
-a new responder for machine-facing requests. Backend delivery support does not
-imply that every method already has a browser renderer.
+`elicitation-interaction.ts` 在 admission 时判断整个 schema 是否可解释：
 
-The pinned `file-approval-context` probe observed one approval spanning two files
-and the pending item absent from history while other items remained readable.
-The backend therefore captures the preceding file item's **entire** change set,
-preserving object-union kinds and rename destinations. Capture follows the
-committed write, so a failed insert cannot overwrite the last committed subject
-and a replacement row that captures nothing drops the previous one rather than
-inheriting it. Both are synchronous, so no read interleaves before the hint.
+- 支持 string/number/integer/boolean、普通及 titled enum、multi-select enum；
+- 校验 required、数值界限、字符串长度/format、数组数量与有限选项；
+- 拒绝未声明字段、错误类型及未提供的枚举值；
+- `openaiForm` 与 `openai/form` 中未知语义得到明确 unsupported 状态，没有部分表单或通用 Accept，仅 Decline/Cancel；
+- URL 仅展示可显式打开的 HTTP(S) 地址，不代替用户访问，不把打开地址视为完成；用户另行 Continue 才答复。
 
-That capture depends on `item/started` reaching the backend ahead of the approval
-on the same wire. The original probe did not establish that ordering; the
-shared arrival-counter assertion has not yet been rerun. Liveness therefore
-does not rely on it. A missing item is logged as an error and the
-request is published anyway with `reviewSubject: null` — never a fabricated
-empty subject and never a history fallback. Withholding it instead would leave
-app-server waiting on an answer no browser was ever offered.
+浏览器提交 `{ action, content }`，后端验证后编码 `{ action, content, _meta: null }`。负面 action 的 content 必须为 null。表单失败保留草稿，不能静默清卡。
 
-A null subject on a file approval is therefore a state the protocol can reach,
-and it is enforced rather than merely documented: `respondToRequest` refuses any
-decision other than `decline` or `cancel` with HTTP 409
-`approvals.subject_unavailable`. The check sits at the shared service boundary,
-so the REST route and the legacy socket response path are both covered — a
-client still drawing an Accept button cannot approve changes nobody could see.
-Clients should present only Decline in that state; the backend does not rely on
-them to. This is the same rule that forbids approving a change set rendered only
-in part.
+`turnId` 可以为 null。权限与 MCP 卡片用独立的 `interaction` timeline row，以 instance 为 key，不伪造 turn ID，也不因缺少历史 item 而消失。
 
-Only in-flight file proposals and pending request subjects are retained; item,
-turn, thread and generation cleanup remove candidates, while a pending request
-keeps its subject through deletion suppression until it is retired. Retention is
-process-local because backend startup already expires all old RPC requests. No
-database migration or durable transcript cache is required.
+## 多浏览器、删除与恢复
 
-`GET /api/pending-approvals?threadIds=...` returns:
+所有已认证浏览器接收 attention；thread room 只选择转录观看者。创建、回复、原生解决、失败和过期不依赖观看房间。
 
-```ts
-{
-  generation: number;
-  requests: Array<{
-    generation: number;
-    requestId: string;
-    threadId: string;
-    turnId: string | null;
-    itemId: string | null;
-    method: string;
-    params: Record<string, unknown>;
-    reviewSubject: FileChangeApprovalSubjectDto | null; // same subject as live
-    status: 'pending';
-    createdAt: number;
-    updatedAt: number;
-  }>;
-}
-```
+删除守卫期间照常保留请求但暂不广播。涉及删除的 pending 读取返回 409，不能把隐藏部分行的结果当完整集合。删除中止后只重放同一个仍 pending 的 instance；删除成功后取消 authority，旧抑制副本不复活。
 
-Omitted/empty `threadIds` means all threads; supplied IDs restrict the complete
-read scope. Times are Unix milliseconds. If any thread in that scope is under
-deletion, the endpoint returns HTTP **409**, error code
-`threads.delete_in_progress`, with **no snapshot**. It never returns a successful
-partial list by hiding guarded rows. Clients retain their pending state on that
-failure and refresh on the guard-release `conversation.pending.changed` hint.
-An unrelated scoped read and global live delivery for other threads continue.
-Internal deletion planning still reads the guarded rows. Releasing a guard
-replays surviving requests with the same subject to the authenticated audience;
-cancelled or expired requests, including reused IDs from another generation, are
-not replayed.
+恢复读取保留在途期间的新请求和已观察到的提交/退休状态。旧 HTTP 回调不能解决新 instance，旧 snapshot 不能重开已回答请求。网络错误只触发权威读取，不重试决定。
 
-Committed retirement emits `conversation.pending.resolved` globally:
+## 实现位置与验证
 
-```ts
-{
-  generation: number;
-  requestId: string;
-  threadId: string;
-  status: 'resolved' | 'cancelled' | 'expired';
-}
-```
+| 文件 | 责任 |
+| --- | --- |
+| `src/codex/server-request-owner.ts` | 开放 wire method、穷尽 disposition、原连接答复与退休 |
+| `src/pending-approvals/pending-approvals.service.ts` | admission、不可变持久化、CAS、failure 与恢复 |
+| `src/pending-approvals/human-request-contract.ts` | 可答复参数与 method-specific 响应校验 |
+| `src/pending-approvals/permission-interaction.ts` | 完整权限显示及原始 grant 编码 |
+| `src/pending-approvals/elicitation-interaction.ts` | MCP schema 和答复校验 |
+| `web/src/hooks/use-request-response.ts` | 所有卡片共用的 instance-bound 提交 |
+| `web/src/components/chat/turn-items/interaction-card.tsx` | 权限、MCP 表单与 URL 表面 |
+| `web/src/lib/pending-approvals-sync.ts` | pending/submitted/failed 的恢复与去重 |
 
-This covers successful CAS responses, upstream resolution, deletion cancellation,
-child-generation expiry and startup expiry. A failed response write rolls back
-without retirement or an invalidation. An upstream resolution following a local
-response does not emit a duplicate retirement. `resolved` means no longer
-answerable, **not accepted**, and says nothing about item execution success.
-Existing per-room `codex.notification` delivery, including the raw
-`serverRequest/resolved`, is retained for compatibility. Both content-free global
-hints also remain; only the hints are sent at authentication, not request replay.
-
-The browser must normalize live IDs with `String(id)` and scope identities by
-generation. Generation is local to one backend lifetime, not a replay cursor.
-Use the same idempotent ingestion for live and recovered requests, preserve local
-answers/drafts, and let retirement defeat stale snapshots. Successful absence
-resolves only requests held before the read and unchanged since then; newer
-overlapping reads supersede older evidence. An error resolves nothing.
-
-### Browser side
-
-Live delivery and recovery share `attention-ingestion.ts`: both approval and
-user-input identities include generation, replay preserves payloads, drafts and
-local decisions, and only a newly ingested background request creates a toast.
-Neutral retirement matches the generation and removes visible or queued toasts.
-An unknown retirement creates no runtime; it defeats stale rows only in reads
-already outstanding. Deletion and eviction also exclude that conversation from
-pre-discard reads, even if a new runtime exists when a stale response arrives.
-Scoped and overlapping-read coverage rules remain intact.
-
-File subjects use the item normalizer after validating the *whole* native change
-set. An empty set or any unrenderable entry becomes `reviewChanges: null`, never
-a partially rendered but approvable subset. `undefined` remains the non-file or
-legacy absence state. Standalone cards render all files; inline cards use the
-request's retained subject rather than substituting a cached item's changes.
-Paths, change kinds and rename destinations remain visible. Multiple request
-ids sharing a file item remain independently answerable. Both presentations
-withhold affirmative decisions for unavailable subjects, even if a host item
-has a diff. Decline and Cancel remain available.
-
-Decision controls disable repeated submission while a write is outstanding;
-callbacks remain bound to the original thread and generation. Backend CAS still
-decides which browser wins. Titles are best effort from runtime or cached
-collapsed overview pages; a thread-id fallback remains necessary when neither
-contains the conversation. Selecting another app surface is not viewing a
-transcript, even if its runtime remains selected.
-
-**Remaining identity limitation:** response writes address only `requestId`,
-not an expected generation or immutable request instance. A delayed response
-can therefore target a different request after id reuse. Generation also resets
-when the backend process restarts, so equal `(generation, requestId)` pairs are
-not globally unique across backend lifetimes. Browser guards cannot close these
-server-side races; a response precondition and identity spanning backend boots
-need an explicit backend contract revision before stronger guarantees are made.
-
-Frontend cards currently cover native command/writeStdin/file approvals and
-`item/tool/requestUserInput`. The backend's wider human classification also
-includes permission requests, MCP elicitations and legacy approvals; those still
-lack browser renderers and decision flows. Their forwarding is supported, but
-full browser support is not claimed.
+协议依据是 pinned README、参考客户端及 `server-request-disposition`、`auth-token-refresh`、`server-request-identity` probes。单元/集成测试覆盖未知方法、无 owner、invalid payload、数据库失败、传输失败、两浏览器竞争、同 generation/id 新 instance、nullable MCP、schema 边界和非空数据库迁移。JSON-RPC 拒绝的实际 turn outcome 由 app-server 决定，不由 WebUI 合成。
