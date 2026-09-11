@@ -125,6 +125,79 @@ timestamp ordering, and discovery of a fork created by a second app-server. On
 reported a null parent despite parentage in the fork response and rollout header.
 See [backend recovery](../docs/conversation-recovery.md) for the implications.
 
+## Newest history-window visibility
+
+```bash
+pnpm exec ts-node --project codex_probe/tsconfig.json codex_probe/history-window.ts
+```
+
+This standalone probe retains its own temporary home/workspace, prints their
+location, and uses the pinned native binary through `AppServer`. A loopback
+provider refuses generation and counts requests; the measured run made **zero**
+model requests. It neither resets the shared probe directories nor touches the
+WebUI database, REST API, Socket.IO, or frontend store.
+
+Measured on **0.153.2, 2026-09-11**:
+
+- Forty distinct shell turns were observed through matching start/completion
+  notifications. Completed command items were also read through a second
+  app-server process sharing the temporary home but not loading the thread.
+- **139 compared pages had no missing or reordered turn IDs.** These include
+  the first head read after each completion, 24 stationary reads each at
+  4/20/21/40 turns (loaded list, unloaded list, and paged loaded resume), a read
+  after the owner exited, cold resume, and a subsequent head read. Stationary
+  controls require that no new turn starts during those reads. Notification
+  detection uses the harness's polling; this is not an exhaustive submillisecond
+  visibility test.
+- With a shell held running until an explicit file release, its **turn header
+  was present in all three page paths**, together with all three older turns.
+  The unfinished command item was absent from persisted items. A completed
+  auxiliary command was independently readable in that same running turn; the
+  held item became readable after release and completion. Item absence and turn
+  absence are different observations.
+- The newest pages at 20 and 21 turns shared **19** turns. The pages at 20 and
+  40 shared **zero**, following twenty actual new turns. Following the latter
+  page's cursor returned all twenty earlier turns and exhausted pagination.
+  In one run the twenty new shell turns plus intervening reads took 4.161 s;
+  this demonstrates possible automation throughput, not a reconnect producing
+  turns or a measurement of normal model-exchange throughput.
+- No rollout-write or projection-failure diagnostics were observed.
+
+The verdict is `NO_OMISSION_IN_MEASURED_READS`, not a universal impossibility
+claim. Invalid setup, failed RPCs, missing required lifecycle/item evidence, or
+unconfirmed teardown report `INCONCLUSIVE`. Successful pages that differ from
+the observed sequence are retained as findings, not retried until they agree.
+
+Source findings, **not additional runtime measurements**, from the local
+`rust-v0.153.2` checkout:
+
+- `app-server/src/request_processors/thread_processor.rs`,
+  `thread_turns_list_response_inner`: paginated history returns before the
+  legacy replay branch. The comments about compaction/rollback rebuilding old
+  turns and the loaded-only active-turn overlay belong to that legacy branch.
+  Paginated resume has its own active-turn overlay; standalone paginated listing
+  reads stored turn rows and uses loaded status to normalize lifecycle.
+- `core/src/session/mod.rs`, `replace_compacted_history`, appends a `Compacted`
+  context record. `app-server-protocol/src/protocol/thread_history_projection.rs`
+  ignores that record; canonical completed items and lifecycle events project
+  into the existing turn identities. This path does not prune the paginated
+  transcript. No model compaction run was needed to test the legacy-comment
+  explanation.
+- Paginated `thread/rollback` is explicitly rejected. `thread/revert` is a
+  separate explicit operation that changes the retained history prefix under
+  the same thread ID. Forks have separate IDs; deletion checks rollout references.
+  These operations were not exercised by this probe.
+- Core logs append failures, and `thread-store/src/local/live_writer.rs` logs
+  projection failures without preventing all subsequent live delivery. Thus a
+  live observation is not unconditional proof of a healthy durable index. This
+  fault path was not injected and is not evidence it occurred in a user report.
+
+Neither a delayed/shared backend promise nor an incomplete local timeline is
+simulated here. Two complete newest-20 windows under append-only advancement
+need twenty new turns to become disjoint; a sparse local set does not satisfy
+that premise. A synthetic disjoint store fixture alone does not establish that
+the reported reconnect incident reached that store branch.
+
 ## metadata-incremental
 
 Answers whether the shared overview metadata can be maintained from
