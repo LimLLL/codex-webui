@@ -129,6 +129,59 @@ export interface AppServerOptions {
  */
 export const HOLD: unique symbol = Symbol('hold');
 
+/** Marks a responder's return value as a JSON-RPC error rather than a result. */
+const ERROR_REPLY: unique symbol = Symbol('errorReply');
+
+/**
+ * A JSON-RPC error a responder can return in place of a result.
+ *
+ * Withholding an answer and refusing to give one are different dispositions,
+ * and the difference is measurable: silence leaves the agent blocked, while a
+ * refusal is something app-server has to classify and act on. A harness that
+ * can only send results can only measure half of that.
+ */
+export interface ErrorReply {
+  [ERROR_REPLY]: true;
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+/**
+ * Builds an error reply for a server-initiated request.
+ *
+ * @param code - JSON-RPC error code
+ * @param message - Human-readable reason
+ * @param data - Optional structured detail
+ * @returns A value a responder returns to refuse the request
+ */
+export function rpcError(
+  code: number,
+  message: string,
+  data?: unknown,
+): ErrorReply {
+  return {
+    [ERROR_REPLY]: true,
+    code,
+    message,
+    ...(data !== undefined && { data }),
+  };
+}
+
+/** Distinguishes a refusal from an ordinary result object. */
+function isErrorReply(value: unknown): value is ErrorReply {
+  return value !== null && typeof value === 'object' && ERROR_REPLY in value;
+}
+
+/** Strips the internal tag, leaving the wire shape of a JSON-RPC error. */
+function errorPayload(reply: ErrorReply): Record<string, unknown> {
+  return {
+    code: reply.code,
+    message: reply.message,
+    ...(reply.data !== undefined && { data: reply.data }),
+  };
+}
+
 /** Answers approvals with `accept`, everything else with an empty result. */
 function defaultServerResponse(request: IncomingRequest): unknown {
   return request.method.endsWith('requestApproval')
@@ -228,6 +281,10 @@ export class AppServer {
       // what keeps the agent genuinely blocked while the probe observes.
       if (reply === HOLD) {
         this.heldById.set(String(id), request);
+        return;
+      }
+      if (isErrorReply(reply)) {
+        this.send({ id, error: errorPayload(reply) });
         return;
       }
       this.send({ id, result: reply });
@@ -357,6 +414,25 @@ export class AppServer {
     if (!this.heldById.delete(key))
       throw new Error(`Request ${key} is not held; nothing to release`);
     this.send({ id, result });
+  }
+
+  /**
+   * Refuses a held request with a JSON-RPC error instead of a result.
+   *
+   * This is the disposition a client has when it genuinely cannot answer — it
+   * neither approves anything nor leaves the agent blocked. What app-server
+   * does with it is not documented anywhere, so it has to be measured before
+   * any production code relies on it.
+   *
+   * @param id - Request id, as delivered
+   * @param error - The refusal to send, built with {@link rpcError}
+   * @throws Error when that id is not being held
+   */
+  releaseWithError(id: number | string, error: ErrorReply): void {
+    const key = String(id);
+    if (!this.heldById.delete(key))
+      throw new Error(`Request ${key} is not held; nothing to refuse`);
+    this.send({ id, error: errorPayload(error) });
   }
 
   /** Notifications received since a previously recorded mark. */

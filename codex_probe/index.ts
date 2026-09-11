@@ -12,6 +12,10 @@ import { itemOrdering } from './probes/item-ordering';
 import { livePolicy } from './probes/live-policy';
 import { turnItemFinality } from './probes/turn-item-finality';
 import { fileApprovalContextProbe } from './probes/file-approval-context';
+import { serverRequestDisposition } from './probes/server-request-disposition';
+import { serverRequestIdentity } from './probes/server-request-identity';
+import { observableServiceTier } from './probes/observable-service-tier';
+import { authTokenRefresh } from './probes/auth-token-refresh';
 
 const PROBES: Probe[] = [
   settingsUpdate,
@@ -20,6 +24,10 @@ const PROBES: Probe[] = [
   turnItemFinality,
   livePolicy,
   fileApprovalContextProbe,
+  serverRequestDisposition,
+  serverRequestIdentity,
+  observableServiceTier,
+  authTokenRefresh,
 ];
 
 function list(): void {
