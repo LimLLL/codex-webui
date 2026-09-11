@@ -380,29 +380,29 @@ describe('on-demand turn item top-up', () => {
     ).toEqual(['reasoning']);
   });
 
-  // A persisted snapshot is older than anything that streamed in live, so it
-  // must never replace a turn that notifications have already rebuilt.
-  it('refuses to overwrite a turn that is no longer summary', () => {
-    useTimelineStore.getState().hydrateOpenedThread({
+  it('adds late items to full history while retaining an already observed terminal payload', () => {
+    const store = useTimelineStore.getState();
+    store.hydrateOpenedThread({
       threadId: 't1',
       turnsNewestFirst: [answeredTurn('turn-1', 'hi')],
       historyCursor: null,
       readOnlyReason: null,
     });
-
-    useTimelineStore
-      .getState()
-      .applyFullTurnItemsForThread('t1', 'turn-1', [
-        { type: 'agentMessage', id: 'stale', text: 'stale snapshot' },
-      ]);
-
-    const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
-    const turnEntry = runtime.timeline.find((e) => e.kind === 'turn')!;
-    expect(
-      turnEntry.kind === 'turn' &&
-        turnEntry.items[0]?.type === 'agentMessage' &&
-        turnEntry.items[0].content,
-    ).toBe('reply');
+    const before = store.getThreadRuntime('t1')!.timeline.find((entry) => entry.kind === 'turn')!;
+    if (before.kind !== 'turn') throw new Error('Expected a turn');
+    const answerId = before.items[0].itemId;
+    const snapshot = [
+      { type: 'agentMessage', id: answerId, text: 'stale snapshot' },
+      { type: 'subAgentActivity', id: 'subagent-completed-child', kind: 'completed', agentThreadId: 'child', agentPath: '/root/child' },
+    ];
+    store.applyFullTurnItemsForThread('t1', 'turn-1', snapshot);
+    store.applyFullTurnItemsForThread('t1', 'turn-1', snapshot);
+    const after = store.getThreadRuntime('t1')!.timeline.find((entry) => entry.kind === 'turn')!;
+    expect(after).toMatchObject({ completed: true, itemsView: 'full' });
+    if (after.kind !== 'turn') throw new Error('Expected a turn');
+    expect(after.items).toHaveLength(2);
+    expect(after.items.find((item) => item.itemId === answerId)).toMatchObject({ content: 'reply' });
+    expect(after.items.find((item) => item.itemId === 'subagent-completed-child')).toMatchObject({ completed: true });
   });
 });
 

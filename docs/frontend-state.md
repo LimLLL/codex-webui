@@ -236,3 +236,5 @@ Plan prose 按 item 保存 `{ text, completed, observedSeq }`，终态后拒绝 
 权限与 MCP 请求保存在 approvals 中，以独立 `interaction` 行渲染。行 key 使用 instance，MCP 无 turnId 时也不伪造 turn 或调用历史补页。失败说明作为带 requestInstanceId 的 system 行幂等恢复，不改变 loading/activeTurnId。
 
 `ApprovalRequest.decision` 保存本浏览器成功提交的选择，与 submitted/resolved/failed 生命周期独立。终态先到、HTTP 成功后到时只补归因，不逆转终态；同 wire ID 的新 instance 不继承旧选择。消费退休 tombstone 时删除实际查询的 instance key，重复投递不重开已退休的卡片。失败恢复的范围与 20 条上限见 [approval.md](approval.md)。
+
+完成 turn 的 `full` 仅表示读取的 detail，不表示 item 集合永远封闭。查看/重连取消断线前的 item 查询并失效该会话缓存，已渲染 turn 立即补读，其他 turn 留到渲染时；app-server ready 同样覆盖未出现在恢复目标列表中的已完成 owner。两种晚到 item 事件都保留原 turn 的终态，并按 item ID 幂等摄入。详见 [completed-turn-items.md](completed-turn-items.md)。

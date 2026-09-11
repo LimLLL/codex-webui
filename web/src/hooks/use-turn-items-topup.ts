@@ -1,5 +1,5 @@
 /**
- * Tops a turn up from `summary` detail to `full` when it is rendered.
+ * Reads a rendered completed turn's full items, including changes after a gap.
  *
  * Opening a thread fetches history in app-server's `summary` view, which is
  * far cheaper but omits `reasoning` and `plan` items — so a plan generated in
@@ -18,16 +18,16 @@ import { useTimelineStore } from '@/stores/timeline-store';
 interface UseTurnItemsTopUpParams {
   threadId: string | null;
   turnId: string;
-  /** Detail level the turn currently holds; only `summary` needs topping up. */
+  /** Detail is independent of freshness: a `full` turn can acquire late items. */
   itemsView: 'notLoaded' | 'summary' | 'full' | undefined;
   /**
-   * Whether the turn has finished. A running turn is being assembled from live
-   * notifications, and a persisted snapshot of it would be behind by
-   * construction — applying one would drop items that just streamed in.
+   * Whether the turn has finished. Running turns use the separate live and
+   * recovery paths; this query refreshes completed turns when rendered.
    */
   completed: boolean;
 }
 
+/** Keeps visible completed items fresh when view/reconnect invalidates their query. */
 export function useTurnItemsTopUp({
   threadId,
   turnId,
@@ -40,22 +40,22 @@ export function useTurnItemsTopUp({
   const applyRecoveredTurnItems = useTimelineStore(
     (s) => s.applyRecoveredTurnItemsForThread,
   );
-  const enabled = Boolean(threadId) && itemsView === 'summary' && completed;
+  const enabled = Boolean(threadId) && itemsView !== 'notLoaded' && completed;
 
   const { data } = useQuery({
     ...threadsListTurnItemsOptions({
       path: { threadId: threadId ?? '', turnId },
     }),
     enabled,
-    // Existing complete-turn cache policy. The shell stability probe does not
-    // establish immutability for late sub-agent activity or cold resumes; that
-    // measurement remains tracked in remaining-tasks.md. Partial reads stay
-    // refetchable — see below.
+    // Native late-child measurements append items after turn completion.
+    // Reuse complete reads only between explicit view/reconnect/restart
+    // invalidations. Inactive queries remain stale until their turn is viewed.
     staleTime: (query) => (query.state.data?.complete ? Infinity : 0),
   });
 
   useEffect(() => {
-    if (!threadId || !data?.items) return;
+    if (!threadId || !data?.items ||
+        !useTimelineStore.getState().getThreadRuntime(threadId)) return;
     if (data.complete) {
       applyFullTurnItems(
         threadId,

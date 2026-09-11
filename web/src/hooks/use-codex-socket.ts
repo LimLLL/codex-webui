@@ -15,7 +15,7 @@ import { forgetThreadPolicy } from '@/stores/thread-policy-store';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
 import { syncPendingApprovals, retirePendingRequest } from '@/lib/pending-approvals-sync';
 import { ingestAttention } from '@/lib/attention-ingestion';
-import { invalidateThreadListSoon, invalidateThreadDetails } from '@/lib/query-invalidation';
+import { invalidateThreadListSoon, invalidateThreadDetails, queryHasId } from '@/lib/query-invalidation';
 import i18n from '@/i18n';
 import type { InteractionPresentationDto, PendingRequestResolvedDto } from '@/generated/api';
 import { ingestRequestFailure } from '@/lib/server-request-failures';
@@ -228,6 +228,7 @@ export function useCodexSocket(enabled = true) {
       }
 
       if (event.type === 'appServerRestarting') {
+        void queryClient.cancelQueries({ predicate: (query) => queryHasId(query, 'threadsListTurnItems') });
         for (const threadId of Object.keys(store.threadsById)) invalidateThreadEpoch(threadId);
         for (const threadId of liveThreadIds) {
           // Any recovery still in flight was baselined against the old process
@@ -244,6 +245,8 @@ export function useCodexSocket(enabled = true) {
       }
 
       if (event.type === 'appServerReady') {
+        // Includes visible completed owners omitted from autoResumeCompleted's
+        // target list. Their item reads are passive and need no writer resume.
         void queryClient.invalidateQueries();
       }
 

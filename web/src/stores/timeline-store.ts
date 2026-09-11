@@ -652,8 +652,6 @@ function upsertRuntimeTurnFailure(
 interface PersistedItemsOptions {
   /** Observation counter captured when the request was issued. */
   baselineSeq: number;
-  /** Whether to refuse turns that are not sitting at the cheap `summary` view. */
-  requireSummaryView: boolean;
   /** Whether the turn may be marked as holding every persisted item. */
   markFull: boolean;
 }
@@ -662,15 +660,14 @@ interface PersistedItemsOptions {
  * Folds a persisted item page into one turn under the shared authority rules.
  *
  * Shared by the completed-turn top-up and by recovery because the merge itself
- * is identical; only the preconditions and whether the turn may be declared
- * complete differ, and encoding those as flags keeps one implementation of the
- * ordering and payload-selection rules.
+ * is identical; only whether the read establishes full detail differs. Both
+ * paths use the same ordering and payload-selection rules.
  */
 function applyPersistedItems(
   runtime: ThreadRuntimeState,
   turnId: string,
   items: Array<Record<string, unknown>>,
-  { baselineSeq, requireSummaryView, markFull }: PersistedItemsOptions,
+  { baselineSeq, markFull }: PersistedItemsOptions,
 ): ThreadRuntimeState {
   const normalized = items.map((item, index) =>
     // Page-local ids must not collide with another turn's fallback ids.
@@ -699,7 +696,6 @@ function applyPersistedItems(
     ...runtime,
     timeline: timeline.map((entry) => {
       if (entry.kind !== 'turn' || entry.turnId !== turnId) return entry;
-      if (requireSummaryView && entry.itemsView !== 'summary') return entry;
       const persisted = normalized.flatMap((item) =>
         item.kind === 'render' || item.kind === 'unknown' ? [item.item] : [],
       );
@@ -1723,7 +1719,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           // to be newer than a terminal observation already on screen. It still
           // repairs fragments, which is the point of topping a turn up.
           baselineSeq: -1,
-          requireSummaryView: true,
+          // Full detail does not imply final membership: late activities append.
           markFull: true,
         }),
       );
@@ -1738,13 +1734,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       applyThreadUpdate(threadId, (runtime) =>
         applyPersistedItems(runtime, turnId, items, {
           baselineSeq,
-          // A running turn holds no `summary` marker, and a reconnect repairs
-          // turns at every detail level, so the top-up's precondition would
-          // reject exactly the cases recovery exists for.
-          requireSummaryView: false,
-          // More items will still stream into a running turn. Calling it `full`
-          // is what stops the completed-turn top-up firing later, and this
-          // snapshot is not that.
+          // Recovery can be bounded or partial. Only a complete item query may
+          // upgrade detail to full, independently of future freshness.
           markFull: false,
         }),
       );
