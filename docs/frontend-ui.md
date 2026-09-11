@@ -437,3 +437,5 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
 `turn-items/interaction-card.tsx` 消费后端已完整验证的 presentation。权限逐项显示 read/write、special scope、glob、固定 deny 约束，默认不勾选授予，session scope 必须显式选择。MCP 支持 primitive form 与 URL，未知扩展语义不显示部分表单或 Accept。URL 仅用户点击后打开，Continue 是另一项明确操作。
 
 所有卡片通过 `use-request-response.ts` 提交 instance-bound 决定，本浏览器成功提交的选择与 Decision submitted 分别显示；原生退休不推断用户选择或执行成功。WebSocket 先退休、HTTP 后返回时仍保留选择，并且不把终态退回 submitted。已有选择遇到后续传输失败时与 Delivery unconfirmed 一起显示。缺少 instance 的旧客户端必须刷新。`codex.serverRequestFailed` 显示客户端失败原因，既不伪装为用户 Decline，也不代替 turn/completed。
+
+模型目录组件测试直接操作关联标签的表单控件，覆盖错误修复与 raw 往返。查询失败时不再显示没有配置覆盖；新增条目的字段集不跟随远端模板更新。完整历史的按需刷新策略见 [completed-turn-items.md](completed-turn-items.md)。

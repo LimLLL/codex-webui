@@ -8,7 +8,7 @@
  * whether the model can be selected at all — inheriting them is what makes a
  * full-field form usable instead of a trap.
  */
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import {
@@ -42,6 +42,7 @@ interface Props {
   onSubmit: (entry: CatalogEntry) => void;
 }
 
+/** Edits a copy of the opening entry, preserving raw keystrokes until fields are valid. */
 export function CatalogEntryDialog({
   open,
   onClose,
@@ -50,6 +51,7 @@ export function CatalogEntryDialog({
   onSubmit,
 }: Props) {
   const { t } = useTranslation();
+  const templateId = useId();
   const [templateSlug, setTemplateSlug] = useState<string>('');
   const [draft, setDraft] = useState<CatalogEntry | null>(null);
   /** Entry the fields are derived from, so an edit cannot reshape the form. */
@@ -62,12 +64,6 @@ export function CatalogEntryDialog({
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showAll, setShowAll] = useState(false);
-
-  const template = useMemo(
-    () =>
-      templates.find((item) => entryText(item, 'slug') === templateSlug) ?? null,
-    [templates, templateSlug],
-  );
 
   // Reset on every opening, not only when the subject changes: cancelling and
   // reopening the same entry must not resume the abandoned draft.
@@ -86,11 +82,11 @@ export function CatalogEntryDialog({
     }
   }
 
-  // Derived from the opening entry and template, never from the live draft:
-  // clearing a string would otherwise retype its editor as JSON mid-edit.
+  // The selected template is already copied into base. Consulting the live
+  // template again would let another browser reshape this form mid-edit.
   const fields = useMemo(
-    () => (base ? catalogFields(base, template) : []),
-    [base, template],
+    () => (base ? catalogFields(base, null) : []),
+    [base],
   );
   const visible = showAll ? fields : fields.slice(0, PRIMARY_COUNT);
 
@@ -148,10 +144,11 @@ export function CatalogEntryDialog({
 
         {!entry && (
           <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label htmlFor={templateId} className="text-xs font-medium text-muted-foreground">
               {t('Inherit from')}
             </label>
             <select
+              id={templateId}
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               value={templateSlug}
               onChange={(event) => chooseTemplate(event.target.value)}
@@ -233,9 +230,10 @@ function FieldEditor({
   onChange: (raw: string | boolean) => void;
 }) {
   const { t } = useTranslation();
+  const id = useId();
   return (
     <div className="space-y-1">
-      <label className="flex items-center gap-2 text-xs font-medium">
+      <label htmlFor={id} className="flex items-center gap-2 text-xs font-medium">
         <code>{field.key}</code>
         {field.nullable && (
           <span className="text-[10px] text-muted-foreground">
@@ -245,11 +243,13 @@ function FieldEditor({
       </label>
       {field.kind === 'boolean' ? (
         <Switch
+          id={id}
           checked={value === 'true'}
           onCheckedChange={(checked) => onChange(checked)}
         />
       ) : field.key === 'visibility' ? (
         <select
+          id={id}
           className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -262,6 +262,7 @@ function FieldEditor({
         </select>
       ) : field.kind === 'json' ? (
         <Textarea
+          id={id}
           className="font-mono text-xs"
           rows={value.length > 400 ? 8 : 3}
           value={value}
@@ -269,6 +270,7 @@ function FieldEditor({
         />
       ) : (
         <Input
+          id={id}
           type={field.kind === 'number' ? 'number' : 'text'}
           value={value}
           onChange={(event) => onChange(event.target.value)}

@@ -22,6 +22,7 @@ import {
   type CatalogEntry,
 } from './use-catalog-draft';
 
+/** Renders the shared draft and repair controls without treating failed reads as absence. */
 export function CatalogSettings() {
   const { t } = useTranslation();
   const catalog = useCatalogDraft();
@@ -29,7 +30,8 @@ export function CatalogSettings() {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const models = catalog.parsed?.models ?? [];
-  const state = catalog.state.data;
+  // Cached data can remain after a failed refresh; it is not current pointer evidence.
+  const state = catalog.state.isError ? undefined : catalog.state.data;
   const pointer = state?.configuredPointer ?? null;
   /** A pointer this backend owns, and can therefore clear back to the default. */
   const managed = state?.managed ?? false;
@@ -84,7 +86,10 @@ export function CatalogSettings() {
     catalog.useDefault.error ??
     catalog.restore.error ??
     catalog.restart.error ??
-    catalog.validate.error;
+    catalog.validate.error ??
+    catalog.state.error ??
+    catalog.draft.error ??
+    catalog.blockers.error;
 
   return (
     <section className="space-y-4 rounded-lg border border-border bg-card p-4">
@@ -99,18 +104,18 @@ export function CatalogSettings() {
             config layer may still supply a catalog, so claiming the bundled one
             is active would be a guess. `runningPaths` is what the child
             actually loaded, and it is the only statement about the live list. */}
-        <p className="text-xs text-muted-foreground">
+        {state && !state.repairError && <p className="text-xs text-muted-foreground">
           {pointer
             ? t('Configured catalog: {{path}}', { path: pointer })
             : t('No user-level catalog override.')}
           {!managed && pointer && ` · ${t('not managed by this server')}`}
-        </p>
+        </p>}
         {running.length > 0 && (
           <p className="text-xs text-muted-foreground">
             {t('Codex loaded: {{path}}', { path: running.join(', ') })}
           </p>
         )}
-        {state?.ready && !pointer && running.length === 0 && (
+        {state?.ready && !state.repairError && !pointer && running.length === 0 && (
           <p className="text-xs text-muted-foreground">
             {t('Codex is using the catalog it ships with.')}
           </p>
@@ -192,7 +197,7 @@ export function CatalogSettings() {
         </Button>
       </div>
 
-      {catalog.working === null && (
+      {catalog.draft.isSuccess && catalog.working === null && (
         <p className="text-xs text-muted-foreground">
           {t(
             'No draft yet. Seed one first — a catalog replaces the whole model list, so starting from the full set avoids losing every official model.',

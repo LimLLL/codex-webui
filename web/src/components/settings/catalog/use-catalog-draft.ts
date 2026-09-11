@@ -225,6 +225,7 @@ export function useCatalogDraft() {
   const parsed = parseCatalogDocument(working);
   return {
     state,
+    draft,
     blockers,
     committed,
     working,
