@@ -1392,9 +1392,29 @@ export type ThreadOverviewRowDto = {
     pendingApprovalCount: number;
 };
 
+export type ThreadMetadataFreshnessDto = {
+    /**
+     * App-server generation that supplied this collection.
+     */
+    generation: number;
+    /**
+     * Successful complete discovery time, Unix milliseconds.
+     */
+    refreshedAt: number;
+    /**
+     * True after a known change, failed refresh, expiry, or process replacement.
+     */
+    stale: boolean;
+    /**
+     * True while backend-owned discovery is in flight.
+     */
+    refreshing: boolean;
+};
+
 export type ThreadOverviewResponseDto = {
     data: Array<ThreadOverviewRowDto>;
     nextCursor: string | null;
+    freshness: ThreadMetadataFreshnessDto;
 };
 
 export type ThreadTurnsPageDto = {
@@ -1558,6 +1578,11 @@ export type ThreadDeletePlanThreadDto = {
     updatedAt?: number | null;
 };
 
+export type FileChangeApprovalSubjectDto = {
+    type: 'fileChange';
+    changes: Array<FileUpdateChangeDto>;
+};
+
 export type PendingServerRequestDto = {
     generation: number;
     requestId: string;
@@ -1568,6 +1593,7 @@ export type PendingServerRequestDto = {
     params: {
         [key: string]: unknown;
     };
+    reviewSubject: FileChangeApprovalSubjectDto | null;
     status: 'pending' | 'resolved' | 'expired' | 'failed' | 'cancelled';
     createdAt: number;
     updatedAt: number;
@@ -1728,7 +1754,15 @@ export type ThreadPolicyAcceptedDto = {
     status: 'accepted';
 };
 
+export type PendingRequestResolvedDto = {
+    generation: number;
+    requestId: string;
+    threadId: string;
+    status: 'resolved' | 'cancelled' | 'expired';
+};
+
 export type PendingServerRequestsResponseDto = {
+    generation: number;
     requests: Array<PendingServerRequestDto>;
 };
 
@@ -3773,6 +3807,15 @@ export type PendingApprovalsListPendingData = {
     };
     url: '/api/pending-approvals';
 };
+
+export type PendingApprovalsListPendingErrors = {
+    /**
+     * A deletion intersects this read scope. No snapshot is returned; retry on the pending-change hint after guard release.
+     */
+    409: ApiErrorResponseDto;
+};
+
+export type PendingApprovalsListPendingError = PendingApprovalsListPendingErrors[keyof PendingApprovalsListPendingErrors];
 
 export type PendingApprovalsListPendingResponses = {
     200: PendingServerRequestsResponseDto;
