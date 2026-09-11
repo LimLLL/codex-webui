@@ -164,8 +164,14 @@ called and no tokens are spent.
 
 Measured on 0.153.2:
 
-- The same crashed turn is returned as **`interrupted`** in all four cases and
-  remains terminal during the observation window.
+- The same crashed turn is returned as **`interrupted`** in all four resume
+  responses, but **does not reliably remain terminal**. After the four-second
+  window the goal-free cases still read `interrupted`, while both active-goal
+  cases read that turn id back as `inProgress` — no `turn/started` carried its
+  id, and the goal's new turn has a different one. Whether that turn is actually
+  executing is not measured; only its status field is.
+- Both goal-free replacements emit `thread/goal/cleared` for a thread that never
+  had a goal.
 - Plain resume returns **`initialTurnsPage: null`**, not a populated page. It
   returns the two fixture turns in `thread.turns`. Explicit paging returns those
   turn headers in `initialTurnsPage`, with empty `thread.turns`. The exported
@@ -186,6 +192,18 @@ The probe validates response contents and treats missing required evidence as a
 failure. It does not use one warm resume to validate another cold-resume variant.
 Its held provider demonstrates dispatch, not successful model work or tool effects.
 Approval/input recovery and owner-controlled children remain outside this fixture.
+
+**These findings were re-measured after a harness defect was fixed.** The pinned
+npm entry is a shell script that `exec`s node, which spawns the native executable
+as a further child and forwards only `SIGINT`/`SIGTERM`/`SIGHUP`. `SIGKILL` cannot
+be caught and so was never forwarded: earlier runs killed the launcher, orphaned
+the native process holding the home's write lock, and the orphan then shut down
+gracefully on stdin EOF. Those runs measured a graceful exit, not a crash. The
+harness now spawns the pinned native executable directly and requires its real
+exit. Re-running changed only the durable-terminality claim; paging, goal
+persistence and autonomous continuation reproduced. A corrected tool does not
+retroactively validate earlier results — re-run anything that depended on killing
+a launcher before relying on it.
 
 ## file-approval-context
 

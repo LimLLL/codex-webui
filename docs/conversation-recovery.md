@@ -289,10 +289,18 @@ An active goal is set only after that turn is running, avoiding idle goal dispat
 before the intended crash. The replacement reads the persisted goal before its
 single resume. On pinned 0.153.2:
 
-- The same crashed turn is returned as **`interrupted`** in all four cases and
-  stays terminal through the observation window. This is positive evidence that
-  retires that turn's obligation. It says nothing about an absent/uncovered turn,
-  uncorrelated activity, or every possible crash boundary.
+- The same crashed turn is returned as **`interrupted`** in all four resume
+  responses. **It does not necessarily stay terminal.** After the four-second
+  window the two goal-free cases still read `interrupted`, while both active-goal
+  cases read that same turn id back as **`inProgress`** — with no `turn/started`
+  carrying its id, and with the goal's new turn under a different id. Only the
+  response-time status is established; a resume response is therefore positive
+  evidence at the moment it is read, not a durable retirement. What the later
+  non-terminal status means for execution is **unmeasured**: the probe observes
+  the status field, not whether that turn is doing work.
+  This was **re-measured after the harness termination defect was fixed** (below).
+  The earlier version of this finding claimed durable terminality; it was taken
+  with SIGKILL delivered to the npm wrapper rather than to the native process.
 - Plain resume returns **`initialTurnsPage: null`**, with the two fixture turns
   in legacy `thread.turns`. Property presence is not page population. The backend's
   explicit `excludeTurns` + `initialTurnsPage` request returns a populated page
@@ -304,12 +312,33 @@ single resume. On pinned 0.153.2:
   four-second observation window. Negative observations are bounded to that
   window, not promises that no future native scheduling can occur.
 
+- Both goal-free replacements emit `thread/goal/cleared` for a conversation that
+  never had a goal. A consumer that treats that notification as a state change
+  rather than as a statement of current absence would be reacting to nothing.
+
 Post-resume model requests remain held, so the observed continuation stays running
 and the goal stays active. A refusing provider can instead make it fail or change
 the goal; such outcomes do not establish behavior under a working model. This
 probe covers a persisted root thread stalled before a model response. It does not
 cover tool side effects, unanswered approvals/input, owner-controlled children,
 ephemeral sessions, or a complete backend restart.
+
+#### Why these were re-measured
+
+The pinned npm entry point is a shell script that `exec`s node, and that node
+process spawns the native executable as a further child while forwarding only
+`SIGINT`, `SIGTERM` and `SIGHUP`. `SIGKILL` cannot be caught and therefore cannot
+be forwarded, so killing the launcher left the native app-server orphaned and
+still holding the home's write lock. Every earlier run of this probe crashed a
+launcher, not an app-server; the native process then observed stdin EOF and shut
+down **gracefully**, which is the one thing a crash measurement must be denied.
+
+The harness now resolves and spawns the pinned native executable directly and
+requires its actual exit. These four cases were then re-run on that foundation.
+Only the durable-terminality claim changed; the paging, goal-persistence and
+autonomous-continuation findings reproduced unchanged. A corrected tool does not
+retroactively validate results taken with the broken one — anything else measured
+through a killed launcher should be re-run before it is relied on.
 
 Native goal continuation is consistent with the approved recovery of active goals.
 The backend never replays a user submission, and retiring the old turn does not

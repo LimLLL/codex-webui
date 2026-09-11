@@ -363,8 +363,8 @@
 - [x] 阻塞项逃生指引与后端行为一致（暂停 goal / 浏览器关会话都不解除预留），并渲染后端 `limitations`。
 - [x] Model picker 接入 includeHidden，移除前端二次过滤；生效中的隐藏模型恒常列出。
 - [ ] 真实多 agent 调度和 approval/user-input 暂停组合的集成覆盖。
-- [ ] 修复页错误状态与 raw/表单切换往返的组件级渲染测试。
-- [ ] auto-resume 父子顺序恢复目前为全串行；兄弟会话可并行，加载会话多时恢复偏慢。
+- [x] 修复页错误状态与 raw/表单切换往返的组件级渲染测试：覆盖真实 Query/SDK 回调、保存期间继续输入、跨浏览器冲突、TOML 编辑器挂载生命周期；修复查询失败被显示为无覆盖、标签关联和新增条目的实时模板重塑。
+- [x] auto-resume 并发测量完成，保留全串行：独立 home 的 32 会话四次对照未证明有实用且可重复的吞吐收益，提高并发明显增加单会话尾延迟；不引入 limiter。详见 [recovery-concurrency.md](recovery-concurrency.md)。
 
 ## Thread 策略与恢复
 
@@ -375,11 +375,13 @@
 - [x] **plan 文本纳入 item 权威模型**。`planTextByItemId` 从 `Record<itemId, string>` 改为携带 `completed` 与 `observedSeq`，与 `TurnItemBase` 一致：终态之后到达的 delta 被拒绝（此前会追加出重复尾巴），持久快照按与 `selectPayload` 相同的规则让位于更新的终态观测。
 - [x] **重连恢复补齐两处缺口**。断线期间新开的轮次此前只恢复生命周期、不取内容，composer 显示在跑而该轮次渲染为空；现在被接管的活跃轮次先建立 turn 行，再一并取回 item 和提示词；即使读取头期间已有实时事件建立了行，也仍会补取缺失内容，同页普通旧历史不额外读取。审批只经 socket 送达，断线会同时丢掉两端：期间发起的不出现，期间在别的设备上被应答的不消失；现在重连按服务端的 pending 集合对账，启动路径与重连路径共用同一个 `syncPendingApprovals`。缺席仅解决请求发出前已有且未改变的 pending 卡片，已有决定不被旧快照重新打开；重叠读取按会话范围淘汰旧响应。
 - [x] **shell 轮次稳定性对照实测**（`pnpm probe turn-item-finality`）：0.153.2 上，同一 completed shell 轮次的完整 item 载荷在后续 shell 轮次和已加载线程的 `thread/resume` 后一致。比较完整载荷并要求成功读取和 resume，不再仅比较输出长度，也不外推为所有模型轮次永久不变。
-- [ ] **completed turn 永久缓存仍缺全面证据**：vendored README 的 `subAgentActivity` 条目描述了父轮次结束后追加 activity 的情况，shell 对照未覆盖；需实测模型/子代理迟到事件与 cold resume，再决定 item 查询缓存和重连失效策略。
+- [x] **completed turn item 新鲜度**：三次真实子代理实测确认终态 turn 追加 activity；直接终止 pinned 原生进程后的 cold read/resume 保留追加项。查询失效、full turn 查询资格和应用资格一起更新；只立即刷新当前渲染历史，其他缓存按需刷新。详见 [completed-turn-items.md](completed-turn-items.md)。
 - [x] **断线期间完整错过的轮次**：恢复显式读取降序 summary 页，最多 10 页，锚点取读取发出前的 turn 集合。按页内身份与顺序合并，包括两个已知 turn 中间的缺口；无交集时采用最近窗口与真实 cursor，不伪造连续性。新增 live 边界、跨页缺口和删除后迟到读取回归。不再断言永久 append-only。
 - [x] **pending 同步的挂载生命周期**：从启动 effect 抽取后一度丢掉了原来的 `cancelled` 检查，登出或卸载后的迟到响应仍会写入 store。`syncPendingApprovals` 增加可选 `AbortSignal`，请求前与应用前各校验一次；启动路径传入 effect 自己的 abort controller。重叠读取的相互淘汰解决不了这件事——它表达的是「另一次读取更新」，不是「这个调用方已经不在了」。
 - [ ] **过期策略的显示与发送行为待确认**：当前 last-known 说明仅在策略弹层里，闭合徽章和 Send 不因 stale 单独改变；是否强化提示或阻止发送属于产品取舍。
 - [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。
+- [ ] **崩溃 turn 的 `interrupted` 不是持久终态（已实测，原因未测）**：修正终止缺陷后重跑 `restart-recovery`，两个 active-goal 案例在 4 秒窗口后把崩溃 turn 读回 `inProgress`，且没有携带该 id 的 `turn/started`，goal 的新 turn 是另一个 id。只测到状态字段回退，**未测它是否真的在执行**。当前后端不受影响——该回退不经任何通知投递，resume 之后也不再轮询该 turn，`observeTurn` 的终态守卫因此从不触发；但若它确实在执行，执行盘点就漏了一条义务。需新探针回答"回退后的 turn 是否在做事"，再决定是否需要附着后的二次确认读。
+- [x] **全部既有探针已在修正后的 harness 上重跑复核**（12 个，含花钱的）。结论：终止缺陷只波及真正依赖"崩溃"语义的测量，即 `restart-recovery`（两条复现、一条被推翻，见上）；其余探针只用 `close()` 走 SIGTERM，而 SIGTERM 一直被 wrapper 正常转发，因此结论不受影响。harness 的大改也**未引入回归**：`settings-update`、`item-persistence`、`item-ordering`、`turn-item-finality`、`server-request-identity`、`observable-service-tier`、`live-policy`、`file-approval-context`、`metadata-filters`、`metadata-incremental` 十条全部复现原结论。两个例外都不是回归——`server-request-disposition` 的 fixture 未被触发（模型改用文件编辑工具而非 shell），探针如实报告「this run measured nothing」并以非零码退出；`auth-token-refresh` 的核心比较成立且差距更大（拒绝 34.8s vs 静默撞上 180s 上限仍未结束），但它先前附带的「静默最终会结束」这次**未复现**，静默的收敛时间不可依赖。
 
 ## 后端发现与恢复的重构
 
