@@ -17,185 +17,35 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
 import { delay } from './utils';
+import { nativeCodexBinary } from './native-binary';
 export { delay, itemType, text } from './utils';
-import type {
-  ClientRequest,
-  ServerNotification,
-  ServerRequest,
-} from '../src/codex/codex-schema';
-
-/** Every method the pinned app-server accepts as a client request. */
-export type RpcMethod = ClientRequest['method'];
-
-/** Params the pinned schema defines for one method. */
-export type RpcParams<M extends RpcMethod> = Extract<
-  ClientRequest,
-  { method: M }
->['params'];
-
-/** `Omit` that maps over a union instead of collapsing it to its shared keys. */
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
-  ? Omit<T, K>
-  : never;
-
-/**
- * One method paired with that method's params, as a discriminated union.
- *
- * The pairing has to live in the TYPE rather than rely on inference. An earlier
- * signature took the method and params as two arguments and inferred the method
- * from the first — which TypeScript silently abandons the moment a caller names
- * any type argument, because it has no partial type-argument inference. Every
- * probe named the result type, so every probe fell back to the default `M` (the
- * whole method union), `RpcParams<M>` widened to the union of all params, and a
- * `turn/start` call carrying `thread/start` params compiled without a word.
- * Correlating the two fields here restores the check regardless of what the
- * caller does with the result type.
- */
-export type RpcCall = DistributiveOmit<ClientRequest, 'id'>;
-
-/** One JSON-RPC reply. Errors are returned, not thrown: a refusal is data. */
-export interface RpcReply<T> {
-  result?: T;
-  error?: { code: number; message: string; data?: unknown };
-}
-
-/** Method names the pinned schema exports, for reference at call sites. */
-export type KnownNotification = ServerNotification['method'];
-export type KnownServerRequest = ServerRequest['method'];
-
-/**
- * A server-initiated notification, kept verbatim for later inspection.
- *
- * `method` is a plain string rather than {@link KnownNotification}: a method
- * the exported schema does not list is precisely what a probe is looking for,
- * and narrowing here would hide it. (It would not even narrow — a union of a
- * literal type with `string` collapses to `string`.)
- */
-export interface Note {
-  method: string;
-  params: Record<string, unknown>;
-  /** Position on the single incoming wire; comparable with {@link IncomingRequest.arrival}. */
-  arrival: number;
-}
-
-/** A server-initiated request, which the client must answer. */
-export interface IncomingRequest {
-  id: number | string;
-  /** Plain string for the same reason as {@link Note.method}. */
-  method: string;
-  params: Record<string, unknown>;
-  /**
-   * Position on the single incoming wire, shared with notifications.
-   *
-   * Notifications and requests are recorded in separate arrays, so "I found
-   * this notification in the log after the request arrived" says nothing about
-   * which came first. Anything that depends on one preceding the other has to
-   * compare these instead of assuming.
-   */
-  arrival: number;
-}
-
-/** Outcome of one turn driven to completion. */
-export interface TurnRun {
-  turnId?: string;
-  /** Notifications emitted from `turn/start` until this turn completed. */
-  events: Note[];
-  /** Server requests received while it ran, in arrival order. */
-  requests: IncomingRequest[];
-  /** True when the turn completed rather than running out of time. */
-  completed: boolean;
-  /** Set when `turn/start` itself was refused. */
-  error?: RpcReply<unknown>['error'];
-}
-
-export interface AppServerOptions {
-  /** Path to the codex binary. Defaults to the repo's pinned dependency. */
-  bin?: string;
-  /** CODEX_HOME for this run. */
-  home: string;
-  /** How to answer server-initiated requests. Defaults to accepting approvals. */
-  onServerRequest?: (request: IncomingRequest) => unknown;
-  /** Extra environment for the child. */
-  env?: Record<string, string>;
-}
-
-/**
- * Returned by a responder to leave a server request deliberately unanswered.
- *
- * Answering immediately is right for probes that only need the turn to proceed,
- * but it makes a whole class of question unmeasurable: anything about the state
- * of the world *while* the agent is blocked. Reading history after replying
- * measures the post-decision world and quietly answers a different question.
- */
-export const HOLD: unique symbol = Symbol('hold');
-
-/** Marks a responder's return value as a JSON-RPC error rather than a result. */
-const ERROR_REPLY: unique symbol = Symbol('errorReply');
-
-/**
- * A JSON-RPC error a responder can return in place of a result.
- *
- * Withholding an answer and refusing to give one are different dispositions,
- * and the difference is measurable: silence leaves the agent blocked, while a
- * refusal is something app-server has to classify and act on. A harness that
- * can only send results can only measure half of that.
- */
-export interface ErrorReply {
-  [ERROR_REPLY]: true;
-  code: number;
-  message: string;
-  data?: unknown;
-}
-
-/**
- * Builds an error reply for a server-initiated request.
- *
- * @param code - JSON-RPC error code
- * @param message - Human-readable reason
- * @param data - Optional structured detail
- * @returns A value a responder returns to refuse the request
- */
-export function rpcError(
-  code: number,
-  message: string,
-  data?: unknown,
-): ErrorReply {
-  return {
-    [ERROR_REPLY]: true,
-    code,
-    message,
-    ...(data !== undefined && { data }),
-  };
-}
-
-/** Distinguishes a refusal from an ordinary result object. */
-function isErrorReply(value: unknown): value is ErrorReply {
-  return value !== null && typeof value === 'object' && ERROR_REPLY in value;
-}
-
-/** Strips the internal tag, leaving the wire shape of a JSON-RPC error. */
-function errorPayload(reply: ErrorReply): Record<string, unknown> {
-  return {
-    code: reply.code,
-    message: reply.message,
-    ...(reply.data !== undefined && { data: reply.data }),
-  };
-}
-
-/** Answers approvals with `accept`, everything else with an empty result. */
-function defaultServerResponse(request: IncomingRequest): unknown {
-  return request.method.endsWith('requestApproval')
-    ? { decision: 'accept' }
-    : {};
-}
+import {
+  defaultServerResponse,
+  errorPayload,
+  HOLD,
+  isErrorReply,
+  type AppServerOptions,
+  type ErrorReply,
+  type IncomingRequest,
+  type Note,
+  type RpcCall,
+  type RpcReply,
+  type TurnRun,
+} from './harness-types';
+export * from './harness-types';
 
 export class AppServer {
   private readonly child: ChildProcessWithoutNullStreams;
   private nextId = 0;
   private readonly pending = new Map<
     number,
-    (reply: RpcReply<unknown>) => void
+    {
+      resolve: (reply: RpcReply<unknown>) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
+  private transportError: Error | null = null;
   private stderrBuffer = '';
 
   /** Every notification received, oldest first. */
@@ -212,6 +62,9 @@ export class AppServer {
     private respond: (request: IncomingRequest) => unknown,
   ) {
     this.child = child;
+    child.once('exit', () => this.failPending(new Error('App-server exited')));
+    child.on('error', (error) => this.failPending(error));
+    child.stdin.on('error', (error) => this.failPending(error));
     this.child.stderr.on('data', (chunk: Buffer) => {
       this.stderrBuffer += chunk.toString();
     });
@@ -229,29 +82,42 @@ export class AppServer {
    * @returns A connected app-server ready for requests
    */
   static async start(options: AppServerOptions): Promise<AppServer> {
-    const bin = options.bin ?? 'codex';
-    const child = spawn(bin, ['app-server'], {
+    const native = nativeCodexBinary(options.bin);
+    const child = spawn(native.executable, ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...options.env, CODEX_HOME: options.home },
+      cwd: options.cwd,
+      env: {
+        ...process.env,
+        ...options.env,
+        CODEX_HOME: options.home,
+        CODEX_MANAGED_PACKAGE_ROOT: native.packageRoot,
+      },
     });
     const app = new AppServer(
       child,
       options.onServerRequest ?? defaultServerResponse,
     );
-    await app.request({
-      method: 'initialize',
-      params: {
-        clientInfo: {
-          name: 'codex-webui-probe',
-          title: 'codex-webui probe',
-          version: '0.0.0',
+    try {
+      const initialized = await app.request({
+        method: 'initialize',
+        params: {
+          clientInfo: {
+            name: 'codex-webui-probe',
+            title: 'codex-webui probe',
+            version: '0.0.0',
+          },
+          // `requestAttestation` is required since 0.149.0; probes cannot attest.
+          capabilities: { experimentalApi: true, requestAttestation: false },
         },
-        // `requestAttestation` is required since 0.149.0; probes cannot attest.
-        capabilities: { experimentalApi: true, requestAttestation: false },
-      },
-    });
-    app.notify('initialized');
-    return app;
+      });
+      if (initialized.error)
+        throw new Error(`Initialize failed: ${initialized.error.message}`);
+      app.notify('initialized');
+      return app;
+    } catch (error) {
+      if (child.pid !== undefined) await app.kill();
+      throw error;
+    }
   }
 
   /** Routes one stdout line: reply, server request, or notification. */
@@ -291,8 +157,10 @@ export class AppServer {
       return;
     }
     if (typeof id === 'number' && this.pending.has(id)) {
-      this.pending.get(id)!(message);
+      const pending = this.pending.get(id)!;
+      clearTimeout(pending.timer);
       this.pending.delete(id);
+      pending.resolve(message);
       return;
     }
     if (method) {
@@ -305,7 +173,18 @@ export class AppServer {
   }
 
   private send(message: Record<string, unknown>): void {
+    if (this.transportError) throw this.transportError;
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  /** Rejects outstanding RPCs on transport loss without answering held server requests. */
+  private failPending(error: Error): void {
+    this.transportError = error;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
   }
 
   /**
@@ -317,14 +196,15 @@ export class AppServer {
    * rather than through inference.
    *
    * @param call - A method paired with that method's params
+   * @param timeoutMs - Response deadline, independent of turn or held-operation waits
    * @returns The reply, whose `error` is data rather than an exception
+   * @throws On transport loss or deadline; never retries a possibly accepted request
    */
-  request<Result = unknown>(call: RpcCall): Promise<RpcReply<Result>> {
-    return new Promise((resolve) => {
-      const id = ++this.nextId;
-      this.pending.set(id, resolve as (reply: RpcReply<unknown>) => void);
-      this.send({ id, ...call });
-    });
+  request<Result = unknown>(
+    call: RpcCall,
+    timeoutMs = 30_000,
+  ): Promise<RpcReply<Result>> {
+    return this.requestRaw<Result>(call.method, call.params, timeoutMs);
   }
 
   /**
@@ -340,16 +220,37 @@ export class AppServer {
    *
    * @param method - A method name the schema does not define
    * @param params - Params sent verbatim, unchecked
+   * @param timeoutMs - Response deadline; does not release held operations
    * @returns The reply, whose `error` is data rather than an exception
    */
   requestRaw<Result = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    timeoutMs = 30_000,
   ): Promise<RpcReply<Result>> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      if (this.transportError) throw this.transportError;
       const id = ++this.nextId;
-      this.pending.set(id, resolve as (reply: RpcReply<unknown>) => void);
-      this.send({ id, method, params });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(
+          new Error(
+            `RPC deadline exceeded: ${method} (${timeoutMs}ms); delivery unknown`,
+          ),
+        );
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: resolve as (reply: RpcReply<unknown>) => void,
+        reject,
+        timer,
+      });
+      try {
+        this.send({ id, method, params });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -519,28 +420,43 @@ export class AppServer {
     return this.stderrBuffer;
   }
 
+  /**
+   * Starts bounded normal teardown for legacy callers that do not await close.
+   * A failed confirmation makes their entire run inconclusive. Sequential
+   * measurements and the shared runner await kill('SIGTERM') instead.
+   */
   close(): void {
-    this.child.kill();
+    void this.kill('SIGTERM').catch((error: unknown) => {
+      console.error('INCONCLUSIVE: native close could not be confirmed', error);
+      process.exitCode = 2;
+    });
   }
 
   /**
-   * Kills the child and waits for it to actually exit.
-   *
-   * A crash is not a shutdown. {@link close} sends SIGTERM and returns
-   * immediately, which lets the app-server run whatever cleanup it has and lets
-   * the next process start before the old one released the CODEX_HOME database.
-   * Both are exactly what a restart-recovery measurement must be denied: the
-   * question is what survives an app-server that got no chance to tidy up.
+   * Signals the directly spawned native process and requires its actual exit.
+   * Signal delivery alone is not termination. There is no wrapper between this
+   * child handle and Codex, including for SIGKILL, which cannot be forwarded.
    *
    * @param signal - Signal to send; the default cannot be caught or handled
-   * @returns Resolves once the child process has exited
+   * @returns Native process identity and observed termination, for measurement output
    * @throws If signal delivery fails or the child does not exit within ten seconds
    */
-  kill(signal: NodeJS.Signals = 'SIGKILL'): Promise<void> {
+  kill(signal: NodeJS.Signals = 'SIGKILL'): Promise<{
+    pid: number | undefined;
+    executable: string;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }> {
+    const evidence = () => ({
+      pid: this.child.pid,
+      executable: this.child.spawnfile,
+      code: this.child.exitCode,
+      signal: this.child.signalCode,
+    });
     if (this.child.exitCode !== null || this.child.signalCode !== null) {
-      return Promise.resolve();
+      return Promise.resolve(evidence());
     }
-    return new Promise<void>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(timer);
         this.child.off('exit', onExit);
@@ -548,14 +464,18 @@ export class AppServer {
       };
       const onExit = () => {
         cleanup();
-        resolve();
+        resolve(evidence());
       };
       const onError = (error: Error) => {
         cleanup();
         reject(error);
       };
       const timer = setTimeout(() => {
-        onError(new Error(`Child did not exit after ${signal}`));
+        onError(
+          new Error(
+            `INCONCLUSIVE: native process did not exit after ${signal}`,
+          ),
+        );
       }, 10_000);
       this.child.once('exit', onExit);
       this.child.once('error', onError);

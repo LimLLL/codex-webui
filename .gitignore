@@ -71,3 +71,4 @@ codex_probe/workspace/
 codex_probe/**/*.js
 codex_probe/**/*.d.ts
 codex_probe/**/*.js.map
+web/node_modules

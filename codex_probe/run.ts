@@ -104,7 +104,7 @@ export async function runProbe(probe: Probe): Promise<void> {
     await probe.run({ app, workspace: WORKSPACE_DIR });
   } finally {
     const stderr = app.stderr();
-    app.close();
+    await app.kill('SIGTERM');
     if (stderr.trim()) {
       // Printed after the result, not instead of it: app-server logs warnings on
       // stderr during perfectly successful runs, and treating that as failure
