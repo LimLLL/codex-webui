@@ -344,18 +344,15 @@ const handleThreadSettingsUpdated: Handler = (params, ctx) => {
   // only — writing it into `effortOverride` would make it ride along on the
   // next `turn/start` and force this effort onto a different thread.
   const settings = params.threadSettings as
-    | { effort?: string | null; serviceTier?: string | null }
+    | { effort?: string | null }
     | undefined;
   if (!settings) return;
-  // Same display-only contract for the tier: without it the speed picker falls
-  // back to the model's catalog default and can claim "Standard" for a thread
-  // actually running on a paid tier. Stamped as it arrives, so an open response
-  // served before this notification cannot overwrite it.
+  // Tier-only changes emit no notification in the pinned CLI. Keep its local
+  // lifecycle seed rather than treating unrelated notifications as tier evidence.
   useModelStore.getState().setObservedThreadSettings(
     threadId,
     {
       effort: (settings.effort ?? null) as ReasoningEffort | null,
-      serviceTier: settings.serviceTier ?? null,
     },
     nextObservationSeq(),
   );
@@ -407,16 +404,20 @@ const handleTokenUsageUpdated: Handler = (params, ctx) => {
   ctx.setTokenUsage(turnId, tokenUsage);
 };
 
-const handleServerRequestResolved: Handler = (params, ctx) => {
-  const requestId = params.requestId as string | number | undefined;
-  if (requestId == null || !hasThreadScope(params, ctx)) return;
-  ctx.resolveApprovalByRequestId(requestId);
-};
+/** Raw request IDs lack restart-safe identity; the backend projects the retirement separately. */
+const handleServerRequestResolved: Handler = () => undefined;
 
 const handleConfigWarning: Handler = (params) => {
   const summary = params.summary as string;
   const details = params.details as string | null;
   showSnackbar(details ? `${summary}: ${details}` : summary, 'warning', 5000);
+};
+
+/** Displays upstream warnings, including omitted unsupported service tiers, without changing turn state. */
+const handleWarning: Handler = (params, ctx) => {
+  if (typeof params.message !== 'string') return;
+  if (hasThreadScope(params, ctx)) ctx.addSystemMessage(params.message, 'warning');
+  else showSnackbar(params.message, 'warning', 5000);
 };
 
 const handleDeprecationNotice: Handler = (params) => {
@@ -716,6 +717,7 @@ const HANDLERS: Record<string, Handler> = {
   'thread/tokenUsage/updated': handleTokenUsageUpdated,
   'serverRequest/resolved': handleServerRequestResolved,
   'configWarning': handleConfigWarning,
+  'warning': handleWarning,
   'deprecationNotice': handleDeprecationNotice,
   'turn/plan/updated': handleTurnPlanUpdated,
   'item/plan/delta': handlePlanDelta,

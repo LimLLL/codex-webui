@@ -69,12 +69,13 @@ export function userInputFromPending(
 
   return {
     requestId: request.requestId,
+    instanceId: request.instanceId,
     generation: request.generation,
     kind: 'userInput',
     threadId: request.threadId,
     turnId,
     itemId,
-    status: request.status === 'resolved' ? 'resolved' : 'pending',
+    status: request.status === 'submitted' ? 'submitted' : request.status === 'pending' ? 'pending' : 'resolved',
     questions,
   };
 }
@@ -82,6 +83,7 @@ export function userInputFromPending(
 /** Builds a UserInputRequest from a live socket serverRequest event. */
 export function userInputFromSocket(request: {
   id: number | string;
+  instanceId?: string;
   generation?: number;
   params: Record<string, unknown>;
 }): UserInputRequest | null {
@@ -99,6 +101,7 @@ export function userInputFromSocket(request: {
 
   return {
     requestId: request.id,
+    instanceId: request.instanceId,
     generation: request.generation,
     kind: 'userInput',
     threadId: params.threadId,

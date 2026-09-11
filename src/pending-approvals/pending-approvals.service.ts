@@ -1,36 +1,55 @@
-/** Persists app-server requests that require user decisions. */
+/** Persists immutable human requests and binds decisions to their ingress owner. */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Subject } from 'rxjs';
+import { and, eq, inArray } from 'drizzle-orm';
 import { CatalogAdmissionService } from '../codex/catalog/catalog-admission.service';
 import { BusinessException } from '../common/business.exception';
 import { ErrorCode } from '../common/error-codes';
-import { Subject } from 'rxjs';
-import { and, eq, inArray } from 'drizzle-orm';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
+import type {
+  OwnedServerRequest,
+  ServerRequestRetirement,
+} from '../codex/server-request-owner';
+import type { ServerNotification } from '../codex/codex-schema';
 import { DRIZZLE_DB, type AppDatabase } from '../database/database.constants';
 import {
   pendingServerRequests,
   type PendingServerRequestRow,
 } from '../database/schema';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
-import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
 import type {
   PendingRequestResolvedDto,
   PendingServerRequestsResponseDto,
   PendingServerRequestDto,
 } from './dto/pending-approvals.dto';
+import type { ServerRequestFailureDto } from './dto/interaction.dto';
 import { PendingApprovalContext } from './pending-approval-context';
-import { isHumanServerRequest } from './human-server-requests';
+import {
+  encodeHumanResponse,
+  validateHumanRequest,
+} from './human-request-contract';
+import { nonempty, record } from './request-validation';
+import { projectPendingRequest } from './pending-request-projection';
+import { readRecentRequestFailures } from './pending-request-failures';
 
 @Injectable()
 export class PendingApprovalsService implements OnModuleInit {
   private readonly logger = new Logger(PendingApprovalsService.name);
   private readonly changed = new Subject<void>();
-  /** Persisted pending-set changes, including cancellation and generation expiry. */
+  /** Committed changes to pending attention, independent of transcript rooms. */
   readonly changes = this.changed.asObservable();
   private readonly retired = new Subject<PendingRequestResolvedDto>();
-  /** Committed human-request retirements for authenticated-wide delivery. */
+  /** Local submission and terminal evidence are distinct browser transitions. */
   readonly resolvedRequests = this.retired.asObservable();
+  private readonly admitted = new Subject<PendingServerRequestDto>();
+  /** Only successfully admitted requests may be delivered to browsers. */
+  readonly requests = this.admitted.asObservable();
+  private readonly failed = new Subject<ServerRequestFailureDto>();
+  /** Client failures never claim that the human declined or that the turn ended. */
+  readonly failures = this.failed.asObservable();
   private readonly context = new PendingApprovalContext();
+  private readonly owners = new Map<string, OwnedServerRequest>();
+  private initialized = false;
 
   constructor(
     @Inject(DRIZZLE_DB) private readonly db: AppDatabase,
@@ -38,418 +57,432 @@ export class PendingApprovalsService implements OnModuleInit {
     private readonly deletionRegistry: ThreadDeletionRegistryService,
     private readonly catalogAdmission: CatalogAdmissionService,
   ) {
+    this.codexManager.setServerRequestHandler((owned) => {
+      if (!this.initialized) return false;
+      this.recordServerRequest(owned);
+      return true;
+    });
+    this.codexManager.addListener(
+      'notification',
+      (notification: ServerNotification) =>
+        this.observeNotification(notification),
+    );
+    this.codexManager.addListener(
+      'serverRequestRetired',
+      (event: ServerRequestRetirement) => this.observeRetirement(event),
+    );
     this.codexManager.addLifecycleListener((event) => {
       if (
         event.type === 'appServerRestarting' ||
         event.type === 'appServerUnavailable'
-      ) {
+      )
         this.expireGeneration(event.generation, 'app-server restarted');
-      }
     });
   }
 
-  /** Old RPC requests cannot survive a complete backend restart. */
+  /** Expires old response authority before this backend accepts human requests. */
   onModuleInit(): void {
-    this.expireAllPending('WebUI restarted');
+    const rows = this.db
+      .update(pendingServerRequests)
+      .set({ status: 'expired', updatedAt: Date.now(), resolvedAt: Date.now() })
+      .where(inArray(pendingServerRequests.status, ['pending', 'submitted']))
+      .returning()
+      .all();
+    this.publishRetired(rows, 'expired');
     this.context.clear();
+    this.initialized = true;
   }
 
-  /** Captures approval subjects before forwarding item events and observes request retirement. */
+  /** Captures file subjects before gateway delivery; RPC retirement belongs to ingress. */
   observeNotification(notification: ServerNotification): void {
     this.context.observe(notification, this.codexManager.getGeneration());
-    if (notification.method === 'serverRequest/resolved')
-      this.markResolved(notification);
   }
 
-  /** Persists a server request before it is emitted to WebSocket subscribers. */
-  recordServerRequest(request: ServerRequest): PendingServerRequestDto | null {
-    const raw = request as unknown as {
-      id?: string | number;
-      params?: unknown;
-      method?: string;
-    };
-    const params = raw.params as Record<string, unknown> | undefined;
-    const threadId =
-      typeof params?.threadId === 'string'
-        ? params.threadId
-        : typeof params?.conversationId === 'string'
-          ? params.conversationId
-          : null;
-    if (!threadId || !params || raw.id == null || !raw.method) return null;
-    if (!isHumanServerRequest(raw.method)) return null;
-
-    const now = Date.now();
+  /**
+   * Persists a single ingress-owned proposal before publishing it. Repeated
+   * delivery returns the original row, including terminal state, without
+   * replacing its parameters, subject, identity, or response authority.
+   */
+  recordServerRequest(owned: OwnedServerRequest): PendingServerRequestDto {
+    const existing = this.db
+      .select()
+      .from(pendingServerRequests)
+      .where(eq(pendingServerRequests.instanceId, owned.instanceId))
+      .get();
+    if (existing) return projectPendingRequest(existing, this.context);
+    const { request } = owned;
+    const params = validateHumanRequest(request);
     const generation = this.codexManager.getGeneration();
-    const requestId = String(raw.id);
-    // Recorded as pending even while the thread is being deleted. Terminalizing
-    // here would strand the request if the delete then aborts: the UI never saw
-    // it, `respond` would refuse an already-resolved row, and app-server would
-    // still be waiting. Deletion cancels these explicitly once it has actually
-    // interrupted or removed the thread; late clicks are refused by `respond`.
+    const now = Date.now();
     const row = {
+      instanceId: owned.instanceId,
       generation,
-      requestId,
-      threadId,
+      requestId: String(request.id),
+      threadId: params.threadId as string,
       turnId: typeof params.turnId === 'string' ? params.turnId : null,
-      itemId:
-        typeof params.itemId === 'string'
-          ? params.itemId
-          : typeof params.callId === 'string'
-            ? params.callId
-            : null,
-      method: raw.method,
+      itemId: typeof params.itemId === 'string' ? params.itemId : null,
+      method: request.method,
       paramsJson: JSON.stringify(params),
       status: 'pending',
       resolvedBy: null,
       createdAt: now,
       updatedAt: now,
       resolvedAt: null,
+      failureReason: null,
     } satisfies typeof pendingServerRequests.$inferInsert;
-
-    this.db
-      .insert(pendingServerRequests)
-      .values(row)
-      .onConflictDoUpdate({
-        target: [
-          pendingServerRequests.generation,
-          pendingServerRequests.requestId,
-        ],
-        set: {
-          threadId: row.threadId,
-          turnId: row.turnId,
-          itemId: row.itemId,
-          method: row.method,
-          paramsJson: row.paramsJson,
-          status: row.status,
-          updatedAt: now,
-          resolvedAt: null,
-          resolvedBy: null,
-        },
-      })
-      .run();
-
-    // SQLite writes and capture are synchronous: no browser read can interleave
-    // before the hint/return below. Associate only after a successful write, so
-    // a failed insert/upsert cannot overwrite the last committed subject.
-    if (raw.method === 'item/fileChange/requestApproval') {
-      if (
-        !this.context.capture(
-          generation,
-          requestId,
-          threadId,
-          row.turnId,
-          row.itemId,
-        )
-      ) {
-        this.logger.error(
-          `File approval published without its change set: request=${requestId} thread=${threadId} turn=${String(row.turnId)} item=${String(row.itemId)}`,
-        );
-      }
-    } else {
-      this.context.forgetRequest(generation, requestId);
-    }
-
-    // The gateway also withholds the live request while deletion is pending.
-    // Its guard-release signal publishes requests belonging to surviving threads.
-    if (!this.deletionRegistry.isDeleting(threadId)) this.changed.next();
-    return this.toDto(row);
+    this.db.insert(pendingServerRequests).values(row).run();
+    this.owners.set(owned.instanceId, owned);
+    if (
+      request.method === 'item/fileChange/requestApproval' &&
+      !this.context.capture(
+        generation,
+        owned.instanceId,
+        row.threadId,
+        row.turnId,
+        row.itemId,
+      )
+    )
+      this.logger.error(
+        `File approval subject unavailable: instance=${owned.instanceId}`,
+      );
+    const dto = projectPendingRequest(row, this.context);
+    // Deletion withholds delivery, not ownership: an aborted delete must leave
+    // the request answerable. The gateway replays it when the guard is released.
+    if (!this.deletionRegistry.isDeleting(row.threadId)) this.changed.next();
+    this.admitted.next(dto);
+    return dto;
   }
 
-  /** Lists pending requests, optionally filtered to specific thread IDs. */
+  /** Returns actionable requests for attention counts and deletion planning. */
   listPending(threadIds?: string[]): PendingServerRequestDto[] {
-    const normalized = threadIds?.map((id) => id.trim()).filter(Boolean) ?? [];
-    const statusFilter = eq(pendingServerRequests.status, 'pending');
-    const rows =
-      normalized.length > 0
-        ? this.db
-            .select()
-            .from(pendingServerRequests)
-            .where(
-              and(
-                statusFilter,
-                inArray(pendingServerRequests.threadId, normalized),
-              ),
-            )
-            .all()
-        : this.db
-            .select()
-            .from(pendingServerRequests)
-            .where(statusFilter)
-            .all();
-    return rows.map((row) => this.toDto(row));
+    return this.selectRequests(threadIds, ['pending']).map((row) =>
+      projectPendingRequest(row, this.context),
+    );
   }
 
-  /**
-   * Reads a complete pending set for a browser. A deletion conflict returns no
-   * snapshot, preserving the existing rule that failed reads resolve nothing.
-   * Internal deletion planning uses listPending so it can still see guarded rows.
-   */
+  /** Reads unresolved submissions too, so reconnect never re-enables their buttons. */
   readPending(threadIds?: string[]): PendingServerRequestsResponseDto {
     const scope = threadIds?.map((id) => id.trim()).filter(Boolean);
     this.deletionRegistry.assertPendingReadable(scope);
+    const generation = this.codexManager.getGeneration();
     return {
-      generation: this.codexManager.getGeneration(),
-      requests: this.listPending(scope),
+      generation,
+      requests: this.selectRequests(scope, ['pending', 'submitted']).map(
+        (row) => projectPendingRequest(row, this.context),
+      ),
+      failures: readRecentRequestFailures(this.db, scope, generation),
     };
   }
 
-  /** Responds to one pending request. First writer wins across devices. */
+  /**
+   * Commits the first valid decision before attempting transmission on its
+   * original connection. A committed or ambiguously delivered decision is
+   * never reset to pending, and an instance ID is mandatory on both APIs.
+   * @param requestId - Original wire ID as represented in the browser URL.
+   * @param instanceId - Identity of the immutable proposal the user reviewed.
+   * @param result - Method-specific browser selection, validated before encoding.
+   * @param clientId - Optional attribution, never used as authorization.
+   * @returns The committed state; submitted is not confirmed resolution.
+   */
   respondToRequest(
     requestId: string,
+    instanceId: unknown,
     result: unknown,
     clientId?: string,
   ): PendingServerRequestDto {
-    const generation = this.codexManager.getGeneration();
+    if (!nonempty(instanceId))
+      throw BusinessException.badRequest(
+        ErrorCode.approvals.instanceRequired,
+        'Request instanceId is required. Refresh this client.',
+      );
     const row = this.db
       .select()
       .from(pendingServerRequests)
       .where(
         and(
-          eq(pendingServerRequests.generation, generation),
+          eq(pendingServerRequests.instanceId, instanceId),
           eq(pendingServerRequests.requestId, requestId),
         ),
       )
       .get();
-
-    if (!row) {
+    if (!row)
       throw BusinessException.notFound(
         ErrorCode.approvals.notFound,
-        'Pending request not found',
+        'Pending request instance not found',
       );
-    }
-    if (row.status !== 'pending') {
+    if (row.status !== 'pending')
       throw BusinessException.conflict(
         ErrorCode.approvals.alreadyResolved,
-        'Pending request has already been resolved',
+        'Pending request has already been handled',
       );
-    }
     this.deletionRegistry.assertMutable(row.threadId);
-    // Projection must succeed before the irreversible transport write. A corrupt
-    // params JSON must not roll back SQLite after app-server received a decision.
-    const projected = this.toDto(row);
+    const projected = projectPendingRequest(row, this.context);
+    const decision = record(result)?.decision;
     if (
       row.method === 'item/fileChange/requestApproval' &&
-      projected.reviewSubject === null
-    ) {
-      const decision =
-        typeof result === 'object' && result !== null && 'decision' in result
-          ? result.decision
-          : undefined;
-      // Enforce this at the common REST/socket boundary; old clients still draw
-      // Accept buttons. Decline/cancel preserve liveness without approving unseen changes.
-      if (decision !== 'decline' && decision !== 'cancel') {
-        throw BusinessException.conflict(
-          ErrorCode.approvals.subjectUnavailable,
-          'Cannot approve a file change without its change set; decline or cancel the request.',
-        );
-      }
-    }
-
-    this.catalogAdmission.assertOpen();
-    const client = this.codexManager.getClient();
-    if (!client) {
+      projected.reviewSubject === null &&
+      decision !== 'decline' &&
+      decision !== 'cancel'
+    )
       throw BusinessException.conflict(
-        ErrorCode.approvals.serverNotConnected,
-        'Codex app-server is not connected',
+        ErrorCode.approvals.subjectUnavailable,
+        'Cannot approve a file change without its change set; decline or cancel the request.',
+      );
+    let encoded: unknown;
+    try {
+      encoded = encodeHumanResponse(row.method, projected.params, result);
+    } catch (error) {
+      throw BusinessException.badRequest(
+        ErrorCode.approvals.invalidResponse,
+        error instanceof Error
+          ? error.message
+          : 'Invalid server-request response',
       );
     }
-
+    this.catalogAdmission.assertOpen();
+    const owner = this.owners.get(instanceId);
+    if (!owner?.isPending())
+      throw BusinessException.conflict(
+        ErrorCode.approvals.serverNotConnected,
+        'The original server request is no longer connected',
+      );
     const now = Date.now();
-    const resolvedRequest = this.db.transaction((tx) => {
-      const updateResult = tx
+    // This autocommit is deliberately complete before any stdio bytes are sent.
+    const update = this.db
+      .update(pendingServerRequests)
+      .set({
+        status: 'submitted',
+        resolvedBy: clientId ?? null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(pendingServerRequests.instanceId, instanceId),
+          eq(pendingServerRequests.status, 'pending'),
+        ),
+      )
+      .run();
+    if (update.changes !== 1)
+      throw BusinessException.conflict(
+        ErrorCode.approvals.alreadyHandled,
+        'Pending request was already handled',
+      );
+    try {
+      owner.respond(encoded);
+    } catch {
+      // A transport exception cannot prove that zero bytes reached app-server.
+      const message =
+        'The decision was committed but delivery could not be confirmed.';
+      const failed = this.db
         .update(pendingServerRequests)
         .set({
-          status: 'resolved',
-          resolvedBy: clientId ?? null,
-          resolvedAt: now,
-          updatedAt: now,
+          status: 'failed',
+          failureReason: message,
+          updatedAt: Date.now(),
         })
         .where(
           and(
-            eq(pendingServerRequests.generation, generation),
-            eq(pendingServerRequests.requestId, requestId),
-            eq(pendingServerRequests.status, 'pending'),
+            eq(pendingServerRequests.instanceId, instanceId),
+            eq(pendingServerRequests.status, 'submitted'),
           ),
         )
-        .run();
-
-      if (updateResult.changes !== 1) {
-        throw BusinessException.conflict(
-          ErrorCode.approvals.alreadyHandled,
-          'Pending approval was already handled',
-        );
-      }
-
-      client.respondToServerRequest(this.parseRequestId(row.requestId), result);
-
-      return { ...projected, status: 'resolved' as const, updatedAt: now };
-    });
-    // Publish only after the transaction commits; rollback must emit nothing.
-    this.publishRetired([resolvedRequest], 'resolved');
-    return resolvedRequest;
+        .returning()
+        .all();
+      this.publishRetired(failed, 'failed');
+      if (failed.length)
+        this.failed.next({
+          instanceId,
+          threadId: row.threadId,
+          turnId: row.turnId,
+          message,
+        });
+      throw BusinessException.conflict(
+        ErrorCode.approvals.deliveryUnknown,
+        message,
+      );
+    }
+    // A test transport or queued server notification can resolve synchronously.
+    const current = this.db
+      .select()
+      .from(pendingServerRequests)
+      .where(eq(pendingServerRequests.instanceId, instanceId))
+      .get()!;
+    if (current.status === 'submitted')
+      this.publishRetired([current], 'submitted');
+    return projectPendingRequest(current, this.context);
   }
 
-  /** Marks a server request resolved after app-server emits serverRequest/resolved. */
-  markResolved(notification: ServerNotification): void {
-    const params = notification.params as Record<string, unknown> | undefined;
-    const requestId = params?.requestId;
-    if (requestId == null) return;
-    const generation = this.codexManager.getGeneration();
+  /** Applies only connection-bound retirement identities supplied by ingress. */
+  observeRetirement(event: ServerRequestRetirement): void {
     const now = Date.now();
     const rows = this.db
       .update(pendingServerRequests)
-      .set({ status: 'resolved', updatedAt: now, resolvedAt: now })
+      .set({
+        status: event.status,
+        failureReason: event.message ?? null,
+        updatedAt: now,
+        resolvedAt: now,
+      })
       .where(
         and(
-          eq(pendingServerRequests.generation, generation),
-          eq(
-            pendingServerRequests.requestId,
-            String(requestId as string | number),
-          ),
-          eq(pendingServerRequests.status, 'pending'),
+          eq(pendingServerRequests.instanceId, event.instanceId),
+          inArray(pendingServerRequests.status, ['pending', 'submitted']),
         ),
       )
       .returning()
       .all();
-    this.publishRetired(rows, 'resolved');
+    this.owners.delete(event.instanceId);
+    this.publishRetired(rows, event.status);
+    if (!event.message || event.status !== 'failed') return;
+    const params = record(event.request.params);
+    const threadId =
+      rows[0]?.threadId ??
+      (typeof params?.threadId === 'string'
+        ? params.threadId
+        : typeof params?.conversationId === 'string'
+          ? params.conversationId
+          : null);
+    const turnId =
+      rows[0]?.turnId ??
+      (typeof params?.turnId === 'string' ? params.turnId : null);
+    const failure = {
+      instanceId: event.instanceId,
+      threadId,
+      turnId,
+      message: event.message,
+    };
+    // Persist scoped refusal explanations without retaining machine credentials
+    // or unsupported request payloads. Account-only refusals remain in the
+    // redacted wire log and the ordinary app-server authentication error path.
+    if (threadId && rows.length === 0) {
+      try {
+        this.db
+          .insert(pendingServerRequests)
+          .values({
+            instanceId: event.instanceId,
+            generation: this.codexManager.getGeneration(),
+            requestId: String(event.request.id),
+            threadId,
+            turnId,
+            itemId: null,
+            method: event.request.method,
+            paramsJson: '{}',
+            status: 'failed',
+            resolvedBy: null,
+            createdAt: now,
+            updatedAt: now,
+            resolvedAt: now,
+            failureReason: event.message,
+          })
+          .onConflictDoNothing()
+          .run();
+      } catch {
+        this.logger.error(
+          'Could not persist the client refusal; the RPC was already refused',
+        );
+      }
+    }
+    this.logger.warn(
+      `Client refused server request: method=${event.request.method} instance=${event.instanceId}`,
+    );
+    this.failed.next(failure);
+    this.changed.next();
   }
 
-  /** Marks pending requests cancelled because their thread is being interrupted/deleted. */
+  /** Cancels request authority after the owning threads have been interrupted/deleted. */
   cancelPendingForThreads(
     threadIds: string[],
     reason: string,
   ): PendingServerRequestDto[] {
-    const normalized = [...new Set(threadIds.map((id) => id.trim()))].filter(
-      Boolean,
+    if (!threadIds.length) return [];
+    const rows = this.selectRequests(threadIds, ['pending', 'submitted']);
+    const projected = rows.map((row) =>
+      projectPendingRequest(row, this.context),
     );
-    if (normalized.length === 0) return [];
-    const generation = this.codexManager.getGeneration();
+    this.transition(rows, 'cancelled', reason);
+    return projected.map((row) => ({ ...row, status: 'cancelled' }));
+  }
+
+  /** Expires an old child generation without borrowing a replacement connection. */
+  expireGeneration(generation: number, reason: string): void {
     const rows = this.db
       .select()
       .from(pendingServerRequests)
       .where(
         and(
           eq(pendingServerRequests.generation, generation),
-          eq(pendingServerRequests.status, 'pending'),
-          inArray(pendingServerRequests.threadId, normalized),
+          inArray(pendingServerRequests.status, ['pending', 'submitted']),
         ),
       )
       .all();
-    if (rows.length === 0) return [];
-
-    const now = Date.now();
-    this.db
-      .update(pendingServerRequests)
-      .set({ status: 'cancelled', updatedAt: now, resolvedAt: now })
-      .where(
-        and(
-          eq(pendingServerRequests.generation, generation),
-          eq(pendingServerRequests.status, 'pending'),
-          inArray(pendingServerRequests.threadId, normalized),
-        ),
-      )
-      .run();
-    this.logger.debug(
-      `Cancelled pending requests for deleting threads: count=${rows.length} reason=${reason}`,
-    );
-    this.publishRetired(rows, 'cancelled');
-    return rows.map((row) =>
-      this.toDto({
-        ...row,
-        status: 'cancelled',
-        updatedAt: now,
-        resolvedAt: now,
-      }),
-    );
-  }
-
-  /** Expires all pending rows for an app-server generation. */
-  expireGeneration(generation: number, reason: string): void {
-    this.updatePendingStatus(generation, 'expired', reason);
+    this.transition(rows, 'expired', reason);
     this.context.forgetGeneration(generation);
   }
 
-  /** Expires rows left by the old backend before any new pending baseline is served. */
-  private expireAllPending(reason: string): void {
-    const now = Date.now();
-    const rows = this.db
-      .update(pendingServerRequests)
-      .set({ status: 'expired', updatedAt: now, resolvedAt: now })
-      .where(eq(pendingServerRequests.status, 'pending'))
-      .returning()
-      .all();
-    this.publishRetired(rows, 'expired');
-    this.logger.debug(`Expired stale pending requests: ${reason}`);
-  }
-
-  /** Retires one generation in SQLite before broadcasting its neutral terminal state. */
-  private updatePendingStatus(
-    generation: number,
-    status: PendingRequestResolvedDto['status'],
-    reason: string,
-  ): void {
-    const now = Date.now();
-    const rows = this.db
-      .update(pendingServerRequests)
-      .set({ status, updatedAt: now, resolvedAt: now })
+  /** Reads a complete scoped set; absence is meaningful only after this succeeds. */
+  private selectRequests(
+    threadIds: string[] | undefined,
+    statuses: string[],
+  ): PendingServerRequestRow[] {
+    const scope = threadIds?.map((id) => id.trim()).filter(Boolean);
+    return this.db
+      .select()
+      .from(pendingServerRequests)
       .where(
         and(
-          eq(pendingServerRequests.generation, generation),
-          eq(pendingServerRequests.status, 'pending'),
+          inArray(pendingServerRequests.status, statuses),
+          scope?.length
+            ? inArray(pendingServerRequests.threadId, scope)
+            : undefined,
         ),
       )
-      .returning()
       .all();
-    this.publishRetired(rows, status);
-    this.logger.debug(
-      `Marked pending requests ${status}: generation=${generation} reason=${reason}`,
-    );
   }
 
-  /** Publishes only committed transitions, then releases their request-specific subjects. */
+  /** Commits lifecycle retirement before releasing in-memory response authority. */
+  private transition(
+    rows: PendingServerRequestRow[],
+    status: 'cancelled' | 'expired',
+    reason: string,
+  ): void {
+    for (const row of rows) {
+      if (!row.instanceId) continue;
+      this.db
+        .update(pendingServerRequests)
+        .set({ status, updatedAt: Date.now(), resolvedAt: Date.now() })
+        .where(eq(pendingServerRequests.instanceId, row.instanceId))
+        .run();
+      const owner = this.owners.get(row.instanceId);
+      this.owners.delete(row.instanceId);
+      owner?.retire();
+    }
+    this.publishRetired(rows, status);
+    if (rows.length)
+      this.logger.debug(`Retired ${rows.length} requests: ${reason}`);
+  }
+
+  /** Publishes committed state without confusing submission with server confirmation. */
   private publishRetired(
-    rows: Array<{
-      generation: number;
-      requestId: string;
-      threadId: string;
-      method: string;
-    }>,
+    rows: Array<
+      Pick<
+        PendingServerRequestRow,
+        'instanceId' | 'generation' | 'requestId' | 'threadId'
+      >
+    >,
     status: PendingRequestResolvedDto['status'],
   ): void {
     for (const row of rows) {
-      this.context.forgetRequest(row.generation, row.requestId);
-      if (isHumanServerRequest(row.method)) {
-        this.retired.next({
-          generation: row.generation,
-          requestId: row.requestId,
-          threadId: row.threadId,
-          status,
-        });
-      }
+      if (!row.instanceId) continue;
+      if (status !== 'submitted')
+        this.context.forgetRequest(row.generation, row.instanceId);
+      this.retired.next({
+        instanceId: row.instanceId,
+        generation: row.generation,
+        requestId: row.requestId,
+        threadId: row.threadId,
+        status,
+      });
     }
-    if (rows.length > 0) this.changed.next();
-  }
-
-  /** Preserves the existing wire convention for numeric versus opaque request IDs. */
-  private parseRequestId(requestId: string): string | number {
-    return /^\d+$/.test(requestId) ? Number(requestId) : requestId;
-  }
-
-  /** Combines unchanged persisted parameters with the request's retained review subject. */
-  private toDto(row: PendingServerRequestRow): PendingServerRequestDto {
-    const params = JSON.parse(row.paramsJson) as Record<string, unknown>;
-    return {
-      generation: row.generation,
-      requestId: row.requestId,
-      threadId: row.threadId,
-      turnId: row.turnId,
-      itemId: row.itemId,
-      method: row.method,
-      params,
-      reviewSubject: this.context.read(row.generation, row.requestId),
-      status: row.status as PendingServerRequestDto['status'],
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
+    if (rows.length) this.changed.next();
   }
 }

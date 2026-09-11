@@ -255,6 +255,7 @@ export interface TurnFailure {
 
 /** A user message, system message, structured failure, or full AI turn. */
 export type TimelineEntry =
+  | { kind: 'interaction'; requestId: string; instanceId: string; turnId?: string }
   | {
       kind: 'user';
       content: string;
@@ -264,6 +265,7 @@ export type TimelineEntry =
     }
   | {
       kind: 'system';
+      requestInstanceId?: string;
       content: string;
       severity?: 'info' | 'warning' | 'error';
       turnId?: string;

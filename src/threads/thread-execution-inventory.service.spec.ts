@@ -128,7 +128,7 @@ describe('ThreadExecutionInventoryService', () => {
     });
     source.events.emit('notification', {
       method: 'thread/goal/cleared',
-      params: { threadId: 't', turnId: null },
+      params: { threadId: 't' },
     });
     finish({ goal: executionGoal('t', 'active') });
     await Promise.resolve();
@@ -264,7 +264,7 @@ describe('ThreadExecutionInventoryService', () => {
   it('does not let a delayed goal mutation response undo a later clear notification', () => {
     source.events.emit('notification', {
       method: 'thread/goal/cleared',
-      params: { threadId: 't', turnId: null },
+      params: { threadId: 't' },
     });
     source.events.emit('response', {
       method: 'thread/goal/set',
@@ -292,7 +292,7 @@ describe('ThreadExecutionInventoryService', () => {
     expect(inventory.has('t')).toBe(true);
     source.events.emit('notification', {
       method: 'thread/goal/cleared',
-      params: { threadId: 't', turnId: null },
+      params: { threadId: 't' },
     });
     expect(inventory.has('t')).toBe(false);
   });

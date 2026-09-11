@@ -28,7 +28,7 @@ const VIEW_RANK: Record<string, number> = { notLoaded: 0, summary: 1, full: 2 };
 
 /** Identity used for anchoring; entries without one cannot be reconciled. */
 function entryTurnId(entry: TimelineEntry): string | null {
-  return entry.kind === 'system' ? null : (entry.turnId ?? null);
+  return entry.kind === 'system' || entry.kind === 'interaction' ? null : (entry.turnId ?? null);
 }
 
 /**
@@ -93,6 +93,7 @@ function reconcileTurnRows(
     turn: 1,
     turnFailure: 2,
     system: 3,
+    interaction: 3,
   };
   return [...merged, ...extras].sort(
     (a, b) => rowRank[a.kind] - rowRank[b.kind],

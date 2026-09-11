@@ -262,7 +262,7 @@ export function TurnBlock({ entry }: Props) {
   const approvals = useTimelineStore(
     useShallow((s) =>
       Object.values(s.approvals).filter(
-        (approval) => approval.turnId === entry.turnId,
+        (approval) => approval.turnId === entry.turnId && approval.kind !== 'permissions' && approval.kind !== 'elicitation',
       ),
     ),
   );

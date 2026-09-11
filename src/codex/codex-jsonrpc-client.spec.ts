@@ -96,6 +96,7 @@ describe('CodexJsonRpcClient', () => {
   });
 
   it('should emit serverRequest events', async () => {
+    client.serverRequests.setHandler(() => true);
     const received = new Promise((resolve) =>
       client.once('serverRequest', resolve),
     );
@@ -113,6 +114,58 @@ describe('CodexJsonRpcClient', () => {
       id: 99,
       params: { command: 'rm -rf' },
     });
+  });
+
+  it.each(['in', 'out'] as const)(
+    'redacts nested credentials in %s audit entries without mutating them',
+    (direction) => {
+      const message = {
+        id: 0,
+        method: 'account/login/start',
+        params: {
+          type: 'chatgptAuthTokens',
+          accessToken: 'private-access',
+          apiKey: 'private-key',
+        },
+        result: {
+          refresh_token: 'private-refresh',
+          idToken: 'private-id',
+          token: 'private-attestation',
+        },
+      };
+      const line = serializeCodexAuditEntry(direction, message);
+      expect(line).not.toContain('private-');
+      expect(JSON.parse(line)).toMatchObject({
+        msg: {
+          id: 0,
+          method: message.method,
+          params: {
+            type: 'chatgptAuthTokens',
+            accessToken: '[REDACTED]',
+            apiKey: '[REDACTED]',
+          },
+        },
+      });
+      expect(message.params.accessToken).toBe('private-access');
+      expect(
+        serializeCodexAuditEntry(direction, {
+          params: { refreshToken: false },
+        }),
+      ).toContain('"refreshToken":false');
+    },
+  );
+
+  it('sends the original credential even though its audit projection is redacted', async () => {
+    const write = vi.spyOn(proc.stdin!, 'write');
+    const pending = client.request('account/login/start', {
+      type: 'apiKey',
+      apiKey: 'test-wire-key',
+    });
+    expect(JSON.parse(String(write.mock.calls[0][0]))).toMatchObject({
+      params: { apiKey: 'test-wire-key' },
+    });
+    proc.stdout!.push(JSON.stringify({ id: 1, result: {} }) + '\n');
+    await pending;
   });
 
   it('should send initialized notification after initialize', async () => {

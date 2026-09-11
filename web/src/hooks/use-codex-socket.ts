@@ -17,6 +17,8 @@ import { syncPendingApprovals, retirePendingRequest } from '@/lib/pending-approv
 import { ingestAttention } from '@/lib/attention-ingestion';
 import { invalidateThreadListSoon, invalidateThreadDetails } from '@/lib/query-invalidation';
 import i18n from '@/i18n';
+import type { InteractionPresentationDto, PendingRequestResolvedDto } from '@/generated/api';
+import { ingestRequestFailure } from '@/lib/server-request-failures';
 
 type CodexLifecycleEvent =
   | { type: 'appServerRestarting'; generation: number; delayMs: number }
@@ -285,25 +287,29 @@ export function useCodexSocket(enabled = true) {
      * set rather than relying on an item stream that was never received here.
      */
     const handleCodexServerRequest = (request: {
+      instanceId?: string;
+      presentation?: InteractionPresentationDto | null;
+      negativeOnlyReason?: string | null;
       id: number | string;
       method: string;
       params: Record<string, unknown>;
       generation?: number;
       reviewSubject?: unknown;
     }) => {
-      const { id, method, params, generation, reviewSubject } = request;
+      const { id, method, params, generation, reviewSubject, instanceId, presentation, negativeOnlyReason } = request;
       if (typeof params.threadId !== 'string') return;
       const approval = parseApprovalRequest({
-        requestId: id, method, params, generation, reviewSubject,
+        requestId: id, method, params, generation, reviewSubject, instanceId, presentation, negativeOnlyReason,
       });
       if (approval) ingestAttention(approval, queryClient);
       if (method === 'item/tool/requestUserInput') {
-        const userInput = userInputFromSocket({ id, params, generation });
+        const userInput = userInputFromSocket({ id, params, generation, instanceId });
         if (userInput) ingestAttention(userInput, queryClient);
       }
     };
 
     socket.on('codex.serverRequest', handleCodexServerRequest);
+    socket.on('codex.serverRequestFailed', ingestRequestFailure);
 
     /**
      * Retires a request that can no longer be answered, wherever it was
@@ -314,12 +320,7 @@ export function useCodexSocket(enabled = true) {
      * status stays deliberately neutral: `resolved` here also covers app-server
      * resolving it during lifecycle cleanup, so it never implies acceptance.
      */
-    const handlePendingResolved = (event: {
-      generation: number;
-      requestId: string;
-      threadId: string;
-      status: 'resolved' | 'cancelled' | 'expired';
-    }) => {
+    const handlePendingResolved = (event: PendingRequestResolvedDto) => {
       retirePendingRequest(event);
     };
 
@@ -362,6 +363,7 @@ export function useCodexSocket(enabled = true) {
       socket.off('codex.notification', handleCodexNotification);
       socket.off('codex.lifecycle', handleCodexLifecycle);
       socket.off('codex.serverRequest', handleCodexServerRequest);
+      socket.off('codex.serverRequestFailed', ingestRequestFailure);
       socket.off('conversation.pending.resolved', handlePendingResolved);
       socket.off('conversation.overview.changed', handleOverviewChanged);
       socket.off('conversation.pending.changed', handlePendingChanged);

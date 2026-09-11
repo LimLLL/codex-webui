@@ -1,5 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FileUpdateChangeDto } from '../../codex/dto/v2/support.dto';
+import {
+  InteractionPresentationDto,
+  ServerRequestFailureDto,
+} from './interaction.dto';
 
 /** Complete proposed change set, distinct from a turn diff or an execution result. */
 export class FileChangeApprovalSubjectDto {
@@ -12,6 +16,7 @@ export class FileChangeApprovalSubjectDto {
 
 export type PendingServerRequestStatus =
   | 'pending'
+  | 'submitted'
   | 'resolved'
   | 'expired'
   | 'failed'
@@ -19,6 +24,7 @@ export type PendingServerRequestStatus =
 
 /** Persisted app-server request that is waiting for a user response. */
 export class PendingServerRequestDto {
+  @ApiProperty() instanceId!: string;
   @ApiProperty()
   generation!: number;
 
@@ -43,9 +49,21 @@ export class PendingServerRequestDto {
   /** Null for self-contained requests or an unavailable file subject; unavailable file changes cannot be approved. */
   @ApiProperty({ type: () => FileChangeApprovalSubjectDto, nullable: true })
   reviewSubject!: FileChangeApprovalSubjectDto | null;
+  @ApiProperty({ type: () => InteractionPresentationDto, nullable: true })
+  presentation!: InteractionPresentationDto | null;
+  @ApiProperty({ type: String, nullable: true }) negativeOnlyReason!:
+    | string
+    | null;
 
   @ApiProperty({
-    enum: ['pending', 'resolved', 'expired', 'failed', 'cancelled'],
+    enum: [
+      'pending',
+      'submitted',
+      'resolved',
+      'expired',
+      'failed',
+      'cancelled',
+    ],
   })
   status!: PendingServerRequestStatus;
 
@@ -64,10 +82,13 @@ export class PendingServerRequestsResponseDto {
 
   @ApiProperty({ type: () => [PendingServerRequestDto] })
   requests!: PendingServerRequestDto[];
+  @ApiProperty({ type: () => [ServerRequestFailureDto] })
+  failures!: ServerRequestFailureDto[];
 }
 
 /** Committed retirement of a human request; never implies that the action was accepted. */
 export class PendingRequestResolvedDto {
+  @ApiProperty() instanceId!: string;
   @ApiProperty()
   generation!: number;
 
@@ -77,21 +98,31 @@ export class PendingRequestResolvedDto {
   @ApiProperty()
   threadId!: string;
 
-  @ApiProperty({ enum: ['resolved', 'cancelled', 'expired'] })
-  status!: 'resolved' | 'cancelled' | 'expired';
+  @ApiProperty({
+    enum: ['submitted', 'resolved', 'cancelled', 'expired', 'failed'],
+  })
+  status!: 'submitted' | 'resolved' | 'cancelled' | 'expired' | 'failed';
 }
 
 /** Additive live envelope: original wire identity/params plus backend-owned review context. */
 export interface PendingServerRequestEvent {
+  instanceId: string;
   id: number | string;
   method: string;
   params: Record<string, unknown>;
   generation: number;
   reviewSubject: FileChangeApprovalSubjectDto | null;
+  presentation: InteractionPresentationDto | null;
+  negativeOnlyReason: string | null;
 }
 
 /** Request body for responding to a persisted server request. */
 export class RespondPendingServerRequestDto {
+  @ApiProperty({
+    description:
+      'Opaque identity of the exact proposal shown to the browser. Required; old clients must refresh.',
+  })
+  instanceId!: string;
   @ApiProperty()
   result!: unknown;
 

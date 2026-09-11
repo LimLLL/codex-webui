@@ -71,6 +71,20 @@
       "when": 1788163137487,
       "tag": "0009_last_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789098976622,
+      "tag": "0010_gorgeous_vivisector",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1789099011063,
+      "tag": "0011_gray_xavin",
+      "breakpoints": true
     }
   ]
 }

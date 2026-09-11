@@ -82,7 +82,8 @@ describe('settings freshness across thread opens', () => {
       approvalPolicy: 'never',
       sandbox: { type: 'dangerFullAccess' },
       model: 'new-model',
-      serviceTier: 'priority',
+      // Only the lifecycle response supplies the local tier seed.
+      serviceTier: null,
     });
   });
 
@@ -108,7 +109,10 @@ describe('settings freshness across thread opens', () => {
   it('seeds start/fork responses without replacing an earlier notification', () => {
     observer.recordThreadSettings('t1', settings);
     registry.cacheResponse('t1', response());
-    expect(observer.readSettings('t1')?.settings).toEqual(settings);
+    expect(observer.readSettings('t1')?.settings).toEqual({
+      ...settings,
+      serviceTier: null,
+    });
   });
 
   it('does not seed a start/fork response from an obsolete generation', () => {

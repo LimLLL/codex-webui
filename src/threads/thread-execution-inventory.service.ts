@@ -63,6 +63,12 @@ export class ThreadExecutionInventoryService {
     manager.addListener('notification', (note: ServerNotification) =>
       this.observeNotification(note),
     );
+    // Since ingress took ownership this event carries only *admitted human*
+    // requests, not every server request. Machine-facing methods are refused
+    // before it and no longer appear here; none of them is thread-scoped in
+    // this client, so no liveness evidence was lost. The uncorrelated branch
+    // below is now reached almost only by MCP elicitations, whose turn id is
+    // nullable by protocol rather than merely absent.
     manager.addListener('serverRequest', (request: ServerRequest) => {
       const params = record(request.params);
       const threadId = text(params.threadId);

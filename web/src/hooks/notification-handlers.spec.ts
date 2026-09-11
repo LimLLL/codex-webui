@@ -33,6 +33,14 @@ function settingsPayload(threadId: string, effort: string | null) {
   };
 }
 
+it('surfaces the upstream unsupported-tier warning without inventing a replacement value', () => {
+  const ctx = makeCtx();
+  ctx.addSystemMessage = vi.fn();
+  const message = 'Configured service tier `unsupported` is not advertised as supported and will be omitted from requests.';
+  handleNotification('warning', { threadId: 'visible', message }, ctx);
+  expect(ctx.addSystemMessage).toHaveBeenCalledWith(message, 'warning');
+});
+
 describe('thread/settings/updated', () => {
   beforeEach(() => {
     useModelStore.getState().clearOverrides();

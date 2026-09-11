@@ -25,9 +25,18 @@ import type {
   ApprovalRequest,
   RawCommandDecision,
   RequestedFileSystemAccess,
+  ResolvableApprovalDecision,
 } from '@/types/approval';
 import { cn } from '@/lib/utils';
 import { useApprovalDecision } from '@/hooks/use-approval-decision';
+
+/** Natural-language keys for the choice this browser submitted. */
+const DECISION_LABELS: Record<ResolvableApprovalDecision, string> = {
+  accepted: 'Accepted',
+  acceptedForSession: 'Accepted for session',
+  declined: 'Declined',
+  cancelled: 'Cancelled',
+};
 
 function hasSimpleDecision(
   decisions: RawCommandDecision[] | null | undefined,
@@ -84,6 +93,7 @@ export function ApprovalDetails({ approval }: { approval: ApprovalRequest }) {
 
   return (
     <>
+      {approval.negativeOnlyReason && <p role="alert" className="text-xs text-amber-600">{t(approval.negativeOnlyReason)}</p>}
       {approval.reason && (
         <p className="text-xs text-muted-foreground">{approval.reason}</p>
       )}
@@ -162,13 +172,13 @@ export function ApprovalControls({ approval }: { approval: ApprovalRequest }) {
   // not approvable. The backend refuses anything but decline/cancel with a 409,
   // so offering Accept here would only produce a button that always fails —
   // and, worse, one that reads as though approving unseen writes were allowed.
-  const canApprove = !(
+  const canApprove = !approval.negativeOnlyReason && !(
     approval.kind === 'fileChange' && !approval.reviewChanges?.length
   );
   const showAccept = canApprove && (!explicit || hasSimpleDecision(avail, 'accept'));
   const showAcceptForSession =
     canApprove && hasSimpleDecision(avail, 'acceptForSession');
-  const showDecline = !explicit || hasSimpleDecision(avail, 'decline');
+  const showDecline = !canApprove || !explicit || hasSimpleDecision(avail, 'decline');
   // Cancel is normally opt-in, but with no subject it is the other half of the
   // only answer left; without it a request the server permits only to cancel
   // could have no button at all.
@@ -320,11 +330,27 @@ export function ApprovalControls({ approval }: { approval: ApprovalRequest }) {
  *
  * `resolved` stays deliberately neutral: app-server also resolves requests
  * during lifecycle cleanup on turn start, completion and interrupt, so it does
- * not mean the user accepted anything.
+ * not mean the user accepted anything. `approval.decision` is the separate,
+ * certain half — what this browser submitted — so an answered card still says
+ * which choice was made without claiming the action was carried out.
  */
 export function ApprovalStatusBadge({ approval }: { approval: ApprovalRequest }) {
   const { t } = useTranslation();
+  const submitting = approval.status === 'submitted';
+  const failed = approval.status === 'failed';
+  if (approval.decision && (submitting || failed || approval.status === 'resolved'))
+    return (
+      <span className={cn('flex items-center gap-1 text-xs', failed ? 'text-destructive' : 'text-muted-foreground')}>
+        {t(DECISION_LABELS[approval.decision])}
+        {submitting && ` · ${t('Decision submitted')}`}
+        {failed && ` · ${t('Delivery unconfirmed')}`}
+      </span>
+    );
   switch (approval.status) {
+    case 'submitted':
+      return <span className="text-xs text-muted-foreground">{t('Decision submitted')}</span>;
+    case 'failed':
+      return <span className="text-xs text-destructive">{t('Delivery unconfirmed')}</span>;
     case 'accepted':
       return (
         <span className="flex items-center gap-1 text-xs text-green-500">

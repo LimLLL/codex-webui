@@ -55,35 +55,38 @@ export class PendingApprovalContext {
    */
   capture(
     generation: number,
-    requestId: string,
+    instanceId: string,
     threadId: string,
     turnId: string | null,
     itemId: string | null,
   ): boolean {
-    // An upsert can replace the request's identities. A miss must not leave
-    // the preceding request's change set attached to the replacement row.
-    this.forgetRequest(generation, requestId);
+    // Only a newly admitted instance reaches capture. A miss must not attach
+    // another proposal's subject to this immutable request.
+    this.forgetRequest(generation, instanceId);
     if (turnId === null || itemId === null) return false;
     const proposal = this.items.get(
       this.itemKey(generation, threadId, turnId, itemId),
     );
     if (!proposal) return false;
-    this.requests.set(this.requestKey(generation, requestId), proposal.subject);
+    this.requests.set(
+      this.requestKey(generation, instanceId),
+      proposal.subject,
+    );
     return true;
   }
 
   /** Returns an isolated subject for REST/live delivery without exposing mutable retained state. */
   read(
     generation: number,
-    requestId: string,
+    instanceId: string,
   ): FileChangeApprovalSubjectDto | null {
-    const subject = this.requests.get(this.requestKey(generation, requestId));
+    const subject = this.requests.get(this.requestKey(generation, instanceId));
     return subject ? structuredClone(subject) : null;
   }
 
   /** Retires the request subject once a committed terminal transition makes it unanswerable. */
-  forgetRequest(generation: number, requestId: string): void {
-    this.requests.delete(this.requestKey(generation, requestId));
+  forgetRequest(generation: number, instanceId: string): void {
+    this.requests.delete(this.requestKey(generation, instanceId));
   }
 
   /** Removes proposals from an expired app-server generation. */
@@ -126,8 +129,8 @@ export class PendingApprovalContext {
     return JSON.stringify([generation, threadId, turnId, itemId]);
   }
 
-  /** Request IDs are scoped to a single app-server generation. */
-  private requestKey(generation: number, requestId: string): string {
-    return `${generation}:${requestId}`;
+  /** Subjects belong to immutable request instances within their originating generation. */
+  private requestKey(generation: number, instanceId: string): string {
+    return `${generation}:${instanceId}`;
   }
 }

@@ -1583,7 +1583,49 @@ export type FileChangeApprovalSubjectDto = {
     changes: Array<FileUpdateChangeDto>;
 };
 
+export type PermissionOptionDto = {
+    id: string;
+    label: string;
+    access: 'read' | 'write' | 'deny' | 'network';
+    required: boolean;
+};
+
+export type ElicitationOptionDto = {
+    value: string;
+    label: string;
+};
+
+export type ElicitationFieldDto = {
+    name: string;
+    title: string;
+    description: string;
+    type: 'string' | 'number' | 'integer' | 'boolean' | 'enum' | 'array';
+    required: boolean;
+    options?: Array<ElicitationOptionDto>;
+    minimum?: number;
+    maximum?: number;
+    minLength?: number;
+    maxLength?: number;
+    minItems?: number;
+    maxItems?: number;
+    format?: string;
+};
+
+export type InteractionPresentationDto = {
+    kind: 'permissions' | 'elicitation';
+    supported: boolean;
+    unsupportedReason: string | null;
+    message: string;
+    serverName: string | null;
+    cwd: string | null;
+    environmentId: string | null;
+    url: string | null;
+    permissions: Array<PermissionOptionDto>;
+    fields: Array<ElicitationFieldDto>;
+};
+
 export type PendingServerRequestDto = {
+    instanceId: string;
     generation: number;
     requestId: string;
     threadId: string;
@@ -1594,7 +1636,9 @@ export type PendingServerRequestDto = {
         [key: string]: unknown;
     };
     reviewSubject: FileChangeApprovalSubjectDto | null;
-    status: 'pending' | 'resolved' | 'expired' | 'failed' | 'cancelled';
+    presentation: InteractionPresentationDto | null;
+    negativeOnlyReason: string | null;
+    status: 'pending' | 'submitted' | 'resolved' | 'expired' | 'failed' | 'cancelled';
     createdAt: number;
     updatedAt: number;
 };
@@ -1755,18 +1799,31 @@ export type ThreadPolicyAcceptedDto = {
 };
 
 export type PendingRequestResolvedDto = {
+    instanceId: string;
     generation: number;
     requestId: string;
     threadId: string;
-    status: 'resolved' | 'cancelled' | 'expired';
+    status: 'submitted' | 'resolved' | 'cancelled' | 'expired' | 'failed';
+};
+
+export type ServerRequestFailureDto = {
+    instanceId: string;
+    threadId: string | null;
+    turnId: string | null;
+    message: string;
 };
 
 export type PendingServerRequestsResponseDto = {
     generation: number;
     requests: Array<PendingServerRequestDto>;
+    failures: Array<ServerRequestFailureDto>;
 };
 
 export type RespondPendingServerRequestDto = {
+    /**
+     * Opaque identity of the exact proposal shown to the browser. Required; old clients must refresh.
+     */
+    instanceId: string;
     result: {
         [key: string]: unknown;
     };

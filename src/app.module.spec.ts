@@ -11,6 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
 import { AppModule } from './app.module';
+import { CodexProcessManager } from './codex/codex-process-manager.service';
+import { PendingApprovalsService } from './pending-approvals/pending-approvals.service';
+import { ThreadsGateway } from './threads/threads.gateway';
+import { createRequestManager } from './pending-approvals/request-owner.testing';
+import { fileApprovalFixture } from './pending-approvals/pending-approvals.testing';
 
 describe('AppModule', () => {
   // Compiling the real module constructs the real DatabaseService, which opens
@@ -36,5 +41,40 @@ describe('AppModule', () => {
       imports: [AppModule],
     }).compile();
     await moduleRef.close();
+  });
+
+  it('captures file subjects before the gateway observes their notification under Nest construction', async () => {
+    const transport = createRequestManager();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(CodexProcessManager)
+      .useValue(transport.manager)
+      .compile();
+    try {
+      const service = moduleRef.get(PendingApprovalsService);
+      const gateway = moduleRef.get(ThreadsGateway);
+      const fixture = fileApprovalFixture();
+      const snapshots: unknown[] = [];
+      service.onModuleInit();
+      gateway.server = {
+        to: () => ({
+          emit: (event: string) => {
+            if (event !== 'codex.notification') return;
+            // Re-enter admission at the earliest observable delivery boundary.
+            // If the service listener ran later, this card would have no subject.
+            transport.receive(fixture.request);
+            snapshots.push(service.listPending(['t1'])[0]?.reviewSubject);
+          },
+        }),
+        emit: vi.fn(),
+      } as unknown as ThreadsGateway['server'];
+      gateway.afterInit();
+      transport.notify(fixture.started);
+      expect(snapshots).toEqual([
+        { type: 'fileChange', changes: fixture.changes },
+      ]);
+    } finally {
+      transport.close();
+      await moduleRef.close();
+    }
   });
 });

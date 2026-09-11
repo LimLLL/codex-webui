@@ -12,6 +12,7 @@ import {
   samePendingRequest,
 } from './pending-request-identity';
 import { activePendingReads as activeReads } from './pending-read-coverage';
+import { ingestRequestFailure } from './server-request-failures';
 
 // Startup and reconnect can overlap. A newer scoped read supersedes only those
 // threads in an older read, including when the newer response lists no requests.
@@ -19,9 +20,11 @@ import { activePendingReads as activeReads } from './pending-read-coverage';
 
 /** Retirement may beat a read containing a request this browser never held. */
 export function retirePendingRequest(event: {
+  instanceId?: string;
   threadId: string;
   requestId: string;
   generation: number;
+  status?: 'submitted' | 'resolved' | 'cancelled' | 'expired' | 'failed';
 }): void {
   for (const read of activeReads)
     read.retired.add(
@@ -33,6 +36,8 @@ export function retirePendingRequest(event: {
       event.threadId,
       event.requestId,
       event.generation,
+      event.instanceId,
+      event.status === 'submitted' ? 'submitted' : event.status === 'failed' ? 'failed' : 'resolved',
     );
   dismissAttention(event.threadId, event);
 }
@@ -97,9 +102,12 @@ export async function syncPendingApprovals(
       return;
     }
     const store = useTimelineStore.getState();
+    for (const failure of data.failures ?? []) {
+      if (!failure.threadId || includes(failure.threadId)) ingestRequestFailure(failure);
+    }
     const stillPending = new Map<string, Set<string>>();
     for (const request of data.requests) {
-      if (!includes(request.threadId) || request.status !== 'pending') continue;
+      if (!includes(request.threadId) || (request.status !== 'pending' && request.status !== 'submitted')) continue;
       const requestId = pendingRequestKey(request);
       if (read.retired.has(JSON.stringify([request.threadId, requestId])))
         continue;
@@ -133,24 +141,24 @@ export async function syncPendingApprovals(
       const pending = stillPending.get(threadId);
       for (const [requestId, approval] of Object.entries(held.approvals)) {
         if (
-          approval.status !== 'pending' ||
+          (approval.status !== 'pending' && approval.status !== 'submitted') ||
           pending?.has(pendingRequestKey(approval))
         )
           continue;
         if (runtime.approvals[requestId] !== approval) continue;
-        store.resolveApprovalByRequestIdForThread(threadId, requestId);
+        store.resolveApprovalByRequestIdForThread(threadId, requestId, approval.generation ?? undefined, approval.instanceId);
         dismissAttention(threadId, approval);
       }
       for (const [requestId, request] of Object.entries(
         held.userInputRequests,
       )) {
         if (
-          request.status !== 'pending' ||
+          (request.status !== 'pending' && request.status !== 'submitted') ||
           pending?.has(pendingRequestKey(request))
         )
           continue;
         if (runtime.userInputRequests[requestId] !== request) continue;
-        store.resolveApprovalByRequestIdForThread(threadId, requestId);
+        store.resolveApprovalByRequestIdForThread(threadId, requestId, request.generation ?? undefined, request.instanceId);
         dismissAttention(threadId, request);
       }
     }

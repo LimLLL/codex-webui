@@ -53,11 +53,27 @@ export function fileApprovalFixture(id: string | number = 31) {
       params: {
         threadId: 't1',
         turnId: 'turn1',
+        startedAtMs: 1,
         item: {
           id: 'patch1',
           type: 'fileChange',
           changes,
           status: 'inProgress',
+        },
+      },
+    } satisfies ServerNotification,
+    /** Same item reaching completion; the subject must survive this. */
+    completed: {
+      method: 'item/completed',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        completedAtMs: 2,
+        item: {
+          id: 'patch1',
+          type: 'fileChange',
+          changes,
+          status: 'completed',
         },
       },
     } satisfies ServerNotification,

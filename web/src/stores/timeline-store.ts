@@ -3,6 +3,7 @@
  * The selected thread only controls visibility; live thread state is isolated by threadId.
  */
 import { create } from 'zustand';
+import { ensureInteractionEntry } from '@/lib/interaction-timeline';
 import { getSocket } from '../socket';
 import { forgetThreadPolicy, useThreadPolicyStore } from './thread-policy-store';
 import type {
@@ -463,7 +464,8 @@ function ensureRequestTurnEntries(
   userInputs: Record<string, UserInputRequest>,
 ): TimelineEntry[] {
   const withApprovals = Object.values(approvals).reduce(
-    (next, approval) => ensureTurnEntry(next, approval.turnId),
+    (next, approval) => approval.kind === 'permissions' || approval.kind === 'elicitation'
+      ? ensureInteractionEntry(next, approval) : approval.turnId ? ensureTurnEntry(next, approval.turnId) : next,
     timeline,
   );
   return Object.values(userInputs).reduce(
@@ -1048,6 +1050,7 @@ interface TimelineState {
     message: string,
     severity?: 'info' | 'warning' | 'error',
     turnId?: string,
+    requestInstanceId?: string,
   ) => void;
   addSystemErrorForThread: (threadId: string, message: string) => void;
   upsertTurnFailureForThread: (threadId: string, failure: TurnFailure) => void;
@@ -1056,6 +1059,9 @@ interface TimelineState {
     threadId: string,
     requestId: string | number,
     generation?: number,
+    instanceId?: string,
+    status?: 'submitted' | 'resolved' | 'failed',
+    decision?: ResolvableApprovalDecision,
   ) => void;
 }
 
@@ -1825,17 +1831,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         const existing = runtime.approvals[requestKey] ?? runtime.userInputRequests[requestKey];
         if (existing && samePendingRequest(existing, approval)) return runtime;
         const alreadyResolved =
-          approval.generation == null && runtime.pendingResolvedRequestIds.has(requestKey);
+          runtime.pendingResolvedRequestIds.has(approval.instanceId ?? requestKey) && (approval.instanceId !== undefined || approval.generation == null);
         const finalApproval = alreadyResolved
           ? { ...approval, status: 'resolved' as const }
           : approval;
         const pendingResolvedRequestIds = new Set(
           runtime.pendingResolvedRequestIds,
         );
-        if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
+        // Delete the key the tombstone was actually stored under: an
+        // instance-keyed one would otherwise survive its own consumption.
+        if (alreadyResolved)
+          pendingResolvedRequestIds.delete(approval.instanceId ?? requestKey);
         return {
           ...runtime,
-          timeline: ensureTurnEntry(runtime.timeline, approval.turnId),
+          timeline: approval.kind === 'permissions' || approval.kind === 'elicitation'
+            ? ensureInteractionEntry(runtime.timeline, approval)
+            : approval.turnId ? ensureTurnEntry(runtime.timeline, approval.turnId) : runtime.timeline,
           approvals: { ...runtime.approvals, [requestKey]: finalApproval },
           userInputRequests: Object.fromEntries(Object.entries(runtime.userInputRequests).filter(([id]) => id !== requestKey)),
           pendingResolvedRequestIds,
@@ -1849,14 +1860,15 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
         const existing = runtime.userInputRequests[requestKey] ?? runtime.approvals[requestKey];
         if (existing && samePendingRequest(existing, request)) return runtime;
         const alreadyResolved =
-          request.generation == null && runtime.pendingResolvedRequestIds.has(requestKey);
+          runtime.pendingResolvedRequestIds.has(request.instanceId ?? requestKey) && (request.instanceId !== undefined || request.generation == null);
         const finalRequest: UserInputRequest = alreadyResolved
           ? { ...request, status: 'resolved' }
           : request;
         const pendingResolvedRequestIds = new Set(
           runtime.pendingResolvedRequestIds,
         );
-        if (alreadyResolved) pendingResolvedRequestIds.delete(requestKey);
+        if (alreadyResolved)
+          pendingResolvedRequestIds.delete(request.instanceId ?? requestKey);
         return {
           ...runtime,
           timeline: ensureTurnEntry(runtime.timeline, request.turnId),
@@ -1990,12 +2002,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       message,
       severity = 'info',
       turnId?,
+      requestInstanceId?,
     ) => {
       applyThreadUpdate(threadId, (runtime) => ({
         ...runtime,
         timeline: [
           ...runtime.timeline,
-          { kind: 'system' as const, content: message, severity, turnId },
+          { kind: 'system' as const, content: message, severity, turnId, ...(requestInstanceId && { requestInstanceId }) },
         ],
       }));
     },
@@ -2028,32 +2041,40 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
       }));
     },
 
-    resolveApprovalByRequestIdForThread: (threadId, requestId, generation) => {
+    resolveApprovalByRequestIdForThread: (threadId, requestId, generation, instanceId, status = 'resolved', decision) => {
       const requestKey = String(requestId);
       // Global retirement is also sent for suppressed requests this browser
       // never saw. It must not create immortal empty runtimes/tombstones.
-      if (generation !== undefined && !get().getThreadRuntime(threadId)) return;
+      if ((instanceId || generation !== undefined) && !get().getThreadRuntime(threadId)) return;
       applyThreadUpdate(threadId, (runtime) => {
         const approval = runtime.approvals[requestKey];
         if (approval) {
-          if (approval.status !== 'pending' || (generation !== undefined &&
-            !samePendingRequest(approval, { requestId, generation }))) return runtime;
+          if ((instanceId || generation !== undefined) &&
+            !samePendingRequest(approval, { requestId, generation, instanceId })) return runtime;
+          const unresolved = approval.status === 'pending' || approval.status === 'submitted';
+          // A WebSocket retirement can beat the successful HTTP reply carrying
+          // this browser's choice. Keep that attribution without allowing the
+          // older acknowledgement to undo the terminal lifecycle evidence.
+          if (!unresolved && !decision) return runtime;
           return {
             ...runtime,
             approvals: {
               ...runtime.approvals,
-              [requestKey]: { ...approval, status: 'resolved' },
+              // The lifecycle status and what this user chose are different
+              // facts: only the first is app-server's to confirm, and only the
+              // second can explain the card after it stops awaiting a decision.
+              [requestKey]: { ...approval, status: unresolved ? status : approval.status, ...(decision && { decision }) },
             },
           };
         }
 
         const userInput = runtime.userInputRequests[requestKey];
         if (userInput) {
-          if (userInput.status !== 'pending' || (generation !== undefined &&
-            !samePendingRequest(userInput, { requestId, generation }))) return runtime;
+          if ((userInput.status !== 'pending' && userInput.status !== 'submitted') || ((instanceId || generation !== undefined) &&
+            !samePendingRequest(userInput, { requestId, generation, instanceId }))) return runtime;
           const resolved: UserInputRequest = {
             ...userInput,
-            status: 'resolved',
+            status,
           };
           return {
             ...runtime,
@@ -2064,12 +2085,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => {
           };
         }
 
-        if (generation !== undefined) return runtime;
+        if (status === 'submitted' || (generation !== undefined && !instanceId)) return runtime;
         return {
           ...runtime,
           pendingResolvedRequestIds: new Set(
             runtime.pendingResolvedRequestIds,
-          ).add(requestKey),
+          ).add(instanceId ?? requestKey),
         };
       });
     },

@@ -144,7 +144,17 @@ export class ThreadSettingsObserverService {
   seedResponse(threadId: string, response: SettingsSeed): void {
     // A complete notification or an earlier seed already supplies these leaves.
     // Keeping its identity also preserves in-flight mutation observation guards.
-    if (this.cache.has(threadId)) return;
+    const cached = this.cache.get(threadId);
+    if (cached) {
+      // The measured notification omits the tier. A notification arriving
+      // before this response must not prevent the only available local seed.
+      if (cached.settings.serviceTier === undefined)
+        this.cache.set(threadId, {
+          ...cached,
+          settings: { ...cached.settings, serviceTier: response.serviceTier },
+        });
+      return;
+    }
     this.cache.set(threadId, {
       source: 'response',
       settings: {
@@ -219,14 +229,17 @@ export class ThreadSettingsObserverService {
     );
   }
 
-  /** Records the full effective settings emitted by app-server. */
+  /** Records observable settings while preserving the lifecycle-seeded local tier. */
   recordThreadSettings(
     threadId: string,
     threadSettings: v2.ThreadSettings,
   ): void {
     this.cache.set(threadId, {
       source: 'notification',
-      settings: threadSettings,
+      settings: {
+        ...threadSettings,
+        serviceTier: this.cache.get(threadId)?.settings.serviceTier,
+      },
     });
     // Something outside this client — the TUI, the desktop app, another tab —
     // can leave the effort-dictating mode without going through us. Once the

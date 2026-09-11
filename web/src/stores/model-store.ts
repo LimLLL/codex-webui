@@ -32,13 +32,9 @@ interface ModelState {
    */
   observedEffortByThread: Record<string, ReasoningEffort | null>;
   /**
-   * Service tier app-server reports for a thread, keyed by thread id. Display
-   * only, for the same reason as the effort map above.
-   *
-   * Without this the picker would fall back to the model's catalog default and
-   * show "Standard" for a thread that actually carries a paid tier — while the
-   * composer omits `serviceTier`, leaving that tier in force. The user would
-   * believe they were on standard speed and cost.
+   * Local service-tier seed from start/resume/fork responses. The pinned CLI
+   * has no passive tier read or tier-change notification; this map does not
+   * claim cross-client freshness. Rendering filters it by model support.
    */
   observedServiceTierByThread: Record<string, string | null>;
   /**
@@ -71,7 +67,8 @@ interface ModelState {
    */
   observedSettingsSeqByThread: Record<string, number>;
   /**
-   * Records a thread's observed effort and service tier together.
+   * Records observed effort and, only when supplied by a lifecycle response,
+   * a local tier seed. Effort notifications do not clear or invent a tier.
    *
    * @param threadId - Conversation the evidence describes
    * @param settings - Effort and tier as reported
@@ -80,7 +77,7 @@ interface ModelState {
    */
   setObservedThreadSettings: (
     threadId: string,
-    settings: { effort: ReasoningEffort | null; serviceTier: string | null },
+    settings: { effort: ReasoningEffort | null; serviceTier?: string | null },
     seq: number,
   ) => void;
   forgetObservedThreadEffort: (threadId: string) => void;
@@ -101,19 +98,20 @@ export const useModelStore = create<ModelState>((set) => ({
   setObservedThreadSettings: (threadId, settings, seq) =>
     set((state) => {
       const held = state.observedSettingsSeqByThread[threadId];
-      if (held !== undefined && held > seq) return state;
+      const older = held !== undefined && held > seq;
+      if (older && (settings.serviceTier === undefined || threadId in state.observedServiceTierByThread)) return state;
       return {
         observedEffortByThread: {
           ...state.observedEffortByThread,
-          [threadId]: settings.effort,
+          [threadId]: older ? state.observedEffortByThread[threadId] : settings.effort,
         },
-        observedServiceTierByThread: {
+        observedServiceTierByThread: settings.serviceTier === undefined ? state.observedServiceTierByThread : {
           ...state.observedServiceTierByThread,
           [threadId]: settings.serviceTier,
         },
         observedSettingsSeqByThread: {
           ...state.observedSettingsSeqByThread,
-          [threadId]: seq,
+          [threadId]: older ? held : seq,
         },
       };
     }),

@@ -18,10 +18,12 @@ import { merge, Subscription } from 'rxjs';
 import { Server, Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { CodexProcessManager } from '../codex/codex-process-manager.service';
-import type { ServerNotification, ServerRequest } from '../codex/codex-schema';
+import type { ServerNotification } from '../codex/codex-schema';
 import { PendingApprovalsService } from '../pending-approvals/pending-approvals.service';
-import { isHumanServerRequest } from '../pending-approvals/human-server-requests';
-import type { PendingServerRequestEvent } from '../pending-approvals/dto/pending-approvals.dto';
+import type {
+  PendingServerRequestEvent,
+  PendingServerRequestDto,
+} from '../pending-approvals/dto/pending-approvals.dto';
 import { ThreadDeletionRegistryService } from '../thread-deletion/thread-deletion-registry.service';
 import { projectNotificationForClient } from '../turn-errors/turn-error-projection';
 import { ThreadMetadataService } from './thread-metadata.service';
@@ -100,9 +102,7 @@ export class ThreadsGateway
         const held = this.suppressedRequests.get(request.threadId);
         if (held) {
           const remaining = held.filter(
-            (entry) =>
-              entry.generation !== request.generation ||
-              String(entry.id) !== request.requestId,
+            (entry) => entry.instanceId !== request.instanceId,
           );
           if (remaining.length)
             this.suppressedRequests.set(request.threadId, remaining);
@@ -120,9 +120,18 @@ export class ThreadsGateway
       },
     );
 
-    this.codexManager.addListener('serverRequest', (request: ServerRequest) => {
-      this.handleCodexServerRequest(request);
-    });
+    this.changes.add(
+      this.pendingApprovals.requests.subscribe((request) =>
+        this.handleCodexServerRequest(request),
+      ),
+    );
+    this.changes.add(
+      this.pendingApprovals.failures.subscribe((failure) => {
+        this.server
+          .to(AUTHENTICATED_ROOM)
+          .emit('codex.serverRequestFailed', failure);
+      }),
+    );
 
     this.changes.add(
       this.deletionRegistry.onRelease((threadIds) => {
@@ -204,8 +213,6 @@ export class ThreadsGateway
    * Extracts threadId from notification params and emits to the room.
    */
   private handleCodexNotification(notification: ServerNotification): void {
-    this.pendingApprovals.observeNotification(notification);
-
     const params = notification.params as Record<string, unknown> | undefined;
     const threadId = params?.['threadId'] as string | undefined;
     const projected = projectNotificationForClient(notification);
@@ -240,11 +247,10 @@ export class ThreadsGateway
       const stillPending = new Set(
         this.pendingApprovals
           .listPending([threadId])
-          .map((row) => `${row.generation}:${row.requestId}`),
+          .map((row) => row.instanceId),
       );
       for (const request of held) {
-        if (!stillPending.has(`${request.generation}:${String(request.id)}`))
-          continue;
+        if (!stillPending.has(request.instanceId)) continue;
         this.server.to(AUTHENTICATED_ROOM).emit('codex.serverRequest', request);
         this.logger.log(
           `Replayed suppressed server request ${String(request.id)} for thread ${threadId}`,
@@ -258,22 +264,18 @@ export class ThreadsGateway
    * Machine-facing requests are not user decisions and never enter this channel.
    * The first client to respond still wins through the persisted CAS operation.
    */
-  private handleCodexServerRequest(request: ServerRequest): void {
-    if (!isHumanServerRequest(request.method)) {
-      this.logger.debug(
-        `Excluded machine-facing server request: ${request.method}`,
-      );
-      return;
-    }
-    const pending = this.pendingApprovals.recordServerRequest(request);
-    if (!pending) return;
+  private handleCodexServerRequest(pending: PendingServerRequestDto): void {
+    if (pending.status !== 'pending') return;
     const threadId = pending.threadId;
     const event: PendingServerRequestEvent = {
-      id: request.id,
-      method: request.method,
+      id: pending.requestId,
+      instanceId: pending.instanceId,
+      method: pending.method,
       params: pending.params,
       generation: pending.generation,
       reviewSubject: pending.reviewSubject,
+      presentation: pending.presentation,
+      negativeOnlyReason: pending.negativeOnlyReason,
     };
 
     // Suppressed rather than terminalized: the row stays pending so an aborted
@@ -292,15 +294,17 @@ export class ThreadsGateway
 
   /**
    * Client responds to a server-initiated request (e.g. approval decision).
-   * Kept for backward compatibility; REST responses use persisted CAS semantics.
+   * Both transports require the exact proposal instance and use the same CAS.
    */
   @SubscribeMessage('codex.serverResponse')
   handleServerResponse(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { id: number | string; result: unknown },
-  ): void {
-    this.pendingApprovals.respondToRequest(
+    @MessageBody()
+    data: { id: number | string; instanceId: string; result: unknown },
+  ): PendingServerRequestDto {
+    return this.pendingApprovals.respondToRequest(
       String(data.id),
+      data.instanceId,
       data.result,
       client.id,
     );

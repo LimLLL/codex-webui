@@ -27,7 +27,7 @@ it('notifies once, retires neutrally, and never reopens an answered input on rep
   ingestAttention(request);
   ingestAttention(request);
   expect(useSnackbarStore.getState().visible).toHaveLength(1);
-  retirePendingRequest({ ...request, requestId: 'r', generation: 1 });
+  retirePendingRequest({ ...request, requestId: 'r', generation: 1, status: 'resolved' });
   ingestAttention(request);
   expect(useSnackbarStore.getState().visible).toHaveLength(0);
   expect(

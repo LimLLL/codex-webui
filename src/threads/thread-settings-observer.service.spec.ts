@@ -230,7 +230,7 @@ describe('ThreadSettingsObserverService', () => {
     expect(service.readDisplacedEffort('never-touched')).toBeNull();
   });
 
-  it('keeps all notified settings when a stale response seed arrives later', () => {
+  it('keeps notified settings but seeds the unobservable tier from the lifecycle response', () => {
     const settings = threadSettings('plan', 'new-model', 'high');
     service.recordThreadSettings('t1', settings);
     service.seedResponse('t1', {
@@ -243,7 +243,10 @@ describe('ThreadSettingsObserverService', () => {
       approvalsReviewer: 'auto_review',
       sandbox: { type: 'dangerFullAccess' },
     });
-    expect(service.readSettings('t1')?.settings).toEqual(settings);
+    expect(service.readSettings('t1')?.settings).toEqual({
+      ...settings,
+      serviceTier: 'old-tier',
+    });
     expect(service.readSecurityPolicy('t1')).toEqual({
       observed: true,
       source: 'notification',
@@ -289,7 +292,10 @@ describe('ThreadSettingsObserverService', () => {
       { value: 'xhigh' },
       before,
     );
-    expect(service.readSettings('t1')?.settings).toEqual(settings);
+    expect(service.readSettings('t1')?.settings).toEqual({
+      ...settings,
+      serviceTier: undefined,
+    });
     expect(service.readDisplacedEffort('t1')).toBeNull();
   });
 

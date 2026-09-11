@@ -13,6 +13,7 @@ import {
 } from './codex-jsonrpc-client';
 import type { InitializeResponse } from './codex-schema';
 import { CatalogStorageService } from './catalog/catalog-storage.service';
+import type { ServerRequestHandler } from './server-request-owner';
 
 export type CodexLifecycleEvent =
   | { type: 'appServerRestarting'; generation: number; delayMs: number }
@@ -61,6 +62,7 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
    */
   private readonly retired = new WeakSet<CodexJsonRpcClient>();
   private generation = 0;
+  private serverRequestHandler: ServerRequestHandler | null = null;
   private startupError: string | null = null;
   private readonly eventForwarders: Array<{
     event: keyof CodexJsonRpcClientEvents;
@@ -123,7 +125,28 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
     handler: (...args: unknown[]) => void,
   ): void {
     this.eventForwarders.push({ event, handler });
-    this.client?.on(event, handler);
+    if (this.client) this.forward(this.client, event, handler);
+  }
+  /** Registers the one request admission owner for every replacement connection. */
+  setServerRequestHandler(handler: ServerRequestHandler): void {
+    if (this.serverRequestHandler && this.serverRequestHandler !== handler)
+      throw new Error('Server-request admission already has an owner');
+    this.serverRequestHandler = handler;
+    this.client?.serverRequests.setHandler(handler);
+  }
+
+  /** Old child buffers must never acquire the replacement child's identity. */
+  private forward(
+    client: CodexJsonRpcClient,
+    event: keyof CodexJsonRpcClientEvents,
+    handler: (...args: unknown[]) => void,
+  ): void {
+    // Close subscribers are dispatched together before the manager clears this
+    // connection. Attaching one after startup must not put it behind cleanup.
+    if (event === 'close') return;
+    client.on(event, (...args: unknown[]) => {
+      if (this.client === client) handler(...args);
+    });
   }
   /** Registers process lifecycle observations. */
   addLifecycleListener(
@@ -220,15 +243,26 @@ export class CodexProcessManager implements OnModuleInit, OnModuleDestroy {
     });
     const current = new CodexJsonRpcClient(child);
     this.client = current;
+    if (this.serverRequestHandler)
+      current.serverRequests.setHandler(this.serverRequestHandler);
     for (const { event, handler } of this.eventForwarders)
-      current.on(event, handler);
+      this.forward(current, event, handler);
     current.on('error', (error) => this.logger.warn(error.message));
     child.on('error', (error) => {
       stderr = (stderr + error.message).slice(-16_384);
       current.destroy();
     });
-    current.on('close', () => {
+    current.on('close', (code, signal) => {
       if (this.client !== current) return;
+      for (const { event, handler } of this.eventForwarders) {
+        if (event !== 'close') continue;
+        try {
+          handler(code, signal);
+        } catch {
+          // Observer failure cannot prevent connection cleanup or self-healing.
+          this.logger.warn('App-server close observer failed');
+        }
+      }
       this.client = null;
       this.initResult = null;
       this.storage.runningPaths.clear();

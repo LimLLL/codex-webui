@@ -79,6 +79,8 @@ export type InsertSettingRow = typeof settings.$inferInsert;
 export const pendingServerRequests = sqliteTable(
   'pending_server_requests',
   {
+    // Legacy history has no instance identity and is expired at startup.
+    instanceId: text('instance_id'),
     generation: integer('generation').notNull(),
     requestId: text('request_id').notNull(),
     threadId: text('thread_id').notNull(),
@@ -91,9 +93,11 @@ export const pendingServerRequests = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     resolvedAt: integer('resolved_at'),
+    failureReason: text('failure_reason'),
   },
   (table) => [
-    primaryKey({ columns: [table.generation, table.requestId] }),
+    primaryKey({ columns: [table.instanceId] }),
+    index('idx_pending_requests_origin').on(table.generation, table.requestId),
     index('idx_pending_requests_thread_status').on(
       table.threadId,
       table.status,

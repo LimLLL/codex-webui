@@ -34,7 +34,11 @@ export function ingestAttention(
   const held =
     runtime?.approvals[String(request.requestId)] ??
     runtime?.userInputRequests[String(request.requestId)];
-  if (held && samePendingRequest(held, request)) return;
+  if (held && samePendingRequest(held, request)) {
+    if (request.status === 'submitted') store.resolveApprovalByRequestIdForThread(
+      request.threadId, request.requestId, request.generation ?? undefined, request.instanceId, 'submitted');
+    return;
+  }
   if (held) dismissAttention(request.threadId, held);
   if (request.kind === 'userInput')
     store.addUserInputRequestForThread(request.threadId, request);

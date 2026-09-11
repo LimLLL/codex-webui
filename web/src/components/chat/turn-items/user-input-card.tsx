@@ -1,12 +1,10 @@
 /** Renders an app-server item/tool/requestUserInput card for structured user input. */
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CheckCircle, Loader2, MessageCircleQuestion } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { samePendingRequest } from '@/lib/pending-request-identity';
-import { pendingApprovalsRespond } from '@/generated/api/sdk.gen';
-import { useTimelineStore } from '@/stores/timeline-store';
+import { useRequestResponse } from '@/hooks/use-request-response';
 import type { UserInputQuestion, UserInputRequest } from '@/types/approval';
 import { cn } from '@/lib/utils';
 
@@ -59,10 +57,8 @@ function isComplete(questions: UserInputQuestion[], draft: DraftState): boolean 
 
 export function UserInputCard({ request }: Props) {
   const { t } = useTranslation();
-  const resolveUserInputRequest = useTimelineStore((s) => s.resolveUserInputRequestForThread);
-  const busy = useRef(false);
+  const { send, submitting } = useRequestResponse(request);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(request.questions));
-  const [submitting, setSubmitting] = useState(false);
 
   const isPending = request.status === 'pending';
   const answers = useMemo(
@@ -96,25 +92,7 @@ export function UserInputCard({ request }: Props) {
   };
 
   const handleSubmit = () => {
-    if (!canSubmit || busy.current) return;
-    const held = useTimelineStore.getState().getThreadRuntime(request.threadId)?.userInputRequests[String(request.requestId)];
-    if (held && (!samePendingRequest(held, request) || held.status !== 'pending')) return;
-    busy.current = true;
-    setSubmitting(true);
-    // `throwOnError` is required for the same reason as the approval controls:
-    // without it a refused submission resolves, `.then` clears the card, and the
-    // user's answers are gone while the agent is still waiting for them.
-    void pendingApprovalsRespond({
-      path: { requestId: String(request.requestId) },
-      body: { result: { answers } },
-      throwOnError: true,
-    })
-      .then(() => {
-        const current = useTimelineStore.getState().getThreadRuntime(request.threadId)?.userInputRequests[String(request.requestId)];
-        if (current && samePendingRequest(current, request)) resolveUserInputRequest(request.threadId, request.requestId);
-      })
-      .catch(() => undefined)
-      .finally(() => { busy.current = false; setSubmitting(false); });
+    if (canSubmit) send({ answers });
   };
 
   return (
@@ -137,7 +115,7 @@ export function UserInputCard({ request }: Props) {
         <span className="font-medium">{t('Input Requested')}</span>
         {!isPending && (
           <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircle className="h-3 w-3" /> {t('Resolved')}
+            <CheckCircle className="h-3 w-3" /> {t(request.status === 'submitted' ? 'Decision submitted' : request.status === 'failed' ? 'Delivery unconfirmed' : 'Resolved')}
           </span>
         )}
       </div>

@@ -73,6 +73,7 @@ export class PendingApprovalsController {
     }
     return this.approvals.respondToRequest(
       requestId,
+      body.instanceId,
       body.result,
       body.clientId,
     );

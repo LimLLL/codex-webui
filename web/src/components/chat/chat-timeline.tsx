@@ -75,6 +75,7 @@ const KEY_SEPARATOR = '\u0000';
 function deriveEntryKeys(timeline: TimelineEntry[]): string[] {
   const counts = new Map<string, number>();
   return timeline.map((entry) => {
+    if (entry.kind === 'interaction') return `interaction:${entry.instanceId}`;
     const turnId = 'turnId' in entry ? entry.turnId : undefined;
     const group = `${entry.kind}:${turnId ?? 'pending'}`;
     const ordinal = counts.get(group) ?? 0;

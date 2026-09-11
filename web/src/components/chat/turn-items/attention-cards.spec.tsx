@@ -30,6 +30,7 @@ const approval = (
   changes: ApprovalRequest['reviewChanges'],
 ): ApprovalRequest => ({
   requestId: 'r',
+  instanceId: 'proposal-1',
   generation: 1,
   kind: 'fileChange',
   threadId: 't',
@@ -100,7 +101,7 @@ it('sends once and does not settle a reused id when an old response finishes', a
     new Promise<Awaited<ReturnType<typeof pendingApprovalsRespond<true>>>>(
       (done) => {
         finish = () =>
-          done({} as Awaited<ReturnType<typeof pendingApprovalsRespond<true>>>);
+          done({ data: { status: 'submitted' } } as Awaited<ReturnType<typeof pendingApprovalsRespond<true>>>);
       },
     ),
   );
@@ -108,13 +109,13 @@ it('sends once and does not settle a reused id when an old response finishes', a
   fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
   fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
   expect(respond).toHaveBeenCalledTimes(1);
-  store.addApprovalForThread('t', { ...request, generation: 2 });
+  store.addApprovalForThread('t', { ...request, instanceId: 'proposal-2', generation: 1 });
   store.selectThread('other');
   await act(async () => {
     finish();
   });
   expect(store.getThreadRuntime('t')?.approvals.r).toMatchObject({
-    generation: 2,
+    instanceId: 'proposal-2', generation: 1,
     status: 'pending',
   });
   expect(store.getThreadRuntime('other')?.approvals).toEqual({});

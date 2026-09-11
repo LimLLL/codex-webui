@@ -1,15 +1,18 @@
 /** Types for Codex approval workflow (server-initiated requests). */
 import type { FileChangeEntry } from '@/types/timeline';
+import type { InteractionPresentationDto } from '@/generated/api';
 
 export type ApprovalDecision =
   | 'accepted'
   | 'acceptedForSession'
   | 'declined'
   | 'cancelled'
+  | 'submitted'
+  | 'failed'
   | 'resolved';
 
 /** Subset of ApprovalDecision that can be chosen by the user (excludes server-set 'resolved'). */
-export type ResolvableApprovalDecision = Exclude<ApprovalDecision, 'resolved'>;
+export type ResolvableApprovalDecision = Exclude<ApprovalDecision, 'resolved' | 'submitted' | 'failed'>;
 
 /** Network policy amendment proposed by the server. */
 export interface NetworkPolicyAmendment {
@@ -79,17 +82,28 @@ export type RawCommandDecision =
 
 /** A pending approval request from the Codex app-server. */
 export interface ApprovalRequest {
+  /** Absent only on pre-upgrade cards, which cannot submit a decision. */
+  instanceId?: string;
+  /** Backend-validated permissions or MCP form; never inferred from raw JSON. */
+  presentation?: InteractionPresentationDto | null;
+  negativeOnlyReason?: string | null;
   /** JSON-RPC request ID — must be included in the response. */
   requestId: number | string;
   /** Approval type discriminator. */
-  kind: 'command' | 'writeStdin' | 'fileChange';
+  kind: 'command' | 'writeStdin' | 'fileChange' | 'permissions' | 'elicitation';
   /** Stable protocol approval identity, when supplied independently of RPC ID. */
   approvalId?: string | null;
   threadId: string;
-  turnId: string;
+  turnId: string | null;
   itemId: string;
   /** Current status. */
   status: 'pending' | ApprovalDecision;
+  /**
+   * What this browser submitted, retained separately from `status`: the
+   * lifecycle is app-server's to confirm, the choice is the user's own and
+   * stays displayable after the card stops awaiting a decision.
+   */
+  decision?: ResolvableApprovalDecision;
   /** Shell command (command approvals only). */
   command?: string | null;
   /** Working directory (command approvals only). */
@@ -101,8 +115,8 @@ export interface ApprovalRequest {
   /**
    * App-server process generation this request belongs to.
    *
-   * Request IDs restart with the child process, so the same ID can name a
-   * different request after a restart. Retirement is matched on the pair.
+   * Informational process scope only: the backend counter can restart too.
+   * Modern response and retirement matching require the immutable instanceId.
    */
   generation?: number | null;
   /**
@@ -157,14 +171,16 @@ export interface UserInputQuestion {
 
 /** A pending user-input request from the Codex app-server (EXPERIMENTAL). */
 export interface UserInputRequest {
+  /** Required by the response API; legacy cards must refresh before answering. */
+  instanceId?: string;
   /** JSON-RPC request ID — must be included in the response. */
   requestId: number | string;
-  /** Process generation, paired with the RPC id for replay and retirement. */
+  /** Informational process scope; instanceId identifies modern requests. */
   generation?: number | null;
   kind: 'userInput';
   threadId: string;
   turnId: string;
   itemId: string;
-  status: 'pending' | 'resolved';
+  status: 'pending' | 'submitted' | 'failed' | 'resolved';
   questions: UserInputQuestion[];
 }

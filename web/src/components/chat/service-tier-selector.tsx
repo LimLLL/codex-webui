@@ -18,8 +18,9 @@ import { catalogCopy } from '@/lib/catalog-copy';
 import { useModelStore } from '@/stores/model-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { OptionRow } from './option-row';
+import { resolveServiceTier } from '@/lib/service-tier';
 
-/** Displays the active speed tier and lets the user change it. */
+/** Displays the supported local tier and lets the user explicitly change it. */
 export function ServiceTierSelector() {
   const { t } = useTranslation();
   const serviceTierOverride = useModelStore((s) => s.serviceTierOverride);
@@ -31,14 +32,12 @@ export function ServiceTierSelector() {
   const { activeModel } = useActiveModel();
 
   const serviceTiers = activeModel?.serviceTiers ?? [];
-  // An explicit user choice wins. Otherwise show the tier app-server reports
-  // for this thread — falling straight through to the catalog default would
-  // claim "Standard" for a thread already carrying a paid tier, which the
-  // composer leaves in force because it omits an untouched `serviceTier`.
-  const activeTierId =
-    serviceTierOverride !== undefined
-      ? serviceTierOverride
-      : (observedTier ?? activeModel?.defaultServiceTier ?? null);
+  // Lifecycle responses seed this local value. No passive read or complete
+  // notification stream exists for service tiers, so unsupported values stay absent.
+  const activeTierId = resolveServiceTier(
+    serviceTierOverride === null ? 'default' : serviceTierOverride ?? observedTier,
+    activeModel,
+  );
   const activeTier = serviceTiers.find((tier) => tier.id === activeTierId);
 
   // Nothing to choose between when the model advertises no tiers, and an
@@ -56,7 +55,7 @@ export function ServiceTierSelector() {
         >
           <Zap className="h-3.5 w-3.5" />
           <span className="hidden sm:inline max-w-[90px] truncate">
-            {activeTier ? catalogCopy(activeTier.name) : t('Standard')}
+            {activeTier ? catalogCopy(activeTier.name) : activeTierId === 'default' ? t('Standard') : t('Speed')}
           </span>
           <ChevronDown className="h-3 w-3 opacity-50" />
         </Button>
@@ -71,7 +70,7 @@ export function ServiceTierSelector() {
           {t('Speed')}
         </div>
         <OptionRow
-          active={activeTierId === null}
+          active={activeTierId === 'default'}
           badge={
             activeModel?.defaultServiceTier === null ? t('default') : undefined
           }

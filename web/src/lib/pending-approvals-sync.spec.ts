@@ -24,6 +24,7 @@ function holdRead() {
 
 function request(id: string, threadId = 't', kind = 'approval'): PendingServerRequestDto {
   return {
+    instanceId: `${threadId}:${id}:initial`, presentation: null, negativeOnlyReason: null,
     generation: 1, requestId: id, threadId, turnId: 'turn', itemId: id,
     method: kind === 'approval' ? 'item/commandExecution/requestApproval' : 'item/tool/requestUserInput',
     params: { threadId, turnId: 'turn', itemId: id, command: 'pwd',
@@ -79,7 +80,7 @@ describe('pending request recovery', () => {
   it('restores missed requests but retains an early resolved notification', async () => {
     const finish = holdRead();
     const sync = syncPendingApprovals();
-    retirePendingRequest({ threadId: 't', requestId: 'resolved', generation: 1 });
+    retirePendingRequest({ threadId: 't', requestId: 'resolved', instanceId: request('resolved').instanceId, generation: 1 });
     finish([request('missed'), request('resolved')]);
     await sync;
     expect(status('missed')).toBe('pending');
@@ -126,30 +127,43 @@ describe('pending request recovery', () => {
   });
 });
 
-it.each(['approval', 'userInput'])('recovery replaces a reused id from another generation (%s)', async (kind) => {
+it.each(['approval', 'userInput'])('recovery replaces a reused id even when the backend generation repeats (%s)', async (kind) => {
   const previous = request('r', 't', kind);
   add(previous);
-  useTimelineStore.getState().resolveApprovalByRequestIdForThread('t', 'r', 1);
-  read.mockResolvedValueOnce(reply([{ ...previous, generation: 2 }]));
+  useTimelineStore.getState().resolveApprovalByRequestIdForThread('t', 'r', 1, previous.instanceId);
+  read.mockResolvedValueOnce(reply([{ ...previous, instanceId: 'replacement-instance' }]));
   await syncPendingApprovals();
   expect(status('r')).toBe('pending');
-  retirePendingRequest({ threadId: 't', requestId: 'r', generation: 1 });
+  retirePendingRequest({ threadId: 't', requestId: 'r', generation: 1, instanceId: previous.instanceId });
   expect(status('r')).toBe('pending');
 });
 
 it('does not replace a newer live generation with an older in-flight snapshot', async () => {
   const finish = holdRead();
   const sync = syncPendingApprovals();
-  add({ ...request('r'), generation: 2 });
+  add({ ...request('r'), generation: 2, instanceId: 'replacement-instance' });
   finish([request('r')]);
   await sync;
   expect(useTimelineStore.getState().getThreadRuntime('t')?.approvals.r.generation).toBe(2);
 });
 
+it('restores submitted decisions without reopening them on a stale pending replay', async () => {
+  const row = request('r');
+  add(row);
+  read.mockResolvedValueOnce(reply([{ ...row, status: 'submitted' }]));
+  await syncPendingApprovals(['t']);
+  expect(status('r')).toBe('submitted');
+  read.mockResolvedValueOnce(reply([row]));
+  await syncPendingApprovals(['t']);
+  expect(status('r')).toBe('submitted');
+  retirePendingRequest({ threadId: 't', requestId: 'r', generation: 1, instanceId: row.instanceId, status: 'resolved' });
+  expect(status('r')).toBe('resolved');
+});
+
 it('does not erase a local decision when globally retired', () => {
   add(request('r'));
   useTimelineStore.getState().resolveApprovalForThread('t', 'r', 'declined');
-  retirePendingRequest({ threadId: 't', requestId: 'r', generation: 1 });
+  retirePendingRequest({ threadId: 't', requestId: 'r', generation: 1, instanceId: request('r').instanceId });
   expect(status('r')).toBe('declined');
 });
 

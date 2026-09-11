@@ -14,6 +14,7 @@ import { MessageVersionSwitcher } from './message-version-switcher';
 import { TurnBlock } from './turn-block';
 import { UserMessageBubble } from './user-message-bubble';
 import { TurnFailureCard } from './turn-failure-card';
+import { StoredInteractionCard } from './turn-items/interaction-card';
 
 /** Renders a single timeline entry (user message, system message, or turn block). */
 export function TimelineEntryRow({
@@ -110,6 +111,7 @@ export function TimelineEntryRow({
   if (entry.kind === 'turnFailure') {
     return <TurnFailureCard failure={entry.failure} />;
   }
+  if (entry.kind === 'interaction') return <StoredInteractionCard requestId={entry.requestId} instanceId={entry.instanceId} />;
 
   return <TurnBlock entry={entry} />;
 }

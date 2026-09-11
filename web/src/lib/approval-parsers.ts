@@ -7,7 +7,7 @@ import type {
   RequestedFileSystemAccess,
   RequestedPermissions,
 } from '@/types/approval';
-import type { PendingServerRequestDto } from '@/generated/api';
+import type { PendingServerRequestDto, InteractionPresentationDto } from '@/generated/api';
 import type { FileChangeEntry } from '@/types/timeline';
 import { normalizeFileChanges } from '@/lib/thread-item-normalizer';
 
@@ -151,6 +151,9 @@ export function parseNetworkApprovalContext(
 }
 
 interface ApprovalParserInput {
+  instanceId?: string;
+  presentation?: InteractionPresentationDto | null;
+  negativeOnlyReason?: string | null;
   requestId: number | string;
   method: string;
   params: Record<string, unknown>;
@@ -212,6 +215,14 @@ export function parseApprovalRequest(
   const threadId = optionalString(params.threadId) ?? optionalString(input.threadId);
   const turnId = optionalString(params.turnId) ?? optionalString(input.turnId);
   const itemId = optionalString(params.itemId) ?? optionalString(input.itemId);
+  if (threadId && input.instanceId && input.presentation &&
+    ((input.method === 'item/permissions/requestApproval' && input.presentation.kind === 'permissions') ||
+      (input.method === 'mcpServer/elicitation/request' && input.presentation.kind === 'elicitation'))) {
+    return { requestId: input.requestId, instanceId: input.instanceId,
+      kind: input.presentation.kind, threadId, turnId, itemId: itemId ?? '',
+      generation: input.generation as number | undefined, status: 'pending',
+      presentation: input.presentation };
+  }
   if (!threadId || !turnId || !itemId) return null;
   const generation =
     typeof input.generation === 'number' ? input.generation : null;
@@ -224,6 +235,8 @@ export function parseApprovalRequest(
     const kind = params.kind === 'writeStdin' ? 'writeStdin' : 'command';
     return {
       requestId: input.requestId,
+      instanceId: input.instanceId,
+      negativeOnlyReason: input.negativeOnlyReason,
       kind,
       approvalId: optionalString(params.approvalId),
       threadId,
@@ -255,6 +268,7 @@ export function parseApprovalRequest(
   if (input.method === 'item/fileChange/requestApproval') {
     return {
       requestId: input.requestId,
+      instanceId: input.instanceId,
       kind: 'fileChange',
       threadId,
       turnId,
@@ -286,8 +300,11 @@ export function parseApprovalRequest(
 export function approvalFromPending(
   request: PendingServerRequestDto,
 ): ApprovalRequest | null {
-  if (request.status !== 'pending') return null;
-  return parseApprovalRequest({
+  if (request.status !== 'pending' && request.status !== 'submitted') return null;
+  const parsed = parseApprovalRequest({
+    instanceId: request.instanceId,
+    presentation: request.presentation,
+    negativeOnlyReason: request.negativeOnlyReason,
     requestId: request.requestId,
     method: request.method,
     params: request.params,
@@ -299,4 +316,5 @@ export function approvalFromPending(
     reviewSubject: request.reviewSubject,
     generation: request.generation,
   });
+  return parsed ? { ...parsed, status: request.status } : null;
 }
