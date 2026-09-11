@@ -79,13 +79,21 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 | `setLoading` | socket hook | turn/completed 时设 false |
 | `upsertTurnFailure` | socket / persistence hydration | 按 turnId 插入或合并结构化失败；稀疏终止通知不会清掉更早的丰富字段 |
 
-### 订阅清理
+### 订阅范围
+
+**房间只跟随正在看的转录。** 启动期那轮「列出全部已加载会话（最多 3 页 600 个）→ 逐个订阅 → 逐个 resume」已退休：它存在是为了回答两个问题——谁在跑、哪里等着人做决定——而这两个都不需要房间。前者来自会话列表自己的 `thread.status`（`conversation.overview.changed` 到达时刷新），后者走全局注意力投递。后台会话徽章以服务端行为准；只有仍在订阅的 runtime 才提供即时生命周期覆盖，离开房间后的旧 active/loading 不再把已完成会话显示为运行中。
+
+当前会话由路由的唯一打开入口负责；重连时的修复只遍历 `subscribedThreadIds`，收窄后通常只有一个。
+
+### 空闲清理
 
 `general.maxIdleSubscriptions` 默认 30（范围 5-200），由 Settings General tab 配置。`authenticated-layout` 通过 `GET /api/settings?category=general` 读取后写入 timeline-store，并每 5 分钟触发一次清理。
 
-清理只处理 safe idle runtime：非当前选中 thread、`loading=false`、无 `activeTurnId`、无 `pendingResolvedRequestIds` 缓冲、`threadStatus` 不是 `active`、无 pending approval、无 pending user-input。候选按 `lastActivityAt` 排序，超过 15 分钟未活动的 thread 在超过上限时优先被驱逐。
+它现在实质上是 **可安全回收的空闲 runtime 数量上限**而非所有 runtime 或订阅的硬上限：扫描 `threadsById` 里**全部**保留的 runtime，而不再只扫订阅集。全局注意力会为从未打开、也从未订阅的会话创建 runtime，只扫订阅集会让这些永远回收不到，在长会话里持续累积。
 
-每个被驱逐的 thread 会先从 `subscribedThreadIds` 和 `threadsById` 删除，再 emit `thread.unsubscribe` 离开后端 socket room；后端执行恢复 inventory 不受 room 成员资格影响。再次打开该 thread 时走现有 `setActiveThread` + `thread/resume` 恢复路径。
+清理只处理 safe idle runtime：非当前选中 thread、`loading=false`、`historyLoading=false`、无等待确认的 policy patch、无 `activeTurnId`、无 `pendingResolvedRequestIds` 缓冲、`threadStatus` 不是 `active`、无 pending approval、无 pending user-input。**后两条正是全局注意力安全的前提**——等着人做决定的会话不会被回收掉。候选按 `lastActivityAt` 排序，超过 15 分钟未活动的 thread 在超过上限时优先被驱逐。
+
+每个被驱逐的 thread 会先从 `subscribedThreadIds` 和 `threadsById` 删除，连接可用且原先在订阅集时 emit `thread.unsubscribe` 离开后端 socket room；后端执行恢复 inventory 不受 room 成员资格影响。再次打开该 thread 时走现有 `setActiveThread` + `thread/resume` 恢复路径。
 
 ### 打开线程的唯一入口 (use-thread-open)
 
@@ -101,7 +109,7 @@ Multi-thread 架构：`threadsById` 存储所有 thread 的独立运行时状态
 - **打开不覆盖实时状态**（`lib/timeline-reconcile.ts`）：订阅与 open 请求并发，刷新时通知可能先于响应写入时间线；旧实现整体替换会把它们抹掉，正是「刷新后运行中轮次一片空白」的第二个成因。现在按 **turn 分组**对账：一个 turn 会贡献多行（user 行、turn 行、failure 行），先按 turn 分组、组内按 kind 对账、每组整体落位一次；组内按 user → turn → failure 排列（这是页面结构顺序，不是重叠 item 的时间顺序）。锚定粒度与取值粒度必须一致——早先按 turnId 锚定却按 `kind:turnId` 取值，页面独有的行会被当成「该 turn 已表示」而整行丢失（刷新时用户自己的消息会消失），且尾随组会在锚点 turn 的**每一行**后重复发出（整个 turn 被复制并错位）。两侧共有的 turn 合并（item 按下述权威规则、`completed` 只前进、更细的 `itemsView` 胜出），仅一侧有的按最近共有锚点插入。**仅当两侧存在共有 turn 时才合并**；毫无重叠说明是两个断开的历史窗口，仍以服务端整体替换并采用其游标，避免把缺口悄悄缝合掉。
 - **活跃 turn 指针不由页面独断**：返回页没有 inProgress turn 不等于没有——它可能在请求期间才开始。只有当该页确实覆盖了本地已知的活跃 turn 并报告其已结束时才清空指针。
 - **迟到响应保护**：成功与失败回调都先检查运行时是否仍存在。store 的 setter 是 create-if-absent 的，删除进行中若有 in-flight 响应落地，不加保护会把已删会话的外壳重新建出来。
-- **后台恢复不写指针**：刷新/重连恢复会遍历所有已加载线程，若允许它们写活跃分支指针，每棵树会指向恢复顺序中的最后一个成员，正是该指针要解决的问题。这两条路径显式传 `recordActive: false`。
+- **后台恢复不写指针**：浏览器不再遍历全部已加载线程；重启后只恢复当前转录并传 `recordActive:false`，连接重连只读取，不 resume。后端执行 inventory 保持独立。
 - **fork 也只导航**：钉住的 0.153.2 fork 响应刻意请求 metadata-only。侧边栏不再从响应里的 `thread.turns` 或并行 auxiliary reads 自行 hydration；后端提交 provenance 后才返回，随后路由的 canonical opener 统一分页历史并读取继承后的 token usage / turn diff / turn error。
 - **降级只读同样分页**：正常 resume 失败后，路由并行读取 metadata 与最近 20 个 summary turns，两者都成功且路由仍指向目标 thread 时才应用；更早历史沿用同一个 `historyCursor` 与显式“加载更早的消息”入口。已有 live runtime 会被显式切换为 `readOnly`，避免只读快照仍保留可写模式。
 
@@ -113,9 +121,9 @@ Approval 与 user-input request 会为自己的 `turnId` 保留空 turn entry，
 
 **A 类：app-server 是权威。** thread item、turn 生命周期、安全策略、线程设置、observed 模型设置。实时通知与 REST 读取是**同一份服务端状态的两个视角**，谁新都有可能——T 时刻发出的读取带回 T 的状态，而 T+0.5 的通知可能先到达。这里必须显式比顺序：请求发出前捕获 `currentObservationSeq()` 作为基线，实时写入时用 `nextObservationSeq()` 盖戳，冲突时 `observedSeq > baselineSeq` 的一侧胜出。策略读取另有一套按发出顺序排序的序号（见 [thread-policy-recovery.md](thread-policy-recovery.md)）。
 
-**B 类：本项目自己的 SQLite，内容是实时通知的录音。** token usage、turn diff、turn error。`TokenUsageService` / `TurnDiffService` / `TurnErrorsService` 都是订阅 app-server 通知后落库；**app-server 不提供这三样的历史读取**，本地持久化的唯一理由就是实时流过去便再也取不到。既然录音是从同一条通知晚一跳写下的，它**不可能比实时新**，因此规则是「实时有就用实时的，DB 只填空、永不覆盖」，不需要任何序号。
+**B 类：本项目自己的 SQLite，内容是后端实时通知的录音。** token usage、turn diff、turn error 都由后端持久化。后端持续接收而浏览器会断线或离开房间，所以录音完全可能比浏览器缓存更新。token/diff 读取捕获请求发出时的 runtime 基线：仅当对应字段在读取期间没有变化时替换已有值；在途期间的实时观察仍然优先。不带基线的旧调用保持填空语义。错误记录继续做稀疏字段合并。这里使用已有不可变字段引用比较，没有新增序号或持久化快照。
 
-`hydrateTurnErrorsForThread` 一直按 B 类规则合并（`incoming ?? existing`）；`hydrateTokenUsageForThread` 与 `hydrateTurnDiffsForThread` 曾写成整表替换与直接覆盖，会把请求在途期间到达的实时值回退成更旧的录音，现已改为填空。**给 B 类数据加观测序号是错的**：那是 A 类的机制，既多余又意味着承认录音可能更新。
+所有异步回填必须校验 runtime 仍存在且读取所属 epoch 未被替换。删除和空闲驱逐会推进 epoch，并从在途 pending 读取中排除这些会话，防止重新打开后的新 runtime 被旧快照复活已答复卡片；普通传输修复只使旧 item 恢复失效，不使并行的有效 open 响应失效。
 
 ### Item 权威与恢复合并 (`lib/turn-item-merge.ts`)
 

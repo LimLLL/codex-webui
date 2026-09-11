@@ -207,5 +207,14 @@ server requests are excluded explicitly. Deletion suppression/replay includes
 the subject. Recovery reads fail with HTTP 409 while deletion intersects their
 scope so temporary suppression cannot become false resolution. Exact payloads,
 classification and client ordering rules are in
-[approval.md](approval.md#global-attention-contract). Browser integration remains
-separate from this backend delivery contract.
+[approval.md](approval.md#global-attention-contract).
+
+前端消费（`use-codex-socket.ts`）：`codex.serverRequest` 幂等摄入并按会话命名通知；
+`conversation.pending.resolved` 中性退休；`conversation.overview.changed` 走共享去抖失效刷新会话列表——
+这也是收窄订阅之后后台会话徽章依然鲜活的原因；`conversation.pending.changed` 合并触发全局幂等读取，
+在途期间又来提示则保留一次尾随读取，覆盖守卫释放与过期清扫这类没有单条请求事件的转换。
+房间只跟随正在看的转录，不再有启动期批量订阅。
+
+创建与恢复共用同一套通知决策，重复投递不重复提示；全局退休校验 generation，
+清除卡片及其可见/排队通知。兼容的房间内 `serverRequest` / `resolved` 没有 generation，
+不用于退休现代卡片。挂载、focus、connect 与 hint 共用同一个刷新入口，卸载时取消在途 pending 读取。

@@ -242,8 +242,8 @@ Mobile/Tablet (< lg):
 `@git-diff-view/react` + `@git-diff-view/shiki` 提供 GitHub 风格 diff 渲染：
 
 - **GitDiffPanel** (`turn-items/git-diff-panel.tsx`)：封装 DiffView，集中处理 Shiki 懒加载（模块级单例）、theme（从 `useThemeStore` 读取）、Unified/Split 切换、parse 失败 raw fallback（DiffRenderBoundary error boundary）。
-- **file-change-item**：completed 时展开区域用 GitDiffPanel（`showToolbar=false`，因卡片 header 已有文件名）；流式阶段保留 `<pre>` 原始渲染。
-- **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST。蓝色边框(pending) / 灰色(resolved)。
+- **file-change-item / file-change-set**：两种审批呈现共用完整 change-set renderer，逐文件显示路径、操作种类与 rename 目标。审批内联时优先展示 request-owned review subject，完整主体用 GitDiffPanel；未持有完整主体的普通 item 流式阶段保留 raw diff。
+- **user-input-card** (`turn-items/user-input-card.tsx`)：渲染 `item/tool/requestUserInput`（EXPERIMENTAL）。支持 radio（单选）/ checkbox（isOther+多选）/ text / password。提交通过 `pendingApprovalsRespond` REST，写入期间禁止重复提交，完成回调校验原 thread/generation。蓝色边框(pending) / 灰色(resolved)。
 
 ## 审批呈现
 
@@ -260,6 +260,8 @@ Mobile/Tablet (< lg):
 | 一个宿主多个请求 | 按 requestId 分段，各自独立作用域与操作 |
 | 无同轮宿主 | 保留自包含卡片（`approval-item.tsx`）；跨轮 stdin 回调即属此类 |
 | 已决议 | 收成紧凑状态条。**`resolved` 保持中性**——服务端在 turn 开始/结束/中断的生命周期清理中也会 resolve，不等于用户接受过 |
+
+文件审批在无同轮宿主时自绘完整 review subject；任何条目不可完整解析或集合为空时视为 unavailable。inline 与 standalone 均只保留 Decline/Cancel，不能用本地 item 替代缺失的请求主体。全局创建与读取共享通知决策，按 generation 退休并清掉可见或排队提示。
 
 关键约束：
 

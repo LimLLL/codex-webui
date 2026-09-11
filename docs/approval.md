@@ -200,8 +200,9 @@ and a replacement row that captures nothing drops the previous one rather than
 inheriting it. Both are synchronous, so no read interleaves before the hint.
 
 That capture depends on `item/started` reaching the backend ahead of the approval
-on the same wire, which is **observed rather than promised by the protocol**, so
-it is not what liveness rests on. A missing item is logged as an error and the
+on the same wire. The original probe did not establish that ordering; the
+shared arrival-counter assertion has not yet been rerun. Liveness therefore
+does not rely on it. A missing item is logged as an error and the
 request is published anyway with `reviewSubject: null` — never a fabricated
 empty subject and never a history fallback. Withholding it instead would leave
 app-server waiting on an answer no browser was ever offered.
@@ -280,6 +281,46 @@ generation. Generation is local to one backend lifetime, not a replay cursor.
 Use the same idempotent ingestion for live and recovered requests, preserve local
 answers/drafts, and let retirement defeat stale snapshots. Successful absence
 resolves only requests held before the read and unchanged since then; newer
-overlapping reads supersede older evidence. An error resolves nothing. The
-backend contract is available now; browser ingestion and notification decisions
-are separate integration work.
+overlapping reads supersede older evidence. An error resolves nothing.
+
+### Browser side
+
+Live delivery and recovery share `attention-ingestion.ts`: both approval and
+user-input identities include generation, replay preserves payloads, drafts and
+local decisions, and only a newly ingested background request creates a toast.
+Neutral retirement matches the generation and removes visible or queued toasts.
+An unknown retirement creates no runtime; it defeats stale rows only in reads
+already outstanding. Deletion and eviction also exclude that conversation from
+pre-discard reads, even if a new runtime exists when a stale response arrives.
+Scoped and overlapping-read coverage rules remain intact.
+
+File subjects use the item normalizer after validating the *whole* native change
+set. An empty set or any unrenderable entry becomes `reviewChanges: null`, never
+a partially rendered but approvable subset. `undefined` remains the non-file or
+legacy absence state. Standalone cards render all files; inline cards use the
+request's retained subject rather than substituting a cached item's changes.
+Paths, change kinds and rename destinations remain visible. Multiple request
+ids sharing a file item remain independently answerable. Both presentations
+withhold affirmative decisions for unavailable subjects, even if a host item
+has a diff. Decline and Cancel remain available.
+
+Decision controls disable repeated submission while a write is outstanding;
+callbacks remain bound to the original thread and generation. Backend CAS still
+decides which browser wins. Titles are best effort from runtime or cached
+collapsed overview pages; a thread-id fallback remains necessary when neither
+contains the conversation. Selecting another app surface is not viewing a
+transcript, even if its runtime remains selected.
+
+**Remaining identity limitation:** response writes address only `requestId`,
+not an expected generation or immutable request instance. A delayed response
+can therefore target a different request after id reuse. Generation also resets
+when the backend process restarts, so equal `(generation, requestId)` pairs are
+not globally unique across backend lifetimes. Browser guards cannot close these
+server-side races; a response precondition and identity spanning backend boots
+need an explicit backend contract revision before stronger guarantees are made.
+
+Frontend cards currently cover native command/writeStdin/file approvals and
+`item/tool/requestUserInput`. The backend's wider human classification also
+includes permission requests, MCP elicitations and legacy approvals; those still
+lack browser renderers and decision flows. Their forwarding is supported, but
+full browser support is not claimed.

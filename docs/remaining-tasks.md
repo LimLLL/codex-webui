@@ -261,7 +261,7 @@
 
 - [x] 触屏上的隐形控件：`opacity-0` 配 `group-hover:opacity-100` 的写法有 8 处，而 Tailwind v4 的 `hover:` / `group-hover:` 变体本身就编译在 `@media (hover: hover)` 内，触屏上那个 `opacity-0` 永远不会被抬起——控件不可见却仍可点中。改用 `@utility hover-reveal`（必须是 `@utility`：`index.css` 里未分层的 class 会压过整个 `@layer utilities`）。
 - [x] 移动端全高界面用视口单位：`100dvh` 不随 iOS 软键盘收缩（Safari 不实现 `interactive-widget`），部分内嵌浏览器的底部工具栏也不反映在任何视口测量里，输入框被压在下面。改为统一从 `--app-vh`（镜像 `visualViewport.height`）取高度，覆盖 `#root`、登录页、三个 integrations sheet 与移动端会话抽屉。同步跳过 `scale !== 1`，否则双指放大会把整个应用塌进放大区域。
-- [ ] 运行时控制台出现 `flushSync was called from inside a lifecycle method`（PR #20 验证移动端改动时观察到，与该 PR 的三项改动无关，未定位）。React 会放弃这次同步刷新改为异步提交，依赖同步布局读数的路径（虚拟列表测量、滚动定位）可能因此拿到过期几何。需找到调用点，优先怀疑在生命周期 / `useLayoutEffect` 内触发 store 更新的位置。
+- [x] `flushSync was called from inside a lifecycle method` **已定位，判定为上游行为，不做本地规避**。调用点不在本项目代码里：`@tanstack/react-virtual` 的 `onChange(sync)` 内部直接 `flushSync(rerender)`，而 `virtualizer.measureElement` 是作为 **ref callback** 传给每个 item 的，React 在 commit（layout）阶段调用它——测量导致可见区间变化时，同步刷新就发生在生命周期内。当时怀疑的「`useLayoutEffect` 内触发 store 更新」不是原因：`use-transcript-follow` 在 layout effect 里调的是 `scrollToOffset`，它只写 `scrollTop`，滚动事件是异步派发的。已确认 `3.14.11` 就是当前最新版，无可升级的修复。**不设 `useFlushSync: false`**：React 在发出该告警的场景下本就已经放弃同步刷新，关掉它只会额外影响真正的滚动事件路径——那里的同步提交正是防撕裂需要的。结论是告警噪音，几何风险仅限于 React 已经降级的那些提交。
 
 ### UI 与交互增强
 
@@ -376,7 +376,7 @@
 - [x] **重连恢复补齐两处缺口**。断线期间新开的轮次此前只恢复生命周期、不取内容，composer 显示在跑而该轮次渲染为空；现在被接管的活跃轮次先建立 turn 行，再一并取回 item 和提示词；即使读取头期间已有实时事件建立了行，也仍会补取缺失内容，同页普通旧历史不额外读取。审批只经 socket 送达，断线会同时丢掉两端：期间发起的不出现，期间在别的设备上被应答的不消失；现在重连按服务端的 pending 集合对账，启动路径与重连路径共用同一个 `syncPendingApprovals`。缺席仅解决请求发出前已有且未改变的 pending 卡片，已有决定不被旧快照重新打开；重叠读取按会话范围淘汰旧响应。
 - [x] **shell 轮次稳定性对照实测**（`pnpm probe turn-item-finality`）：0.153.2 上，同一 completed shell 轮次的完整 item 载荷在后续 shell 轮次和已加载线程的 `thread/resume` 后一致。比较完整载荷并要求成功读取和 resume，不再仅比较输出长度，也不外推为所有模型轮次永久不变。
 - [ ] **completed turn 永久缓存仍缺全面证据**：vendored README 的 `subAgentActivity` 条目描述了父轮次结束后追加 activity 的情况，shell 对照未覆盖；需实测模型/子代理迟到事件与 cold resume，再决定 item 查询缓存和重连失效策略。
-- [ ] **整个轮次在断线期间开始并结束时仍会遗漏**：恢复只接管活跃轮次；未知 completed 头不会生成转录，现有 older-history cursor 也到不了这段新历史。需要协调最近页刷新、转录合并及分页边界。
+- [x] **断线期间完整错过的轮次**：恢复显式读取降序 summary 页，最多 10 页，锚点取读取发出前的 turn 集合。按页内身份与顺序合并，包括两个已知 turn 中间的缺口；无交集时采用最近窗口与真实 cursor，不伪造连续性。新增 live 边界、跨页缺口和删除后迟到读取回归。不再断言永久 append-only。
 - [x] **pending 同步的挂载生命周期**：从启动 effect 抽取后一度丢掉了原来的 `cancelled` 检查，登出或卸载后的迟到响应仍会写入 store。`syncPendingApprovals` 增加可选 `AbortSignal`，请求前与应用前各校验一次；启动路径传入 effect 自己的 abort controller。重叠读取的相互淘汰解决不了这件事——它表达的是「另一次读取更新」，不是「这个调用方已经不在了」。
 - [ ] **过期策略的显示与发送行为待确认**：当前 last-known 说明仅在策略弹层里，闭合徽章和 Send 不因 stale 单独改变；是否强化提示或阻止发送属于产品取舍。
 - [ ] 探针每次运行使用独立目录并显式指定子进程 cwd，避免并发运行互相清空；定义有界的传输失败与清理行为。
@@ -386,7 +386,7 @@
 - [x] 共享的内存元数据读模型：完整发布、显式新鲜度、后端自有的外部变更发现；折叠先于分页的既有约束不变。
 - [x] 面向已认证连接的全局失效信号（overview / pending），覆盖已提交的取消与过期。
 - [x] 后端全局 attention：显式区分 human/machine 请求；完整文件变更集合在首次发布前关联，live 与 REST 均携带 reviewSubject；全局退休覆盖 CAS、取消和过期；删除范围内的 pending 读取返回 409 而非伪造缺席，无 DB 迁移。
-- [ ] 浏览器接入全局 attention：live/REST 幂等摄入、通知决策、generation 身份、完整 change-set 主体、全局退休及删除期间 409 保持原状态。
+- [x] 原生 command/writeStdin/file approval 与 user-input 的全局 attention：live/REST 共享幂等摄入与通知，generation 配对退休保留本地决定；完整主体严格校验，inline/standalone 均使用请求主体并在缺失时只给 Decline/Cancel；删除读取 409 保持原状态。
 - [x] 以执行义务而非 socket 成员资格作为重启恢复依据：进行中/被阻塞的 turn、活跃 goal、父会话先于子会话重新附着；所有浏览器断开后依然恢复；不重放任何提交。
 - [x] 钉住版本的元数据探针：字面量 name/preview 搜索、相对 cwd、排序、外部变更发现，以及「列出的父会话缺失」这一上游限制。
 - [x] 增量元数据的审查修复：实时 patch 跨分页存活、归档迁移使被跨越的走查作废、pending-listing 的紧急性收窄到单个会话且无后续 turn 也会过期、走查期间抬起的陈旧标记跨发布存活。
@@ -395,9 +395,18 @@
 - [x] 排序时效滞后确认为**有意取舍**（2026-09-10 裁决）。恢复即时排序需要在 turn 结束时对单个会话做针对性元数据读，且需先探针确认投递时上游 `updatedAt` 是否已推进。见 [conversation-recovery.md](conversation-recovery.md)。
 - [x] 崩溃/重新附着的原生行为探针（`codex_probe/restart-recovery.ts`）：崩溃发生在 turn 进行中，实测重新附着能恢复什么、不能恢复什么。
 - [ ] 未关联的执行活动保持保守：只有相关的终态证据或关闭/删除才退休它；不得用无关的历史完成事件去剪枝。
-- [ ] 前端刷新调度器与按需订阅，接入 [服务端契约](conversation-recovery.md)。
-- [ ] 重新生成前端 SDK 以覆盖 overview 新增的 `freshness` 字段。
+- [x] 前端刷新与按需订阅：overview 全局信号共用有界延迟失效，覆盖会话与分支查询；pending 共用可取消、含尾随读取的全局对账。页面加载由路由 opener 负责，重启只恢复正在看的转录，重连只读不 resume；三者共享历史/item/policy/auxiliary 修复。原 open applier 已有 policy 读取，现移除 wrapper 重复读取。选择与路由退出真正离开旧房间，订阅确认后补读连接前窗口；无启动期批量订阅。
+- [x] 重新生成前端 SDK 以覆盖 overview 新增的 `freshness` 字段，以及 pending 的 `reviewSubject` / `generation` 与 `{generation, requests}` 响应。
 - [ ] 归档范围契约：workspace 过滤后的 `memberThreadIds` 不包含其它工作区成员，后端却归档完整已知树；跨工作区成员的前端清理/离开当前会话仍需权威的归档范围或逐线程事件对齐，不能从未显示的旧缓存推断。
 - [ ] 用真实模型的 turn、goal 与受控子会话验证崩溃/重新附着结果；重新附着本身不承诺执行续跑。
 - [x] 二次交叉审查：归档完成使用请求发出时的成员集合，避免视图切换/刷新后遗漏隐藏分支；四组独立冷恢复探针区分 null 与实际分页、读取附着前 goal、验证模型请求确实已挂起；旧 turn 终态不删除新 goal 续跑 turn。
 - [ ] **策略变更需另行产品裁决**：活跃 goal 冷恢复后可由原生调度器开启新 turn，与已批准的活跃 goal 恢复保持一致。当前不改恢复策略、不加开关；如果要禁止无人值守续跑，需先确认产品语义与原生能力，不能假定已有"仅附着不执行"模式。
+- [ ] **`account/chatgptAuthTokens/refresh` 无人应答**（既有问题，本轮未修，但已排查清楚可达性，不再是"不知道会不会发生"）。`ServerRequest` 里三个机器面方法的实际风险并不相同：
+  - `attestation/generate` — **不可达**。`initialize` 声明的是 `requestAttestation: false`，app-server 不会发。
+  - `item/tool/call` — 需要客户端注册自己的工具，本项目没有注册，**当前不可达**；一旦将来注册就立刻变成可达。
+  - `account/chatgptAuthTokens/refresh` — **可达**。`account/` 支持 `chatgptAuthTokens` 登录方式，令牌由客户端提供，因此续期也要由客户端答复。现在没有任何应答者，该请求会一直挂着；症状是这种登录方式的凭据到期后静默失效，而不是报错。
+  修之前需要先确认：谁持有可刷新的凭据（WebUI 自己并不持有 refresh token，很可能只能把失败如实回报而非真正续期），以及答不上来时应该回什么错误形状。这不是一行能补的应答器，属于账号能力范围，需独立排期。
+
+- [ ] **审批响应身份契约**：当前响应仅带 requestId，缺 expected generation / request instance 前置条件；旧写入可在 id 重用后命中新请求。backend 重启也会重置 generation，不能把这个二元组当跨进程唯一身份。需独立后端契约修订，浏览器无法单独保证。
+- [ ] **其余人机请求的浏览器交互**：permission、MCP elicitation、legacy approvals 已全局转发，但仍缺浏览器 renderer/decision flow，不能把后端支持写成浏览器全覆盖。
+- [ ] **重连时 observed service tier 的被动读取**：现有只读元数据与 policy/mode endpoint 不返回 serviceTier；重新打开会话可由 resume 恢复，但只断 socket 时仍可能保留旧显示。需独立只读契约，不得为刷新显示而盲目冷 resume 活跃 goal。

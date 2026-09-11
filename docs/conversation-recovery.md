@@ -171,9 +171,66 @@ item absent from history despite other readable items, so opening history cannot
 replace this context. Retention follows live items and pending requests only;
 backend startup already expires old requests and needs no subject migration.
 See [approval.md](approval.md#global-attention-contract) for exact payloads and
-browser reconciliation obligations. Browser ingestion and subscription cleanup
-are separate work; receiving attention never acquires a transcript subscription
-or triggers session reattachment.
+browser reconciliation obligations. Receiving attention never acquires a
+transcript subscription or triggers session reattachment.
+
+## Browser restore
+
+The route owns explicit opening (including page load), navigation and read-only
+fallback. `applyOpenResponse` already refreshed policy before this integration;
+it now shares item/lifecycle repair with `thread-restore.ts` and re-reads the
+backend's recorded token usage, turn diffs and errors. There is no remaining
+bulk page-load restoration call and no unused `pageLoad` reason.
+
+| Entry | Reads |
+|---|---|
+| Route open / page load | Resume/open snapshot, policy, item/lifecycle repair, recorded auxiliary data, goal and collaboration-mode queries |
+| `appServerRestart` | For viewed threads the backend successfully reattached: `recordActive:false` resume/open, then the same applier |
+| `reconnect` | Passive metadata/history/items, policy and recorded auxiliary data; refresh viewed goal/mode queries; no upstream resume |
+
+Initial HTTP hydration and Socket.IO joining are independent. The transcript
+paints from the open response immediately; an acknowledged join is followed by
+a fresh history read to cover events missed before joining. The first socket
+connection also repairs a view already hydrated over HTTP. Recovery iterations
+supersede older item reads, while reopen/deletion/restart invalidate the whole
+conversation incarnation. A transport repair does not discard a valid open
+response merely because both overlap. Policy confirmation retains its separate
+direct fresh read and is never routed through generic query deduplication.
+
+Recent history uses explicit descending summary pages, bounded to ten pages of
+20 turns. The anchor is captured before the read; a newly received live turn
+cannot hide a gap behind it. Returned turns are merged by identity and page
+order, including interior holes, and terminal lifecycle never moves backwards.
+Full item top-ups are eager for unfinished turns and the newest page; older
+summary rows use the existing on-demand reader. If no pre-read anchor is found,
+the latest bounded window and its actual cursor replace the disconnected old
+window, preserving observations made during the read. Absence never proves that a turn finished or was deleted. Forks and branch
+switches retain separate thread identities. This is not a claim that history is
+permanently append-only or that several pages form an atomic snapshot. The
+pinned protocol rejects rollback for paginated threads; pruning retained rows
+for other external history rewrites requires explicit deletion evidence.
+
+Rooms follow the viewed transcript: selection leaves the old room, route exit
+leaves the current one, and reconnect rejoins only the final desired set rather
+than buffered navigation history. Backend restart inventory ids do not create
+background browser runtimes. Background running badges come from the overview;
+stale cached lifecycle cannot override it. Global attention supplies requests
+without joining a transcript room or reattaching upstream execution.
+
+Both global hints, mount, focus and reconnect feed shared refresh ownership.
+Overview invalidation coalesces for at most 300 ms and includes flat lists and
+branch projections; only active queries refetch. An already-running initial
+query is allowed to settle before issuing the post-hint read. Per-notification
+list invalidations are removed. Pending reads coalesce bursts and allow one
+trailing read when a hint arrives during a read. They are unscoped and aborted
+when the authenticated socket effect unmounts; a deletion-guard 409 retains
+state without an error toast. Other read failures remain visible.
+
+The configured idle limit bounds safe eviction candidates, not total retained
+runtimes. Selected, running, pending-interaction, history-loading and pending
+policy-confirmation state remains protected. Cached running state may remain
+conservatively retained after leaving its room. Eviction invalidates outstanding
+reads, so a late response cannot recreate the discarded runtime.
 
 ## Execution inventory and child replacement
 
