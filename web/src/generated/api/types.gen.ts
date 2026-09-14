@@ -567,6 +567,7 @@ export type CreditsSnapshotDto = {
 export type RateLimitSnapshotDto = {
     limitId: string | null;
     limitName: string | null;
+    normalModelSlug: string | null;
     primary: RateLimitWindowDto | null;
     secondary: RateLimitWindowDto | null;
     credits: CreditsSnapshotDto | null;
@@ -578,6 +579,7 @@ export type AccountRateLimitsResponseDto = {
     rateLimitsByLimitId: {
         [key: string]: RateLimitSnapshotDto;
     } | null;
+    ordinaryUsageAllowed: boolean | null;
 };
 
 export type AppBrandingDto = {
@@ -1196,6 +1198,7 @@ export type ThreadDto = {
     source: 'cli' | 'vscode' | 'exec' | 'appServer' | 'unknown' | SessionSourceCustomDto | SessionSourceSubAgentDto;
     agentNickname: string | null;
     agentRole: string | null;
+    originator: string | null;
     gitInfo: GitInfoDto | null;
     name: string | null;
     turns: Array<TurnDto>;

@@ -15,6 +15,7 @@ export type McpAuthStatus =
 export interface McpServerStatus {
   name: string;
   tools: Record<string, unknown>;
+  toolsError: string | null;
   resources: unknown[];
   resourceTemplates: unknown[];
   authStatus: McpAuthStatus;
