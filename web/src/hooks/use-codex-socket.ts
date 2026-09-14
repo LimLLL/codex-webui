@@ -11,6 +11,7 @@ import { handleNotification, type NotificationContext } from './notification-han
 import { parseApprovalRequest } from '@/lib/approval-parsers';
 import { invalidateThreadEpoch } from '@/lib/thread-recovery-epoch';
 import { restoreThread } from '@/lib/thread-restore';
+import { recoverThreadAfterReconnect } from '@/lib/thread-recovery';
 import { forgetThreadPolicy } from '@/stores/thread-policy-store';
 import { userInputFromSocket } from '@/lib/user-input-parsers';
 import { syncPendingApprovals, retirePendingRequest } from '@/lib/pending-approvals-sync';
@@ -121,9 +122,9 @@ export function useCodexSocket(enabled = true) {
         const threadId = ctx.threadId;
         if (threadId) useTimelineStore.getState().appendPlanDeltaForThread(threadId, turnId, itemId, delta);
       },
-      setLoading: (loading) => {
+      setTurnStartPending: (loading) => {
         const threadId = ctx.threadId;
-        if (threadId) useTimelineStore.getState().setLoadingForThread(threadId, loading);
+        if (threadId) useTimelineStore.getState().setTurnStartPendingForThread(threadId, loading);
       },
       expandReasoning: (itemId) => {
         const threadId = ctx.threadId;
@@ -248,6 +249,7 @@ export function useCodexSocket(enabled = true) {
         // Includes visible completed owners omitted from autoResumeCompleted's
         // target list. Their item reads are passive and need no writer resume.
         void queryClient.invalidateQueries();
+        if (store.threadId && store.getThreadRuntime(store.threadId)) void recoverThreadAfterReconnect(store.threadId);
       }
 
       if (event.type !== 'autoResumeCompleted') return;

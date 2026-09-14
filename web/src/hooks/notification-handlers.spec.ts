@@ -132,3 +132,86 @@ describe('thread/goal notifications', () => {
     expect(ctx.queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A send is a distinct fact from a running turn, and it has to be released on
+ * weaker evidence. `turnStartPending` exists only between a submission and the
+ * lifecycle that claims it, so the events that end a thread's work must clear
+ * it even when this client never learned which turn the submission became —
+ * otherwise Send stays disabled with nothing left to re-enable it.
+ */
+describe('releasing an outstanding submission', () => {
+  function submittingCtx() {
+    const ctx = makeCtx();
+    ctx.threadId = 'visible';
+    ctx.setTurnStartPending = vi.fn();
+    ctx.clearActiveTurn = vi.fn();
+    ctx.updateCurrentTurn = vi.fn();
+    ctx.upsertTurnFailure = vi.fn();
+    ctx.getActiveTurnId = () => null;
+    ctx.isTurnTerminal = () => false;
+    return ctx;
+  }
+
+  it('clears it when a turn completes that this client never saw start', () => {
+    const ctx = submittingCtx();
+    handleNotification(
+      'turn/completed',
+      { threadId: 'visible', turn: { id: 'unseen', status: 'completed' } },
+      ctx,
+    );
+    expect(ctx.setTurnStartPending).toHaveBeenCalledWith(false);
+  });
+
+  it('clears it on a fatal thread error that names no turn', () => {
+    const ctx = submittingCtx();
+    handleNotification(
+      'error',
+      {
+        threadId: 'visible',
+        willRetry: false,
+        error: { message: 'start refused' },
+      },
+      ctx,
+    );
+    expect(ctx.setTurnStartPending).toHaveBeenCalledWith(false);
+    // The active pointer still needs turn-level evidence: an unnamed failure
+    // must not declare some other running turn finished.
+    expect(ctx.clearActiveTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not release a newer submission on replay of an already-terminal turn', () => {
+    for (const method of ['turn/completed', 'error']) {
+      const ctx = submittingCtx();
+      ctx.isTurnTerminal = () => true;
+      handleNotification(method, method === 'error'
+        ? { threadId: 'visible', turnId: 'old', willRetry: false, error: { message: 'old failure' } }
+        : { threadId: 'visible', turn: { id: 'old', status: 'completed' } }, ctx);
+      expect(ctx.setTurnStartPending).not.toHaveBeenCalled();
+      expect(ctx.clearActiveTurn).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps a known active turn busy after a fatal unnamed error', () => {
+    const ctx = submittingCtx(); ctx.getActiveTurnId = () => 'running';
+    handleNotification('error', { threadId: 'visible', willRetry: false, error: { message: 'submission failed' } }, ctx);
+    expect(ctx.setTurnStartPending).toHaveBeenCalledWith(false);
+    expect(ctx.clearActiveTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps it pending across a retryable error', () => {
+    const ctx = submittingCtx();
+    handleNotification(
+      'error',
+      {
+        threadId: 'visible',
+        willRetry: true,
+        error: { message: 'rate limited' },
+      },
+      ctx,
+    );
+    // The turn is still going to happen; releasing Send here would let a
+    // second copy of the same prompt be submitted during the retry.
+    expect(ctx.setTurnStartPending).not.toHaveBeenCalled();
+  });
+});

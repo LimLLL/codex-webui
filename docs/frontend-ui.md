@@ -53,17 +53,12 @@ Code-based route tree: `routes/router.tsx`。Auth guard via pathless layout rout
 
 基础设施: `useBreakpoint` hook (`useSyncExternalStore` + `matchMedia`) → `'mobile' | 'tablet' | 'desktop'`。`layout-store` (Zustand persist) 管理 sidebar open/collapse 状态。
 
-| 断点 | 范围 | Sidebar 行为 | Session Panel | FilesPanel |
-|------|------|-------------|---------------|------------|
-| Desktop | ≥ 1024px (lg) | inline `w-64`，可手动折叠 | ResizablePanelGroup 垂直分割 | inline `w-56` tree + viewer |
-| Tablet | 640–1023px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
-| Mobile | < 640px | Sheet overlay（左侧滑出） | Sheet overlay（底部，视口高度的 70%） | tree 在 Sheet，viewer 全宽 |
+| 断点 | 范围 | Sidebar 行为 | 会话工作区 | FilesPanel |
+|------|------|-------------|------------|------------|
+| Desktop | ≥ 1024px | 原有 inline sidebar | 固定 Conversation + 单行溢出 tabs；右侧可调宽树栏 | 原有 tree + viewer |
+| Tablet / Mobile | < 1024px | 原有左侧 Sheet | Conversation 常驻操作 + view chooser；Explorer 从右侧 Sheet 打开 | tree Sheet + 全宽 viewer |
 
-- 路由变化与进入 desktop 断点时自动关闭 Sheet
-- ChatHeader: < lg 显示 hamburger 按钮打开 sidebar Sheet；desktop 折叠时显示 PanelLeftOpen 展开按钮
-- ChatHeader: < lg 隐藏 Diagnostics/Language/Theme 按钮，放入 `...` overflow Popover（Settings 保留在 sidebar 导航中）
-- sidebar 底部: desktop 显示 PanelLeftClose 折叠按钮（`hidden lg:block`）
-- SessionPanel 内 file tree `w-52`: < lg 通过 `hidden lg:flex` 隐藏
+断点只切换导航控件和文件树呈现，同一个内容树保持身份。会话 tab 不可关闭；待审批与运行标记不抢占当前文件/终端的焦点。详见 [workspace-tabs.md](workspace-tabs.md)。
 
 ### 视口高度：`--app-vh` 而非视口单位
 
@@ -89,91 +84,24 @@ Tailwind v4 的 `hover:` / `group-hover:` 变体**本身就编译在 `@media (ho
 
 ## 布局
 
-```
-Desktop (≥ lg):
-┌──────────────────────────────────────────────────┐
-│ Sidebar (w-64)             │ Main Area (flex-1)   │
-│ ┌────────────────────────┐ │                      │
-│ │ Files/Terminal/         │ │  ChatHeader           │
-│ │ Integrations/Settings  │ │  [CodexStatusBanner]  │
-│ ├────────────────────────┤ │  <Outlet />           │
-│ │ Archive (top)          │ │  ┌────────────────┐   │
-│ │ Workspace groups       │ │  │ Session Panel   │   │
-│ │   (collapsible, ≤5)    │ │  └────────────────┘   │
-│ │ Context menu per thread│ │  ChatInput             │
-│ ├────────────────────────┤ │   [Model][Policy][Term] │
-│ │ [Collapse sidebar]     │ │                      │
-│ └────────────────────────┘ │                      │
-└──────────────────────────────────────────────────┘
+会话中心列为紧凑标题、固定高度的不换行 tabs、全尺寸活动内容。Conversation、每个文件、每个终端互为平级。右侧全高 Explorer 可折叠，拖动时只预览分隔线，释放后一次提交宽度。左侧全局导航保持原样。
 
-Mobile/Tablet (< lg):
-┌──────────────────────────────┐
-│ [☰] ChatHeader [badges] [⋮] │
-│ [CodexStatusBanner]          │
-│ <Outlet /> (full width)      │
-│ ChatInput                    │
-└──────────────────────────────┘
-  + Sidebar = Sheet (left)
-  + Session Panel = Sheet (bottom)
-  + File tree = Sheet (left, in /files route)
-```
+`thread-view.tsx` 只按 conversation identity 重建工作区。Conversation frame 的树位置不随 tab、断点或 explorer 改变；inactive 表面使用 `visibility` 和 `inert`，仍保留布局盒。终端实例由 authenticated layout 的 `TerminalHost` 保留，文件文本由独立 document owner 保留。完整生命周期见 [workspace-tabs.md](workspace-tabs.md)。
 
 ## 虚拟化时间线
 
-`ChatTimeline` 使用 `@tanstack/react-virtual`：
-- `useVirtualizer` + `measureElement` 动态高度
-- `overscan: 5`，TurnBlock 使用 plain `div`（不用 Framer Motion 避免 recycling 重动画）
+`ChatTimeline` 负责时间线呈现，`VirtualTranscript` 与 `TranscriptScrollOwner` 共同负责几何：
 
-### 跟随与「回到最新」：末端锚定负责保持，追加由本项目补一次定位
+- 固定行 key、`overscan: 5`、逐行 `measureElement`，直接 DOM 更新由 adapter 独占行位置和 extent 高度。
+- `anchorTo: 'end'` 的 key anchor 只在条目数或首尾 key 改变时保留视口顶部所在 item 的偏移；viewport resize 不触发它。独立的行重测补偿在向后滚动时跳过，不能承担同一行内的语义锚定。
+- **`followOnAppend` 保持关闭**。它调用 indexed scroll target，最多追逐五秒。应用只发固定 offset；无新 keep-anchor 定时循环。
+- `TranscriptSnapshot` 在 React mutation 前捕获语义点。hook 后的 layout effect 等 adapter 效果运行，再同步测量、修正 residual；ResizeObserver 路径从测量回调排一个 microtask，在同步批次后执行相同修正。
+- bookmark 是 row/item/block/text-offset 及其相对视口坐标，不引用可能被高亮替换的 DOM node。触摸/滚动/显式导航取消旧修正；找不到目标时保守退回有效边界或当前 offset。
+- follow intent 与 DOM 末端距离分开。隐藏时保留意图，不逐次跟随追加，也不触发历史预取；重新激活时检查宽度、测量目标范围，落位后再展示。
+- gate、加载历史按钮、回到最新按钮都在 scroller 外。scroller 内只有虚拟 extent 和实测行，顶部 padding 恒定；底部 padding 与 scroll-padding 同源于 composer wrapper 的真实测量。
+- 内容列与 composer 共用居中 max-width；Explorer 或窗口宽度改变仍可能引起换行，需要上述几何恢复。
 
-| 选项 | 作用 |
-|---|---|
-| `anchorTo: 'end'` | 以末端为保持不变的边。前插历史时保住阅读位置；流式回合在**折叠线以下**长高时不移动视口；本就在末端时，行长高会同步补偿 `scrollTop`——**跟随流式输出靠的就是这一条** |
-| `scrollEndThreshold` | 「算作在末端」的容差（`AT_END_THRESHOLD_PX`），与「回到最新」按钮的显隐共用同一个阈值，避免按钮在仍在跟随时出现 |
-| `getItemKey` | 稳定行标识，见下 |
-| `paddingStart` | 「加载更早」控件的预留空间，**常量**，见下 |
-
-这一段曾经是手写的：一个 `shouldAutoScroll` 布尔量 + 每次 timeline 变化都 `scrollToIndex(last)`（追加时 `smooth`，其余 `auto`）。它**在原理上就不可能正确**——虚拟列表自己也会写 `scrollTop`，组件里的布尔量只能拦住*我们自己*的滚动：
-
-- `scrollToIndex` 留下的 `scrollState` 会在 rAF 里持续重算目标、最长 5 秒（`MAX_RECONCILE_MS`）。流式期间最后一行每帧变高 ⇒ 目标每帧变化 ⇒ 每帧强制回底。
-- 行高变化时的补偿。旧版判据是「行起点在折叠线之上」，而一整个回合就是一行，读到中段时下方新增的输出照样触发。
-
-升级到 `virtual-core` 3.17.9 后，**第二条**由上游修掉：重新测量的判据改成「整行都在折叠线之上**且**不在向上滚动」（对应上游 issue #1218）；注意首次测量走的是另一条分支，仍按「行起点在折叠线之上」补偿——估算到实测的差值必须修正，与滚动方向无关。
-
-**第一条上游没有修，而且不是只有我们自己会踩**：`scrollToEnd()` 在 3.17.9 里仍然委托给 `scrollToIndex(count-1, {align:'end'})`，而 `followOnAppend` 的实现正是调 `scrollToEnd()`（`index.js:507`）。也就是说只要开着 `followOnAppend`，**库自己**会在每次追加条目时种下那个追 5 秒的 indexed target——把自己的调用点全改成 `scrollToOffset` 并不能证明「没有东西在追」。
-
-所以 `followOnAppend` **不开**，追加时的定位由 `use-transcript-follow.ts` 用一次 `scrollToOffset` 完成：
-
-- 只在**条目数增长**时写。流式 delta 只是把某一行改长，`anchorTo: 'end'` 的尺寸补偿已经把末端摁住了，不需要额外的写入。
-- 判据读的是 `atEndRef` 而不是 `atEnd` state。依赖 state 会让「读者从上方滚回阈值内」这件事本身触发 effect，把剩下那几十像素一把抽走——那是同一个拽人 bug 的小尺度版本，还会跟缓慢上滑打架。
-- 必须补这一次的原因：新行以 `estimateSize`（80px）进场，此时距末端正好等于阈值，尺寸补偿只会把这个差值**维持住**而不会消除；不补则下一次追加距离变成 160px、超出阈值，跟随就此彻底断掉。
-
-所有主动滚动都走 `scrollToOffset`——它的 `scrollState.index` 为 `null`，`reconcileScroll` 比对固定的 `lastTargetOffset`，不重算目标，因此既不会追着长高的会话跑，也不会跟已经滚开的读者抢。**不要改回 `scrollToEnd()`，也不要打开 `followOnAppend`。**
-
-已验证的版本组合是 `@tanstack/react-virtual` **3.14.11** / `virtual-core` **3.17.9**；降级会静默退化，同系列其它补丁版未逐一验证。
-
-「回到最新」浮动按钮定位在滚动容器**之外**（`bottom: bottomInset + 12`），所以它的出现不会改变 scroll height。显隐状态由 `use-transcript-follow.ts` 从**实时 DOM 几何**算出，而不是 `virtualizer.isAtEnd()`：React 的 `onScroll` prop 早于虚拟列表注册在同一元素上的监听器执行，此时库缓存的 offset 还是上一次的，用它会让按钮停在错误状态直到下一次滚动。
-
-两个「末端距离」必须同坐标系才能共用一个阈值：库用 `getTotalSize()`，DOM 用 `scrollHeight`。因此滚动容器内**不允许存在虚拟列表没测量的元素**——「加载更早」控件被放进 `paddingStart` 预留的空间里正是为此，否则两者会差出一个控件高度，按钮会在库仍在跟随时就冒出来。
-
-**`paddingStart` 用常量 `HISTORY_HEADER_PX`，且不论控件是否显示都一直预留。** `paddingStart` 会平移每一行的 `start`，但它的变化**不在**库会做位置还原的那类变化里（还原只认条目数与首尾 key 的变化）。所以按实测高度动态设置会让内容在读者眼皮底下跳两次：控件首次测量时跳一次，游标耗尽移除控件时再跳一次。代价是顶部恒定留出一条空白，换来的是这类位移被机制性消除。控件高度因此必须锁死在这个常量内（`whitespace-nowrap` + 固定高度容器）。
-
-按钮**只有一种状态**。issue #18-3 要的是「用户主动上滑后显示查看新消息入口」——这颗按钮本身就是那个入口，只要脱离末端就在。曾经在它上面叠过第二态（判断这期间有没有新输出，有就换文案 + 加圆点），已移除：
-
-- 想判准就必须知道一次 timeline 替换的**来源**。store 的标志位给不出来：`prependHistoryForThread` 在同一次更新里既换掉 timeline 又把 `historyLoading` 清成 false；「有正在运行的 turn」也不行，子 agent 的活动允许在 `turn/completed` 之后才落地。
-- 退而求其次的结构性判断（新旧 timeline 末端对齐倒着比引用）能认出前插，但认不出「用户点开一个旧回合、items 被就地补齐」——那和「输出落进那个回合」完全同形，会误报成有新内容。
-- 要做到零误报得在 store 里加一个只由实时通知递增的计数器（约十处 mutator）。issue 没有要求区分这两态，为一个装饰性状态引入这条数据通路不划算。
-
-发送/steer **不靠推断**：composer 通过 `onSubmitted` 显式上报「真的派发出去了」的发送（被守卫吞掉的提交、被 slash 命令消费的提交都不报），路由计数后经 `scrollToLatestSignal` 传下来恢复跟随。
-
-打开会话的落位是按导航记下的一次性请求：加载态渲染的是**另一个**没有 scroller 的容器，虚拟列表在没有 scroll element 时会跳过末端相关判断，事后挂上也不会补算，所以要等内容与 scroller 都就位后兑现一次。落位与追加跟随同在一个 `useLayoutEffect` 里，顺序因此是确定的——写在各自的 effect 里，会话切换与它请求的落位之间就会有执行顺序依赖。
-
-**两处不发滚动事件的几何变化必须单独接住**，否则跟随者会被静默甩出阈值、而「回到最新」按钮还不出现：
-
-- composer 长高改变了滚动范围但没有移动 `scrollTop`（`bottomInset` 变化时处理）。
-- 视口、分栏或在流式布局中的 composer 会改变**滚动容器自身的高度**，`bottomInset` 完全不变（`ResizeObserver` 只看容器 border-box 高度，内容长高不管——那是虚拟列表的事，在这里响应等于每个 delta 都重新粘底）。
-
-两者都是同一处理：本来在末端就重新粘底，否则只刷新一下报告出来的距离。
+冷开只接受完整 first page（20 turns），先 reconcile live events、测量目标范围、恢复 bookmark/末端再撤 gate；暖内容刷新失败保留内容并显示错误。浏览器测试配置见 [workspace-tabs.md](workspace-tabs.md)。
 
 ### 更早历史：接近顶部自动加载
 
@@ -305,8 +233,8 @@ ChatInput 拆分为三个文件：`chat-input.tsx`（编排）、`use-chat-attac
 - 气泡是中性色（`bg-muted` + `border-border/60`），不用强调色：用户自己写的消息是最不需要被吸引注意的内容，而一块高饱和色是整套中性色板里唯一的高彩度面，左右对齐已经足够表明发送方
 - `userComponents`：样式覆盖一律用 `foreground` / `border` 表达（`bg-foreground/10` 等），不写死白色或黑色——气泡底色随主题反转，写死白色只在它还是蓝色实色块时成立
 - mention link → 渲染为可点击 inline badge（FileText 图标 + 半透明背景 + hover 高亮）
-- 点击 @mention badge → dispatch `codex-webui:open-file` 自定义事件 → `ThreadView` 打开 session panel + 对应文件 tab
-- 图片附件也渲染为可点击 badge（ImageIcon 图标 + 文件名），点击同样打开 session panel 预览
+- 点击 @mention badge → dispatch `codex-webui:open-file` 自定义事件 → `ThreadView` 打开对应文件 tab
+- 图片附件也渲染为可点击 badge（ImageIcon 图标 + 文件名），点击同样在文件 tab 中预览
 - 路径解析：`normalizeMessageMentions` 将绝对路径转回相对路径显示；mention 插件中相对路径用 `threadCwd` 重建绝对路径
 - 气泡容器加 `overflow-hidden` 防止长内容溢出圆角边界
 
@@ -318,16 +246,7 @@ ChatInput 拆分为三个文件：`chat-input.tsx`（编排）、`use-chat-attac
 
 #### 浮层定位
 
-`thread-view` 用 `relative` 包裹时间线 + composer，composer 为 `absolute inset-x-0 bottom-0`。它**必须**浮在时间线上方，否则：玻璃背后是纯背景色，透不出任何内容；且时间线在 composer 上沿被硬切，滚动中的头像/气泡会被一条实色边裁断。
-
-时间线需要为浮层预留末端空间，由 `ChatTimeline` 的 `bottomInset` 传入 virtualizer 的 `paddingEnd` + `scrollPaddingEnd`（前者让最后一条能滚过 composer，后者让自动滚动停在 composer 之上；只给其一都不对）。空态容器用 `paddingBottom` 等效处理。
-
-composer 高度随 textarea、附件 chips、goal 行、只读横幅变化，无法静态推算，由 `ChatInput` 内 `ResizeObserver` 测 `offsetHeight`（含 padding 带，那也是遮挡区）上报给路由。
-
-例外：桌面端 session 面板打开时 composer 回到流式布局（`shrink-0`，`bottomInset=0`）——此时浮层会压在终端/文件面板底部而不是对话上。
-- Textarea 无边框透明，`max-h-40 overflow-y-auto` 长文本滚动
-- 按钮行在 textarea 下方，永远不会被文本遮挡
-- `min-h-20` 默认较高输入区
+Composer 无条件浮动在 Conversation 内，`ConversationFrame` 用 ResizeObserver 测量包括覆盖 padding/safe area 的外包装。该值同时供 `paddingEnd` 与 `scrollPaddingEnd` 使用，textarea 增长、附件、语言和宽度变化都走同一路径；tab 隐藏不把测量替换为零。Composer 和正文共享居中的 max-width。
 
 ## Markdown 渲染
 

@@ -1,10 +1,13 @@
+import { useSurfaceOpen } from "@/hooks/use-surface-open"
+
 import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+  const visibility = useSurfaceOpen(props)
+  return <PopoverPrimitive.Root data-slot="popover" {...props} {...visibility} />
 }
 
 function PopoverTrigger({

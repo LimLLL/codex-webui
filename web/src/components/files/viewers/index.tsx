@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { settingsListSettings } from '@/generated/api/sdk.gen';
 import { getFileCategory } from '@/lib/file-category';
-import { useFilesStore } from '@/stores/files-store';
+import { useWorkspaceStore } from '@/stores/workspace-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { ArchiveViewer } from './archive-viewer';
 import { AudioViewer } from './audio-viewer';
@@ -26,10 +26,12 @@ import { XlsxViewer } from './xlsx-viewer';
 interface Props {
   filePath: string;
   source?: PreviewSource;
+  viewId?: string;
+  active?: boolean;
 }
 
 /** Dispatches to the appropriate viewer component based on file extension. */
-export function FileContentViewer({ filePath, source }: Props) {
+export function FileContentViewer({ filePath, source, viewId = `preview:${filePath}`, active = true }: Props) {
   const { t } = useTranslation();
   const previewSource = source ?? filePreviewSource(filePath);
   const category = getFileCategory(filePath);
@@ -40,15 +42,15 @@ export function FileContentViewer({ filePath, source }: Props) {
   // viewer is chosen, keeps a competing file-type table out of the markdown
   // parser — and a line meant for a PDF must not drift into a page number.
   const honoursLine = category === 'code' && previewSource.kind === 'file';
-  const pendingLine = useFilesStore((s) => s.pendingLine);
-  const clearPendingLine = useFilesStore((s) => s.clearPendingLine);
+  const reveal = useWorkspaceStore((s) => s.fileViews[viewId]?.reveal);
+  const consumeReveal = useWorkspaceStore((s) => s.consumeReveal);
   useEffect(() => {
-    if (pendingLine === null || honoursLine) return;
+    if (!reveal || honoursLine || !active) return;
     // Consumed rather than left standing, so it cannot latch onto whichever
     // text file the user opens next.
-    clearPendingLine();
+    consumeReveal(viewId, reveal.request);
     showSnackbar(t('Line navigation is not available for this file type'), 'info');
-  }, [pendingLine, honoursLine, clearPendingLine, t]);
+  }, [reveal, honoursLine, consumeReveal, viewId, active, t]);
 
   if ((category === 'docx' || category === 'xlsx' || category === 'pptx') && canUseOnlyOffice) {
     return <OnlyOfficeViewer filePath={filePath} />;
@@ -82,7 +84,7 @@ export function FileContentViewer({ filePath, source }: Props) {
     case 'code':
     default:
       return previewSource.kind === 'file' ? (
-        <CodeViewer filePath={filePath} />
+        <CodeViewer filePath={filePath} viewId={viewId} active={active} />
       ) : (
         <ReadOnlyCodeViewer source={previewSource} />
       );

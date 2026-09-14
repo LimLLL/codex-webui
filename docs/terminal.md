@@ -5,7 +5,7 @@
 基于 node-pty + xterm.js 的 Web Terminal，通过 Socket.IO 双向传输。终端现在按 context 管理：
 
 - `global`：全局终端路由 `/terminal`
-- `thread:<threadId>`：会话底部 SessionPanel 终端
+- `thread:<threadId>`：会话平级 terminal tabs
 
 同一 context 下支持多个终端 tab。多个已认证浏览器 socket 可以 attach 到同一个终端，共享输出、输入和 resize。关闭面板或页面跳转只 detach；显式关闭终端 tab 才会 kill PTY。
 
@@ -89,7 +89,7 @@
 
 - `contexts`: `global` / `thread:<threadId>` → terminal tab 顺序和 active terminal
 - `terminals`: terminalId → metadata
-- 使用 `sessionStorage` 持久化 tab metadata，不持久化 output
+- metadata 与 tab descriptors 只存内存；reload 重置本地 views，不自动新建 session
 - socket ack actions: list/open/reconnect/detach/close/rename/download/resize
 
 ### TerminalPane
@@ -99,7 +99,7 @@
 - 绑定一个 terminalId，不在 mount 时创建 PTY
 - mount/reconnect 时调用 `terminal.reconnect` 并写入 serialized VT state
 - unmount 时 `terminal.detach`
-- hidden tab 保持 mounted，避免切换文件 tab 时 detach
+- 由 authenticated layout 的 TerminalHost 保持实例；切换 tab/会话/独立 route 不 detach。inactive 或目标区域无可用尺寸时不 fit 或上报尺寸，不沿用前一个目标的矩形；重连回调也受相同守卫约束
 - xterm scrollback 使用后端 config
 
 ### TerminalTabs
@@ -115,14 +115,14 @@
 文件: `web/src/components/terminal/terminal-status-bar.tsx`
 
 - 终端下方独立状态栏，显示 shell · cwd、attached count、rename/download 按钮
-- 在 TerminalWorkspace（全局终端）和 SessionPanel（会话终端）中均渲染于终端 pane 下方
+- 在 TerminalWorkspace（独立路由）和会话 terminal tab中均渲染于终端 pane 下方
 
 ### 使用场景
 
 | 场景 | 入口 | context |
 |------|------|---------|
 | 全局终端 | Sidebar "Terminal" 按钮 | `global` |
-| 会话终端 | ChatInput "Terminal" 按钮 → SessionPanel | `thread:<threadId>` |
+| 会话终端 | 工作区 New terminal 操作 → 平级 tab | `thread:<threadId>` |
 
 ## 生命周期
 
@@ -130,12 +130,14 @@
 |------|------|
 | 切换 terminal tab | pane 仍 mounted，不 detach |
 | 切换到 file tab | terminal panes hidden 但仍 attached |
-| 关闭 SessionPanel | pane unmount，发送 `terminal.detach` |
+| 切换会话/独立 route | 实例继续 attached，隐藏时不报告尺寸 |
 | 页面刷新/断线 | socket disconnect 自动 detach |
 | 最后一个 socket detach | 启动 grace timer |
 | grace 内重新 attach | 取消 timer，返回 serialized VT state |
 | grace 过期 | kill PTY，dispose headless |
-| 关闭 terminal tab | 立即 kill PTY 并广播关闭 |
+| 显式关闭 terminal tab | 确认共享关闭后 kill PTY；成功才移除本地 view，失败保留 |
+| 自然退出/其他客户端关闭 | 保留本地输出和 view，不自动关闭 tab |
+| 删除本地 tab 集合/清理 owner | detach 本浏览器，不调用 destructive close |
 | 后端重启 | 所有 PTY/headless 丢失，前端标记 expired 并提示新建 |
 
 ## 依赖

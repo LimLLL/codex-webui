@@ -217,7 +217,7 @@ it.each(['navigation', 'refetch', 'confirmation refetch'] as const)(
 it('ignores stale active lifecycle cached for an unsubscribed branch member', async () => {
   const root = row('root', ['root', 'branch']);
   transport.overview.mockResolvedValue({ data: { data: [root], nextCursor: null } });
-  useTimelineStore.getState().setLoadingForThread('branch', true);
+  useTimelineStore.getState().setTurnStartPendingForThread('branch', true);
   useTimelineStore.getState().setThreadStatusForThread('branch', { type: 'active', activeFlags: ['waitingOnApproval'] });
   useTimelineStore.setState({ subscribedThreadIds: new Set() });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

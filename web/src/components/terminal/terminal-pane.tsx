@@ -1,5 +1,11 @@
 /** xterm.js pane bound to one shared backend terminal session. */
-import { useCallback, useEffect, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
@@ -17,38 +23,72 @@ interface Props {
   className?: string;
 }
 
-export function TerminalPane({ contextKey, terminalId, active, className }: Props) {
+export function TerminalPane({
+  contextKey,
+  terminalId,
+  active,
+  className,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const attachedRef = useRef(false);
+  const activeRef = useRef(active);
+  useLayoutEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   const config = useTerminalStore((s) => s.config);
+  const [scrollback] = useState(config.scrollback);
   const reconnectTerminal = useTerminalStore((s) => s.reconnectTerminal);
   const detachTerminal = useTerminalStore((s) => s.detachTerminal);
   const resizeTerminal = useTerminalStore((s) => s.resizeTerminal);
 
+  /** Only the visibly presented attachment may change the shared PTY dimensions. */
+  const fitVisible = useCallback(() => {
+    const element = containerRef.current;
+    const term = termRef.current;
+    if (
+      !activeRef.current ||
+      !element?.clientWidth ||
+      !element.clientHeight ||
+      !term
+    )
+      return;
+    fitRef.current?.fit();
+    if (attachedRef.current)
+      resizeTerminal(contextKey, terminalId, term.cols, term.rows);
+  }, [contextKey, resizeTerminal, terminalId]);
+
+  /** Replays the attachment snapshot, then reports geometry only if this view is still active. */
   const attach = useCallback(async () => {
     const term = termRef.current;
     if (!term) return;
     const response = await reconnectTerminal(contextKey, terminalId);
+    if (termRef.current !== term) return;
     if (!response) {
       attachedRef.current = false;
-      term.reset();
-      term.write(`\r\n[${i18n.t('Terminal no longer exists. Create a new terminal.')}]\r\n`);
+      term.write(
+        `\r\n[${i18n.t('Terminal no longer exists. Create a new terminal.')}]\r\n`,
+      );
       return;
     }
     term.reset();
     if (response.state) term.write(response.state);
     if (response.terminal.status === 'exited') {
-      const code = response.terminal.exitCode ?? response.terminal.signal ?? '?';
-      term.write(`\r\n[${i18n.t('Process exited with code {{code}}', { code })}]\r\n`);
+      const code =
+        response.terminal.exitCode ?? response.terminal.signal ?? '?';
+      term.write(
+        `\r\n[${i18n.t('Process exited with code {{code}}', { code })}]\r\n`,
+      );
       attachedRef.current = false;
     } else {
       attachedRef.current = true;
     }
-    requestAnimationFrame(() => fitRef.current?.fit());
-  }, [contextKey, reconnectTerminal, terminalId]);
+    requestAnimationFrame(() => {
+      if (termRef.current === term) fitVisible();
+    });
+  }, [contextKey, reconnectTerminal, terminalId, fitVisible]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -57,7 +97,7 @@ export function TerminalPane({ contextKey, terminalId, active, className }: Prop
       cursorBlink: true,
       fontSize: 13,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      scrollback: config.scrollback,
+      scrollback,
       theme: {
         background: '#0a0a0a',
         foreground: '#e4e4e7',
@@ -106,7 +146,7 @@ export function TerminalPane({ contextKey, terminalId, active, className }: Prop
     void attach();
 
     const inputDisposable = term.onData((data) => {
-      if (!attachedRef.current) return;
+      if (!attachedRef.current || !activeRef.current) return;
       socket.emit('terminal.input', { contextKey, terminalId, data });
     });
 
@@ -121,32 +161,26 @@ export function TerminalPane({ contextKey, terminalId, active, className }: Prop
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [attach, config.scrollback, contextKey, detachTerminal, terminalId]);
+  }, [attach, scrollback, contextKey, detachTerminal, terminalId]);
 
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => {
-      if (!active) return;
-      fitRef.current?.fit();
-      const term = termRef.current;
-      if (term) resizeTerminal(contextKey, terminalId, term.cols, term.rows);
-    });
+    const observer = new ResizeObserver(fitVisible);
     observer.observe(element);
-    if (active) {
-      requestAnimationFrame(() => {
-        fitRef.current?.fit();
-        const term = termRef.current;
-        if (term) resizeTerminal(contextKey, terminalId, term.cols, term.rows);
-      });
-    }
-    return () => observer.disconnect();
-  }, [active, contextKey, resizeTerminal, terminalId]);
+    const frame = active ? requestAnimationFrame(fitVisible) : null;
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [active, fitVisible]);
 
   return (
     <div
       ref={containerRef}
-      className={cn('h-full w-full', !active && 'hidden', className)}
+      className={cn('h-full w-full', className)}
+      style={{ visibility: active ? 'visible' : 'hidden' }}
+      inert={!active}
     />
   );
 }

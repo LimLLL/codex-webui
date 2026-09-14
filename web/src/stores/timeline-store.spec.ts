@@ -62,12 +62,12 @@ describe('recovery lifecycle ordering', () => {
     ]);
     const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
     expect(runtime.activeTurnId).toBeNull();
-    expect(runtime.loading).toBe(false);
+    expect(runtime.turnStartPending).toBe(false);
   });
 });
 
 describe('history dedup', () => {
-  it('does not re-insert a turn that only ever produced a user entry', () => {
+  it('keeps one user prompt and its lifecycle when a user-only turn is paged again', () => {
     const store = useTimelineStore.getState();
     const turn = userOnlyTurn('turn-1', 'hello');
 
@@ -79,14 +79,14 @@ describe('history dedup', () => {
     });
 
     const seeded = useTimelineStore.getState().getThreadRuntime('t1')!;
-    expect(seeded.timeline).toHaveLength(1);
-    expect(seeded.timeline[0].kind).toBe('user');
+    expect(seeded.timeline.filter((entry) => entry.kind === 'user')).toHaveLength(1);
+    expect(seeded.timeline.filter((entry) => entry.kind === 'turn')).toHaveLength(1);
 
     // The cursor page is inclusive of its anchor, so a retry re-delivers it.
     useTimelineStore.getState().prependHistoryForThread('t1', [turn], null);
 
     const after = useTimelineStore.getState().getThreadRuntime('t1')!;
-    expect(after.timeline).toHaveLength(1);
+    expect(after.timeline).toEqual(seeded.timeline);
   });
 
   it('still prepends genuinely older turns', () => {
@@ -106,6 +106,7 @@ describe('history dedup', () => {
       .getState()
       .getThreadRuntime('t1')!.timeline;
     expect(timeline.map((entry) => entry.turnId)).toEqual([
+      'turn-1',
       'turn-1',
       'turn-2',
       'turn-2',
@@ -338,8 +339,8 @@ function summaryTurn(id: string, text: string): TurnDto {
   } as unknown as TurnDto;
 }
 
-describe('on-demand turn item top-up', () => {
-  it('keeps an entry for a summary turn so the top-up has somewhere to land', () => {
+describe('explicit full-item recovery', () => {
+  it('retains lifecycle for sparse history until explicit recovery supplies the items', () => {
     useTimelineStore.getState().hydrateOpenedThread({
       threadId: 't1',
       turnsNewestFirst: [summaryTurn('turn-1', 'hi')],
@@ -524,7 +525,7 @@ describe('markThreadDeletedRemotely', () => {
     });
     // An in-flight turn must not survive the lockout as a spinner that never ends.
     useTimelineStore.getState().setActiveTurnIdForThread('t1', 'turn-1');
-    useTimelineStore.getState().setLoadingForThread('t1', true);
+    useTimelineStore.getState().setTurnStartPendingForThread('t1', true);
 
     useTimelineStore
       .getState()
@@ -532,7 +533,7 @@ describe('markThreadDeletedRemotely', () => {
 
     const runtime = useTimelineStore.getState().getThreadRuntime('t1')!;
     expect(runtime.deletedRemotely).toBe(true);
-    expect(runtime.loading).toBe(false);
+    expect(runtime.turnStartPending).toBe(false);
     expect(runtime.activeTurnId).toBeNull();
     // A dangling cursor would offer to page a conversation that is gone.
     expect(runtime.historyCursor).toBeNull();
@@ -942,7 +943,7 @@ describe('failures hydrated before their turn was paged in', () => {
     expect(failures).toHaveLength(1);
     const at = timeline.indexOf(failures[0]);
     expect(timeline[at - 1]).toMatchObject({
-      kind: 'user',
+      kind: 'turn',
       turnId: 'turn-old',
     });
     expect(timeline[at + 1]).toMatchObject({

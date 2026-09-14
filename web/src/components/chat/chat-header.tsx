@@ -145,7 +145,7 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
 
   return (
     <>
-      <header className="glass-bar sticky top-0 z-10 flex items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3 lg:px-6">
+      <header className="glass-bar sticky top-0 z-10 flex items-center h-11 shrink-0 gap-2 px-3 sm:gap-3 sm:px-4">
         {/* Hamburger (mobile/tablet) or expand toggle (desktop collapsed) */}
         {!isDesktop ? (
           <Button
@@ -200,7 +200,7 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
                 <>
                   <button
                     type="button"
-                    className="truncate text-left text-lg font-semibold tracking-tight hover:underline"
+                    className="truncate text-left text-sm font-semibold tracking-tight hover:underline"
                     onClick={startEditing}
                     title={threadTitle ?? threadId}
                   >

@@ -1,5 +1,6 @@
 "use client"
 
+import { useSurfaceOpen } from "@/hooks/use-surface-open"
 import * as React from "react"
 import { Dialog as SheetPrimitive } from "radix-ui"
 
@@ -8,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />
+  const activity = useSurfaceOpen(props)
+  return <SheetPrimitive.Root data-slot="sheet" {...props} {...activity} />
 }
 
 function SheetTrigger({

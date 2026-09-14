@@ -189,7 +189,7 @@ bulk page-load restoration call and no unused `pageLoad` reason.
 | `reconnect` | Passive metadata/history/items, policy and recorded auxiliary data; refresh viewed goal/mode queries; no upstream resume |
 
 Initial HTTP hydration and Socket.IO joining are independent. The transcript
-paints from the open response immediately; an acknowledged join is followed by
+keeps a cold loading gate until full history and target geometry are settled; an acknowledged join is followed by
 a fresh history read to cover events missed before joining. The first socket
 connection also repairs a view already hydrated over HTTP. Recovery iterations
 supersede older item reads, while reopen/deletion/restart invalidate the whole
@@ -197,12 +197,16 @@ conversation incarnation. A transport repair does not discard a valid open
 response merely because both overlap. Policy confirmation retains its separate
 direct fresh read and is never routed through generic query deduplication.
 
-Recent history uses explicit descending summary pages, bounded to ten pages of
+Recent history uses explicit descending full pages, bounded to ten pages of
 20 turns. The anchor is captured before the read; a newly received live turn
 cannot hide a gap behind it. Returned turns are merged by identity and page
 order, including interior holes, and terminal lifecycle never moves backwards.
-Full item top-ups are eager for unfinished turns and the newest page; older
-summary rows use the existing on-demand reader. If no pre-read anchor is found,
+Full pages repair their covered turns without per-row top-ups. Turns outside
+that window are read individually only on evidence: an unterminated item or the
+turn believed to be running blocks the reveal, while a merely-older completed
+turn is swept for missed late items under a cap that neither blocks the open nor
+grows with the reader's paging — see [workspace-tabs.md](workspace-tabs.md).
+If no pre-read anchor is found,
 the latest bounded window and its actual cursor replace the disconnected old
 window, preserving observations made during the read. Absence never proves that a turn finished or was deleted. Forks and branch
 switches retain separate thread identities. This is not a claim that history is

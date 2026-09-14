@@ -273,6 +273,7 @@ export class ThreadsController {
     // caller that forgets the parameter still behaves like a user-initiated open.
     return this.threadsService.resumeThread(threadId, {
       recordActive: recordActive !== 'false',
+      fullHistory: true,
     });
   }
 

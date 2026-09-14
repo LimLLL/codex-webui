@@ -21,9 +21,6 @@ vi.mock('@/generated/api/sdk.gen', () => ({
 vi.mock('./git-diff-panel', () => ({
   GitDiffPanel: ({ diff }: { diff: string }) => <pre>{diff}</pre>,
 }));
-vi.mock('@/hooks/use-turn-items-topup', () => ({
-  useTurnItemsTopUp: () => undefined,
-}));
 const initial = useTimelineStore.getState();
 const respond = vi.mocked(pendingApprovalsRespond);
 const approval = (

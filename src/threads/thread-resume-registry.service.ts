@@ -70,13 +70,23 @@ export class ThreadResumeRegistryService {
   ensureOpened(
     threadId: string,
     initialTurnsLimit = 20,
+    itemsView: 'summary' | 'full' = 'summary',
   ): Promise<ThreadOpenResponseDto> {
     const key = this.key(threadId);
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // A foreground reader may join a background ownership acquisition. The
+      // resume stays deduplicated; its cheap page cannot satisfy a full view.
+      return existing.then((response) =>
+        itemsView === 'full' &&
+        response.initialTurnsPage.data.some((turn) => turn.itemsView !== 'full')
+          ? this.readAsOpen(threadId, initialTurnsLimit, itemsView)
+          : response,
+      );
+    }
 
     if (this.resumed.has(key)) {
-      return this.readAsOpen(threadId, initialTurnsLimit);
+      return this.readAsOpen(threadId, initialTurnsLimit, itemsView);
     }
 
     const callEpoch = this.bumpEpoch(key);
@@ -84,7 +94,7 @@ export class ThreadResumeRegistryService {
       .resumeMetadataFirst({
         threadId,
         initialTurnsLimit,
-        itemsView: 'summary',
+        itemsView,
       })
       .then((response) => {
         if (this.key(threadId) !== key || this.epoch.get(key) !== callEpoch) {
@@ -98,7 +108,12 @@ export class ThreadResumeRegistryService {
       })
       .catch(async (err: Error) => {
         if (isThreadOwnershipConflictError(err)) {
-          return this.readOnlyOpen(threadId, initialTurnsLimit, err.message);
+          return this.readOnlyOpen(
+            threadId,
+            initialTurnsLimit,
+            err.message,
+            itemsView,
+          );
         }
         if (this.epoch.get(key) === callEpoch) {
           this.failed.set(key, err.message);
@@ -182,6 +197,7 @@ export class ThreadResumeRegistryService {
   private async readAsOpen(
     threadId: string,
     initialTurnsLimit: number,
+    itemsView: 'summary' | 'full',
   ): Promise<ThreadOpenResponseDto> {
     const key = this.key(threadId);
     const epoch = this.epoch.get(key);
@@ -193,7 +209,7 @@ export class ThreadResumeRegistryService {
     }
     const [metadata, initialTurnsPage] = await Promise.all([
       this.history.readThreadMetadata(threadId),
-      this.readInitialTurnsPage(threadId, initialTurnsLimit),
+      this.readInitialTurnsPage(threadId, initialTurnsLimit, itemsView),
     ]);
     if (this.key(threadId) !== key || this.epoch.get(key) !== epoch) {
       throw new Error('Thread open was superseded while reading history');
@@ -211,10 +227,11 @@ export class ThreadResumeRegistryService {
     threadId: string,
     initialTurnsLimit: number,
     message: string,
+    itemsView: 'summary' | 'full',
   ): Promise<ThreadOpenResponseDto> {
     const [metadata, initialTurnsPage] = await Promise.all([
       this.history.readThreadMetadata(threadId),
-      this.readInitialTurnsPage(threadId, initialTurnsLimit),
+      this.readInitialTurnsPage(threadId, initialTurnsLimit, itemsView),
     ]);
     return {
       mode: 'readOnly',
@@ -298,12 +315,13 @@ export class ThreadResumeRegistryService {
   private async readInitialTurnsPage(
     threadId: string,
     initialTurnsLimit: number,
+    itemsView: 'summary' | 'full',
   ): Promise<TurnsPage> {
     return this.history.listTurns({
       threadId,
       limit: initialTurnsLimit,
       sortDirection: 'desc',
-      itemsView: 'summary',
+      itemsView,
     });
   }
 

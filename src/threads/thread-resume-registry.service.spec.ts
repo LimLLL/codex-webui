@@ -65,6 +65,28 @@ describe('ThreadResumeRegistryService', () => {
     });
   });
 
+  it('requests full items for a foreground browser open at the ordinary page size', async () => {
+    mockHistory.resumeMetadataFirst.mockResolvedValue({
+      thread: makeThread('foreground'),
+      cwd: '/tmp',
+      model: 'gpt-5',
+      modelProvider: 'openai',
+      serviceTier: null,
+      instructionSources: [],
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: { mode: 'read-only' },
+      reasoningEffort: null,
+      initialTurnsPage: { data: [], nextCursor: null, backwardsCursor: null },
+    });
+    await service.ensureOpened('foreground', 20, 'full');
+    expect(mockHistory.resumeMetadataFirst).toHaveBeenCalledExactlyOnceWith({
+      threadId: 'foreground',
+      initialTurnsLimit: 20,
+      itemsView: 'full',
+    });
+  });
+
   it('dedupes concurrent ownership attempts per thread generation', async () => {
     mockHistory.resumeMetadataFirst.mockResolvedValue({
       thread: makeThread('t1'),

@@ -2,8 +2,16 @@
  * Chat message input orchestrator.
  * Delegates attachment management to useChatAttachments and @ mention to useChatMention.
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Send, Square, TerminalSquare } from 'lucide-react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { Send, Square } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -16,6 +24,11 @@ import {
   threadsSteerTurnMutation,
 } from '@/generated/api/@tanstack/react-query.gen';
 import { cn } from '@/lib/utils';
+import {
+  captureTurnSubmission,
+  acceptTurnSubmission,
+  rejectTurnSubmission,
+} from '@/lib/turn-submission';
 import { getApiErrorMessage } from '@/lib/api-error';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useModelStore } from '@/stores/model-store';
@@ -45,12 +58,10 @@ export interface ChatInputHandle {
 }
 
 interface Props {
-  panelOpen: boolean;
-  onTogglePanel: () => void;
-  /** Positioning classes, so the route decides whether the composer floats. */
+  /** Hidden conversation tabs retain the composer but close transient UI. */
+  active?: boolean;
+  /** Additional presentation classes; the conversation frame always floats the composer. */
   className?: string;
-  /** Reports the composer's rendered height whenever it changes. */
-  onHeightChange?: (height: number) => void;
   /**
    * Fired only when a send or steer is actually accepted and dispatched.
    *
@@ -64,13 +75,15 @@ interface Props {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
-  { panelOpen, onTogglePanel, className, onHeightChange, onSubmitted },
+  { active = true, className, onSubmitted },
   ref,
 ) {
   const footerRef = useRef<HTMLElement>(null);
   const [value, setValue] = useState('');
   const valueRef = useRef(value);
-  useEffect(() => { valueRef.current = value; }, [value]);
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { t } = useTranslation();
@@ -79,7 +92,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const threadMode = useTimelineStore((s) => s.threadMode);
   const readOnlyReason = useTimelineStore((s) => s.readOnlyReason);
   const deletedRemotely = useTimelineStore((s) => s.deletedRemotely);
-  const loading = useTimelineStore((s) => s.loading);
+  const turnStartPending = useTimelineStore((s) => s.turnStartPending);
+  const openState = useTimelineStore((s) => s.openState);
+  const hydrated = useTimelineStore((s) => s.hydrated);
   const activeTurnId = useTimelineStore((s) => s.activeTurnId);
   const hasPendingApproval = useTimelineStore((s) => {
     const flagBlocked =
@@ -103,6 +118,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // is a sibling of the send button, and it is the send that must wait.
   const policySettling = useThreadSecurityPolicy(threadId).isSettling;
   const hasActiveTurn = Boolean(threadId && activeTurnId && !readOnly);
+  const cannotStart =
+    turnStartPending ||
+    Boolean(activeTurnId) ||
+    openState !== 'ready' ||
+    !hydrated;
   const canSteer = hasActiveTurn && !hasPendingApproval;
 
   // ── Attachment hook ──────────────────────────────────────
@@ -171,16 +191,22 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   });
 
   // ── Imperative handle ────────────────────────────────────
-  useImperativeHandle(ref, () => ({
-    setInput: setValue,
-    addFileAttachment: addFileMention,
-  }), [addFileMention]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      setInput: setValue,
+      addFileAttachment: addFileMention,
+    }),
+    [addFileMention],
+  );
 
   // ── Turn mutations ───────────────────────────────────────
   const queryClient = useQueryClient();
   const startTurn = useMutation({
     ...threadsStartTurnMutation(),
-    onSuccess: (_res, vars) => {
+    onMutate: (variables) => captureTurnSubmission(variables.path.threadId),
+    onSuccess: (response, vars, submission) => {
+      if (submission) acceptTurnSubmission(submission, response);
       // A branch version has no turn until its edited message is sent; the
       // backend binds it during turn/start, so the cached tree is now stale and
       // the version switcher would stay hidden until it happened to refetch.
@@ -193,20 +219,43 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         queryKey: threadsListBranchTreesQueryKey(),
       });
     },
-    onError: (err) => addSystemError(getApiErrorMessage(err)),
+    onError: (error, _variables, submission) => {
+      if (submission) rejectTurnSubmission(submission, error);
+    },
   });
   const steer = useMutation({
     ...threadsSteerTurnMutation(),
-    onError: (err) => addSystemError(getApiErrorMessage(err)),
+    onError: (err, variables) => {
+      const store = useTimelineStore.getState();
+      if (!store.getThreadRuntime(variables.path.threadId)) return;
+      store.addSystemErrorForThread(
+        variables.path.threadId,
+        getApiErrorMessage(err),
+      );
+    },
   });
   const interruptTurn = useMutation({
     ...threadsInterruptTurnMutation(),
-    onError: (err) => addSystemError(getApiErrorMessage(err)),
+    onError: (err, variables) => {
+      const store = useTimelineStore.getState();
+      if (!store.getThreadRuntime(variables.path.threadId)) return;
+      store.addSystemErrorForThread(
+        variables.path.threadId,
+        getApiErrorMessage(err),
+      );
+    },
   });
 
   const handleSend = useCallback(() => {
     const input = buildInput();
-    if (input.length === 0 || !threadId || loading || readOnly) return;
+    if (
+      input.length === 0 ||
+      !threadId ||
+      cannotStart ||
+      readOnly ||
+      useTimelineStore.getState().isThreadBusy(threadId)
+    )
+      return;
     // A requested security policy that the server has not yet reported as
     // effective would not apply to this turn. Sending anyway is how someone
     // ends up believing they granted full access and then being asked to
@@ -215,9 +264,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     if (policySettling) return;
     // Collect image paths for timeline display
     const imageAttachments = attachmentsRef.current
-      .filter((a): a is import('@/types/attachments').ChatImageAttachment => a.type === 'localImage')
+      .filter(
+        (a): a is import('@/types/attachments').ChatImageAttachment =>
+          a.type === 'localImage',
+      )
       .map((a) => a.path);
-    addUserMessage(valueRef.current.trim(), imageAttachments.length > 0 ? imageAttachments : undefined);
+    addUserMessage(
+      valueRef.current.trim(),
+      imageAttachments.length > 0 ? imageAttachments : undefined,
+    );
     clearAfterSend();
     const { modelOverride, effortOverride, serviceTierOverride } =
       useModelStore.getState();
@@ -235,18 +290,44 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       },
     });
     onSubmitted?.();
-  }, [buildInput, threadId, loading, readOnly, policySettling, attachmentsRef, addUserMessage, clearAfterSend, startTurn, onSubmitted]);
+  }, [
+    buildInput,
+    threadId,
+    cannotStart,
+    readOnly,
+    policySettling,
+    attachmentsRef,
+    addUserMessage,
+    clearAfterSend,
+    startTurn,
+    onSubmitted,
+  ]);
 
   const handleSteer = useCallback(() => {
     const input = buildInput();
-    if (input.length === 0 || !canSteer || !threadId || !activeTurnId || steer.isPending) return;
+    if (
+      input.length === 0 ||
+      !canSteer ||
+      !threadId ||
+      !activeTurnId ||
+      steer.isPending
+    )
+      return;
     clearAfterSend();
     steer.mutate({
       path: { threadId, turnId: activeTurnId },
       body: { input: input as never },
     });
     onSubmitted?.();
-  }, [buildInput, clearAfterSend, canSteer, threadId, activeTurnId, steer, onSubmitted]);
+  }, [
+    buildInput,
+    clearAfterSend,
+    canSteer,
+    threadId,
+    activeTurnId,
+    steer,
+    onSubmitted,
+  ]);
 
   const handleStop = useCallback(() => {
     if (!threadId || !activeTurnId || interruptTurn.isPending) return;
@@ -278,42 +359,38 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
   const handleSubmit = useCallback(() => {
     if (tryRunSlashCommand()) return;
-    if (hasActiveTurn) { handleSteer(); return; }
+    if (hasActiveTurn) {
+      handleSteer();
+      return;
+    }
     handleSend();
   }, [tryRunSlashCommand, hasActiveTurn, handleSteer, handleSend]);
 
   // ── Input handlers ───────────────────────────────────────
-  const handleChange = useCallback((newValue: string) => {
-    setValue(newValue);
-    detectSlash(newValue);
-    detectMention(newValue);
-  }, [detectSlash, detectMention]);
+  const handleChange = useCallback(
+    (newValue: string) => {
+      setValue(newValue);
+      detectSlash(newValue);
+      detectMention(newValue);
+    },
+    [detectSlash, detectMention],
+  );
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Slash palette first: while it is open the draft is a command, not prose,
-    // so Enter must run the command rather than send a message.
-    if (handleSlashKeyDown(e)) return;
-    if (handleMentionKeyDown(e)) return;
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  }, [handleSlashKeyDown, handleMentionKeyDown, handleSubmit]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Slash palette first: while it is open the draft is a command, not prose,
+      // so Enter must run the command rather than send a message.
+      if (handleSlashKeyDown(e)) return;
+      if (handleMentionKeyDown(e)) return;
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        handleSubmit();
+      }
+    },
+    [handleSlashKeyDown, handleMentionKeyDown, handleSubmit],
+  );
 
   const hasContent = value.trim().length > 0 || attachments.length > 0;
-
-  // The composer grows with the textarea, attachment chips, the goal row and
-  // the read-only banner, so the space the timeline must reserve for it can
-  // only be measured, not derived. offsetHeight rather than contentRect: the
-  // padding band is part of what covers the transcript.
-  useEffect(() => {
-    const el = footerRef.current;
-    if (!el || !onHeightChange) return;
-    const observer = new ResizeObserver(() => onHeightChange(el.offsetHeight));
-    observer.observe(el);
-    onHeightChange(el.offsetHeight);
-    return () => observer.disconnect();
-  }, [onHeightChange]);
 
   // ── Render ───────────────────────────────────────────────
   // The footer is only a spacing band: the composer below carries the glass
@@ -334,8 +411,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           {deletedRemotely
             ? t('This conversation was deleted and can no longer be used.')
             : readOnlyReason !== null
-              ? t('Held open by another client. Close it there to continue here.')
-              : t('Archived threads are read-only. Unarchive or fork to continue.')}
+              ? t(
+                  'Held open by another client. Close it there to continue here.',
+                )
+              : t(
+                  'Archived threads are read-only. Unarchive or fork to continue.',
+                )}
         </p>
       )}
       {/* Goal is a durable objective, not a transcript entry, so it stays
@@ -344,7 +425,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
       <div className="relative">
         <SlashPopover
-          open={slashOpen}
+          open={active && slashOpen}
           filtered={slashFiltered}
           selectedIndex={slashSelectedIndex}
           availability={slashAvailability}
@@ -352,7 +433,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         />
 
         <MentionPopover
-          open={mentionOpen}
+          open={active && mentionOpen}
           browseRelative={browseRelative}
           filtered={mentionFiltered}
           isLoading={mentionLoading}
@@ -408,17 +489,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 disabled={!threadId || readOnly}
                 onSelect={handleSkillSelect}
               />
-              <Button
-                size="sm"
-                variant={panelOpen ? 'secondary' : 'ghost'}
-                className="h-7 gap-1.5 rounded-lg px-2.5 text-xs"
-                onClick={onTogglePanel}
-                disabled={!threadId || readOnly}
-                title={t('Terminal')}
-              >
-                <TerminalSquare className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{t('Terminal')}</span>
-              </Button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -450,7 +520,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 <Button
                   size="icon"
                   className="h-7 w-7 rounded-lg transition-transform duration-200 hover:scale-105 active:scale-95"
-                  disabled={!threadId || !hasContent || loading || readOnly || policySettling}
+                  disabled={
+                    !threadId ||
+                    !hasContent ||
+                    cannotStart ||
+                    readOnly ||
+                    policySettling
+                  }
                   onClick={handleSubmit}
                 >
                   <Send className="h-3.5 w-3.5" />

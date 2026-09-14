@@ -245,7 +245,7 @@ export function BranchGraphDialog({ threadId, onClose }: Props) {
         isTarget: false,
         isCurrent: member.threadId === currentThreadId,
         isDoomed: false,
-        running: Boolean(threadsById[member.threadId]?.loading),
+        running: Boolean(threadsById[member.threadId]?.turnStartPending || threadsById[member.threadId]?.activeTurnId),
         pendingApprovalCount: Object.values(
           threadsById[member.threadId]?.approvals ?? {},
         ).filter((approval) => approval.status === 'pending').length,

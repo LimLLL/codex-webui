@@ -13,6 +13,7 @@ import {
   invalidateThreadEpoch,
 } from './thread-recovery-epoch';
 import { nextObservationSeq } from '@/lib/turn-item-merge';
+import { getApiErrorMessage } from '@/lib/api-error';
 import {
   refreshThreadPolicy,
   settleIfObserved,
@@ -85,7 +86,10 @@ export async function restoreThread(
       currentThreadEpoch(threadId) === epoch &&
       store.getThreadRuntime(threadId)
     ) {
-      store.setLoadingForThread(threadId, false);
+      store.setOpenStateForThread(threadId, {
+        historyRequest: 'error',
+        historyError: getApiErrorMessage(error),
+      });
       throw error;
     }
   }

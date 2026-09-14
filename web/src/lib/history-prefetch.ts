@@ -1,3 +1,6 @@
+/** Number of full turns requested by opening, recovery and older-history paging. */
+export const HISTORY_PAGE_SIZE = 20;
+
 /** Decides when approaching the top of a transcript should fetch older history. */
 
 /**

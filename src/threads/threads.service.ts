@@ -172,10 +172,12 @@ export class ThreadsService {
    */
   async resumeThread(
     threadId: string,
-    options: { recordActive?: boolean } = {},
+    options: { recordActive?: boolean; fullHistory?: boolean } = {},
   ): Promise<ThreadOpenResponseDto> {
     this.deletionRegistry.assertMutable(threadId);
-    const response = await this.resumeRegistry.ensureOpened(threadId);
+    const response = options.fullHistory
+      ? await this.resumeRegistry.ensureOpened(threadId, 20, 'full')
+      : await this.resumeRegistry.ensureOpened(threadId);
     // The pointer means "the branch a person last looked at", so only a
     // deliberate open may move it. Background reopens — app-server auto-resume,
     // and the client restoring its loaded threads after a refresh or a socket
@@ -215,9 +217,8 @@ export class ThreadsService {
   /**
    * Reads one turn's full persisted items without resuming the thread.
    *
-   * Lets a client that opened a thread with the cheap `summary` view top a
-   * single turn up to full detail, recovering the `reasoning` and `plan` items
-   * that view omits.
+   * Lets history recovery repair late items in retained turns outside the
+   * current full-page window, without acquiring writer ownership.
    *
    * @param threadId - Thread that owns the turn
    * @param turnId - Turn whose items should be returned

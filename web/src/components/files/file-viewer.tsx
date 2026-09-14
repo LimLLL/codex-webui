@@ -6,13 +6,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { filesGetMetadataOptions } from '@/generated/api/@tanstack/react-query.gen';
-import { useFilesStore } from '@/stores/files-store';
 import { getFileCategory, isInlineLoadingCategory } from '@/lib/file-category';
 import { FileContentViewer } from './viewers';
 
-export function FileViewer() {
+export function FileViewer({ filePath, viewId, active = true }: { filePath: string; viewId: string; active?: boolean }) {
   const { t } = useTranslation();
-  const selectedFile = useFilesStore((s) => s.selectedFile);
+  const selectedFile = filePath;
 
   // Metadata drives the header and the viewer's loading state only. The write
   // precondition deliberately does not come from here: this query refreshes on
@@ -54,7 +53,7 @@ export function FileViewer() {
       </div>
 
       <div className="min-h-0 flex-1">
-        <FileContentViewer filePath={selectedFile} />
+        <FileContentViewer filePath={selectedFile} viewId={viewId} active={active} />
       </div>
     </div>
   );

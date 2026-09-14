@@ -16,6 +16,7 @@ import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useFilesStore } from '@/stores/files-store';
 import { FileTree } from './file-tree';
 import { FileViewer } from './file-viewer';
+import { fileViewId } from '@/stores/workspace-store';
 
 /** Shared file tree header + tree component. */
 function FileTreeSidebar({
@@ -57,7 +58,7 @@ export function FilesPanel() {
   };
 
   const viewerContent = selectedFile ? (
-    <FileViewer />
+    <FileViewer key={selectedFile} filePath={selectedFile} viewId={fileViewId('files', selectedFile)} />
   ) : (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       {t('Select a file to view')}

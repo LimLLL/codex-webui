@@ -159,12 +159,6 @@ export function invalidateThreadDetails(
   queryClient: QueryClient,
   threadId: string,
 ): void {
-  const itemQueries = { queryKey: [{ _id: 'threadsListTurnItems', path: { threadId } }] };
-  // Cancellation also replaces an initial read with no data; invalidation alone
-  // can join that pre-gap request. Only mounted turns refetch immediately.
-  void queryClient.cancelQueries(itemQueries).then(() =>
-    queryClient.invalidateQueries({ ...itemQueries, refetchType: 'active' }),
-  );
   for (const queryKey of [
     threadCommandsReadGoalQueryKey({ path: { threadId } }),
     threadCommandsReadCollaborationModeQueryKey({ path: { threadId } }),

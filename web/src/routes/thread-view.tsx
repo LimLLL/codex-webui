@@ -1,223 +1,270 @@
-/**
- * Thread route component — the single owner of opening a thread by URL param.
- * Selecting a thread no longer clears other live thread state.
- */
-import { useEffect, useRef, useState, useCallback } from 'react';
+/** Conversation workspace: one permanent transcript with sibling file and terminal views. */
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChatTimeline } from '@/components/chat/chat-timeline';
-import { ChatInput, type ChatInputHandle } from '@/components/chat/chat-input';
-import { SessionPanel } from '@/components/chat/session-panel';
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from '@/components/ui/resizable';
-import {
-  Sheet,
-  SheetContent,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { ChatHeader } from '@/components/chat/chat-header';
+import { useThemeStore } from '@/stores/theme-store';
+import { ConversationFrame } from '@/components/chat/conversation-frame';
+import { WorkspaceControls } from '@/components/chat/workspace-controls';
+import { WorkspaceTree } from '@/components/chat/workspace-tree';
+import { useWorkspaceClose } from '@/components/chat/workspace-close-dialog';
+import { FileViewer } from '@/components/files/file-viewer';
+import { TerminalSurface } from '@/components/terminal/terminal-host';
+import { TerminalStatusBar } from '@/components/terminal/terminal-status-bar';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
 import {
   applyReadOnlySnapshot,
   HISTORY_PAGE_SIZE,
   useOpenThread,
 } from '@/hooks/use-thread-open';
-import { OPEN_FILE_EVENT, type OpenFileRequestDetail } from '@/lib/open-file-request';
-import { useTimelineStore } from '@/stores/timeline-store';
-import { showSnackbar } from '@/stores/snackbar-store';
 import {
-  threadsListTurnsOptions,
-  threadsReadThreadOptions,
-} from '@/generated/api/@tanstack/react-query.gen';
+  OPEN_FILE_EVENT,
+  type OpenFileRequestDetail,
+} from '@/lib/open-file-request';
+import { SurfaceActivityContext } from '@/lib/surface-activity';
+import { currentThreadEpoch } from '@/lib/thread-recovery-epoch';
+import { getApiErrorMessage } from '@/lib/api-error';
+import { useTimelineStore } from '@/stores/timeline-store';
+import {
+  useWorkspaceStore,
+  EMPTY_WORKSPACE,
+  fileViewId,
+} from '@/stores/workspace-store';
+import { useLayoutStore } from '@/stores/layout-store';
+import { useTerminalStore } from '@/stores/terminal-store';
+import { useTerminalViewStore } from '@/stores/terminal-view-store';
+import { threadsListTurns, threadsReadThread } from '@/generated/api/sdk.gen';
 
+/** URL identity owns opening; tab identity controls only presentation and never subscription. */
 export function ThreadView() {
   const { threadId } = useParams({ strict: false }) as { threadId: string };
+  return <ConversationWorkspace key={threadId} threadId={threadId} />;
+}
+
+/** Keeps every surface at a fixed tree position throughout a conversation's tab switches. */
+function ConversationWorkspace({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
+  const context = `thread:${threadId}`;
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const chatInputRef = useRef<ChatInputHandle>(null);
-  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
+  const dark = useThemeStore((s) => s.dark);
+  const toggleDark = useThemeStore((s) => s.toggleDark);
+  const workspace = useWorkspaceStore(
+    (s) => s.contexts[context] ?? EMPTY_WORKSPACE,
+  );
+  const openFile = useWorkspaceStore((s) => s.openFile);
+  const select = useWorkspaceStore((s) => s.select);
+  const cwd = useTimelineStore((s) =>
+    s.threadId === threadId ? s.threadCwd : s.threadsById[threadId]?.threadCwd,
+  );
+  const running = useTimelineStore(
+    (s) =>
+      s.threadId === threadId &&
+      (s.turnStartPending ||
+        Boolean(s.activeTurnId) ||
+        s.threadStatus?.type === 'active'),
+  );
+  const pending = useTimelineStore((s) => {
+    if (s.threadId !== threadId) return 0;
+    const count =
+      Object.values(s.approvals).filter((a) => a.status === 'pending').length +
+      Object.values(s.userInputRequests).filter((a) => a.status === 'pending')
+        .length;
+    const flags =
+      s.threadStatus?.type === 'active' ? s.threadStatus.activeFlags : [];
+    return Math.max(
+      count,
+      flags.some(
+        (flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput',
+      )
+        ? 1
+        : 0,
+    );
+  });
+  const desktop = useBreakpoint() === 'desktop';
+  const [mobileTree, setMobileTree] = useState(false);
+  const [creatingTerminal, setCreatingTerminal] = useState(false);
+  const { requestClose, dialog } = useWorkspaceClose(context);
+  const { mutate: openThread } = useOpenThread();
 
-  const threadCwd = useTimelineStore((s) => s.threadCwd);
-
-  // Pending file open request from a message mention, image badge or agent
-  // file reference. Uses { path, line, seq } so re-clicking the same file — or
-  // the same file at the same line — still triggers a new open.
-  const openSeqRef = useRef(0);
-  const [pendingOpenFile, setPendingOpenFile] = useState<{
-    path: string;
-    line: number | null;
-    seq: number;
-    threadId: string;
-  } | null>(null);
-
-  // Listen for open-file requests raised by chat messages.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<OpenFileRequestDetail>).detail;
-      if (!detail?.path) return;
-      // A request raised in another conversation must not open here. Opening is
-      // asynchronous, so one raised just before a thread switch can still be in
-      // flight; requests without an origin are legacy callers and are accepted.
-      if (detail.sourceThreadId && detail.sourceThreadId !== threadId) return;
-      setSessionPanelOpen(true);
-      setPendingOpenFile({
-        path: detail.path,
-        line: detail.line ?? null,
-        seq: ++openSeqRef.current,
-        threadId,
-      });
-    };
-    window.addEventListener(OPEN_FILE_EVENT, handler);
-    return () => window.removeEventListener(OPEN_FILE_EVENT, handler);
-  }, [threadId]);
-
-  // An unfulfilled request is scoped to the conversation that raised it: it
-  // names a file in that conversation's directory, so switching away discards
-  // it. Discarded during render rather than merely filtered — filtering alone
-  // would leave it dormant and let it fire again on returning to that
-  // conversation, long after the click that raised it.
-  if (pendingOpenFile && pendingOpenFile.threadId !== threadId) {
-    setPendingOpenFile(null);
-  }
-  const activeOpenFile =
-    pendingOpenFile?.threadId === threadId ? pendingOpenFile : null;
-
-  const handleFileOpened = useCallback(() => {
-    setPendingOpenFile(null);
-  }, []);
-
-  const openThread = useOpenThread();
-
-  /** Fallback: read metadata plus the newest paged history as a snapshot. */
-  const tryReadArchived = async (targetId: string) => {
-    try {
-      const [response, initialTurnsPage] = await Promise.all([
-        queryClient.fetchQuery(
-          { ...threadsReadThreadOptions({ path: { threadId: targetId } }), staleTime: 0 },
-        ),
-        queryClient.fetchQuery(
-          { ...threadsListTurnsOptions({
-            path: { threadId: targetId },
-            query: {
-              limit: HISTORY_PAGE_SIZE,
-              sortDirection: 'desc',
-              itemsView: 'summary',
-            },
-          }), staleTime: 0 },
-        ),
-      ]);
-      // Guard: user may have navigated away during the fetch.
-      if (useTimelineStore.getState().threadId !== targetId) return;
-      applyReadOnlySnapshot(response, initialTurnsPage);
-    } catch {
-      if (useTimelineStore.getState().threadId !== targetId) return;
-      showSnackbar(t('Thread not found or cannot be opened.'), 'error');
-      void navigate({ to: '/' });
-    }
-  };
-
-  // The route is the single owner of opening; every other surface navigates.
-  // Selection and the loading decision live in the opener, which suppresses the
-  // loading state when this client already holds the conversation hydrated.
-  useEffect(() => {
-    let cancelled = false;
-    openThread.mutate(
+  const open = useCallback(() => {
+    openThread(
       { path: { threadId } },
       {
         onError: () => {
-          // Only fall back to an archived snapshot if this thread is still the
-          // one on screen — the user may have navigated during the request.
-          if (!cancelled && useTimelineStore.getState().threadId === threadId) {
-            void tryReadArchived(threadId);
-          }
+          if (useTimelineStore.getState().getThreadRuntime(threadId)?.hydrated)
+            return;
+          const epoch = currentThreadEpoch(threadId);
+          // Archived/read-only fallback uses the same full-page display contract.
+          void Promise.all([
+            threadsReadThread({ path: { threadId }, throwOnError: true }),
+            threadsListTurns({
+              path: { threadId },
+              query: {
+                limit: HISTORY_PAGE_SIZE,
+                sortDirection: 'desc',
+                itemsView: 'full',
+              },
+              throwOnError: true,
+            }),
+          ])
+            .then(([metadata, page]) => {
+              if (
+                epoch === currentThreadEpoch(threadId) &&
+                useTimelineStore.getState().threadId === threadId
+              )
+                return applyReadOnlySnapshot(metadata.data, page.data);
+            })
+            .catch((error: unknown) => {
+              if (epoch !== currentThreadEpoch(threadId)) return;
+              useTimelineStore.getState().setOpenStateForThread(threadId, {
+                openState: 'error',
+                historyRequest: 'error',
+                historyError: getApiErrorMessage(error),
+              });
+            });
         },
       },
     );
-    return () => { cancelled = true; useTimelineStore.getState().unsubscribeThread(threadId); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
+  }, [openThread, threadId]);
 
-  const breakpoint = useBreakpoint();
-  const isDesktop = breakpoint === 'desktop';
-  const showPanel = sessionPanelOpen && !!threadCwd;
+  useEffect(() => {
+    open();
+    return () => {
+      useTimelineStore.getState().unsubscribeThread(threadId);
+      const current = useWorkspaceStore.getState().contexts[context];
+      const tab = current?.tabs.find((entry) => entry.id === current.activeId);
+      if (tab?.kind === 'file')
+        useWorkspaceStore
+          .getState()
+          .cancelReveal(fileViewId(context, tab.path));
+    };
+  }, [threadId, context, open]);
 
-  // The composer floats over the transcript so its glass surface has something
-  // to show through, and so the transcript fades under it instead of being cut
-  // off by an opaque band. It stays in flow once the session panel is open:
-  // floating there would park it over the terminal, not over the transcript.
-  const composerFloats = !(showPanel && isDesktop);
-  const [composerHeight, setComposerHeight] = useState(0);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<OpenFileRequestDetail>).detail;
+      if (
+        !detail?.path ||
+        (detail.sourceThreadId && detail.sourceThreadId !== threadId)
+      )
+        return;
+      openFile(context, detail.path, detail.line);
+    };
+    window.addEventListener(OPEN_FILE_EVENT, handler);
+    return () => window.removeEventListener(OPEN_FILE_EVENT, handler);
+  }, [context, threadId, openFile]);
 
-  // Counts accepted sends and steers. The transcript resumes following on the
-  // change, so an explicit send is the only thing that can pull a reader who
-  // scrolled away back to the latest output.
-  const [sendSignal, setSendSignal] = useState(0);
-  const handleSubmitted = useCallback(() => setSendSignal((n) => n + 1), []);
-
-  const sessionPanelContent = showPanel ? (
-    <SessionPanel
-      threadId={threadId}
-      cwd={threadCwd!}
-      onClose={() => setSessionPanelOpen(false)}
-      openFile={activeOpenFile?.path ?? null}
-      openFileLine={activeOpenFile?.line ?? null}
-      openFileSeq={activeOpenFile?.seq ?? -1}
-      onFileOpened={handleFileOpened}
-    />
-  ) : null;
+  const newTerminal = async () => {
+    if (creatingTerminal) return;
+    setCreatingTerminal(true);
+    const terminal = await useTerminalStore
+      .getState()
+      .createTerminal(context, cwd ?? undefined);
+    setCreatingTerminal(false);
+    if (!terminal) return;
+    const runtime = useTimelineStore.getState().getThreadRuntime(threadId);
+    if (!runtime || runtime.deletedRemotely) {
+      useTerminalStore.getState().detachTerminal(terminal.id);
+      return;
+    }
+    useTerminalViewStore.getState().retain(terminal.id, context);
+    useWorkspaceStore.getState().openTerminal(context, terminal.id);
+  };
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {showPanel && isDesktop ? (
-        /* Desktop: resizable vertical split */
-        <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-          <ResizablePanel defaultSize="65%" minSize="20%">
-            <div className="flex h-full flex-col">
-              <ChatTimeline
-                onEditMessage={(v) => chatInputRef.current?.setInput(v)}
-                scrollToLatestSignal={sendSignal}
-              />
-            </div>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize="35%" minSize="15%">
-            <div className="flex h-full flex-col">
-              {sessionPanelContent}
-            </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      ) : (
-        <ChatTimeline
-          onEditMessage={(v) => chatInputRef.current?.setInput(v)}
-          bottomInset={composerFloats ? composerHeight : 0}
-          scrollToLatestSignal={sendSignal}
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <ChatHeader
+          dark={dark}
+          onToggleDark={toggleDark}
+          onToggleDiagnostics={() => void navigate({ to: '/diagnostics' })}
         />
-      )}
-
-      {/* Mobile/Tablet: session panel as bottom Sheet */}
-      {!isDesktop && (
-        <Sheet open={showPanel} onOpenChange={(open) => { if (!open) setSessionPanelOpen(false); }}>
-          <SheetContent side="bottom" className="!h-[calc(var(--app-vh,100dvh)*0.7)] p-0" showCloseButton={false}>
-            <SheetTitle className="sr-only">{t('Session panel')}</SheetTitle>
-            <div className="flex h-full flex-col">
-              {sessionPanelContent}
-            </div>
-          </SheetContent>
-        </Sheet>
-      )}
-
-      <ChatInput
-        ref={chatInputRef}
-        panelOpen={sessionPanelOpen}
-        onTogglePanel={() => setSessionPanelOpen((o) => !o)}
-        className={composerFloats ? 'absolute inset-x-0 bottom-0' : 'shrink-0'}
-        onHeightChange={setComposerHeight}
-        onSubmitted={handleSubmitted}
+        <WorkspaceControls
+          key={desktop ? 'desktop' : 'mobile'}
+          workspace={workspace}
+          running={running}
+          pending={pending}
+          onSelect={(id) => select(context, id)}
+          onClose={requestClose}
+          onNewTerminal={() => void newTerminal()}
+          onExplorer={() =>
+            desktop
+              ? useLayoutStore
+                  .getState()
+                  .setWorkspaceTreeCollapsed(
+                    !useLayoutStore.getState().workspaceTreeCollapsed,
+                  )
+              : setMobileTree(true)
+          }
+        />
+        <div
+          className="relative min-h-0 flex-1"
+          aria-label={t('Workspace content')}
+        >
+          <div
+            role="tabpanel"
+            aria-label={t('Conversation')}
+            className="absolute inset-0"
+            inert={workspace.activeId !== 'conversation'}
+            style={{
+              visibility:
+                workspace.activeId === 'conversation' ? 'visible' : 'hidden',
+            }}
+          >
+            <ConversationFrame
+              threadId={threadId}
+              active={workspace.activeId === 'conversation'}
+              onRetry={open}
+            />
+          </div>
+          {workspace.tabs.map((tab) => {
+            const active = workspace.activeId === tab.id;
+            return (
+              <SurfaceActivityContext key={tab.id} value={active}>
+                <div
+                  role="tabpanel"
+                  aria-label={tab.kind === 'file' ? tab.path : t('Terminal')}
+                  className="absolute inset-0 flex min-h-0 flex-col"
+                  inert={!active}
+                  style={{ visibility: active ? 'visible' : 'hidden' }}
+                >
+                  {tab.kind === 'file' ? (
+                    active && (
+                      <FileViewer
+                        filePath={tab.path}
+                        viewId={fileViewId(context, tab.path)}
+                        active={active}
+                      />
+                    )
+                  ) : (
+                    <>
+                      <div className="min-h-0 flex-1">
+                        <TerminalSurface
+                          terminalId={tab.terminalId}
+                          contextKey={context}
+                          active={active}
+                        />
+                      </div>
+                      <TerminalStatusBar
+                        contextKey={context}
+                        activeTerminalId={tab.terminalId}
+                      />
+                    </>
+                  )}
+                </div>
+              </SurfaceActivityContext>
+            );
+          })}
+        </div>
+      </div>
+      <WorkspaceTree
+        cwd={cwd ?? null}
+        desktop={desktop}
+        mobileOpen={mobileTree}
+        onMobileClose={() => setMobileTree(false)}
+        onFile={(path) => openFile(context, path)}
       />
+      {dialog}
     </div>
   );
 }

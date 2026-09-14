@@ -12,7 +12,12 @@
 - [x] Step 6: Item lifecycle（reasoning/agentMessage/mcpToolCall/commandExecution 流式渲染）
 - [x] Step 7: Thread 列表/切换/resume（侧边栏, 历史恢复）
 - [x] Step 8: FilesService 文件管理（后端 CRUD + delete + workspace root 安全 + chokidar 按需 watch + 前端文件树 breadcrumb + Monaco Editor + Diff 视图 + fileChange item + commandExecution 修复）
-- [x] Step 9: Web Terminal（node-pty + xterm.js + 全局/会话级终端 + UI 重构：sidebar 分区 + session 底部面板 + tab 切换）
+- [x] Step 9: Web Terminal（node-pty + xterm.js + 独立终端路由与会话平级 tabs + 稳定 attachment owner）
+
+- [x] 会话工作区 tabs 重构、独立文档/终端 owner、full 首屏 gate、submission/execution 分离及语义阅读锚定，见 [workspace-tabs.md](workspace-tabs.md)。
+- [x] 新增独立 Vitest browser project（Chromium/WebKit），现有 jsdom 测试保留。
+- [x] browser project 已在 Chromium + WebKit 实跑通过。**它当场否掉了两处推理**：跟随态只在 append/视口变化时贴底，导致每一次冷开都停在顶部（首屏是靠行把估算高度换成实测高度来收敛的，这既不改 count 也不改视口）；以及 `useFlushSync` 默认值与 `directDomUpdates` 冲突，每次修正都让 React 打印并丢弃一次 flush。两者都无法在 jsdom 里被发现。后续扩到终端 overlay 与 tab 外壳，共 34 项。
+- [x] **真实应用手动验证（Playwright 驱动）**，覆盖此前只有静态推演的那半边：冷开落底、打开文件树不再改变 transcript 高度、跨 tab 切换保住同一个滚动 DOM 节点、隐藏面板保留布局盒且 `inert`、两个终端平级且非活动者仍挂载附着、600px 断点、失败可见性。**它查出一个全部 404 个单测都拦不住的回归**：文件树门控写成「当前根 == 会话 cwd」，而双击进入子目录正是改变当前根的操作，于是首次进入任意子目录后整棵树连同工具栏被替换为永久 spinner。首轮修为「只等根存在」并补 4 个回归测试；二次审查补上独立的目录采用状态，避免冷切换期间显示上一会话的根，浏览路径仍不参与 cwd 比较。
 
 ## 待实现
 
@@ -261,9 +266,11 @@
 
 - [x] 触屏上的隐形控件：`opacity-0` 配 `group-hover:opacity-100` 的写法有 8 处，而 Tailwind v4 的 `hover:` / `group-hover:` 变体本身就编译在 `@media (hover: hover)` 内，触屏上那个 `opacity-0` 永远不会被抬起——控件不可见却仍可点中。改用 `@utility hover-reveal`（必须是 `@utility`：`index.css` 里未分层的 class 会压过整个 `@layer utilities`）。
 - [x] 移动端全高界面用视口单位：`100dvh` 不随 iOS 软键盘收缩（Safari 不实现 `interactive-widget`），部分内嵌浏览器的底部工具栏也不反映在任何视口测量里，输入框被压在下面。改为统一从 `--app-vh`（镜像 `visualViewport.height`）取高度，覆盖 `#root`、登录页、三个 integrations sheet 与移动端会话抽屉。同步跳过 `scale !== 1`，否则双指放大会把整个应用塌进放大区域。
-- [x] `flushSync was called from inside a lifecycle method` **已定位，判定为上游行为，不做本地规避**。调用点不在本项目代码里：`@tanstack/react-virtual` 的 `onChange(sync)` 内部直接 `flushSync(rerender)`，而 `virtualizer.measureElement` 是作为 **ref callback** 传给每个 item 的，React 在 commit（layout）阶段调用它——测量导致可见区间变化时，同步刷新就发生在生命周期内。当时怀疑的「`useLayoutEffect` 内触发 store 更新」不是原因：`use-transcript-follow` 在 layout effect 里调的是 `scrollToOffset`，它只写 `scrollTop`，滚动事件是异步派发的。已确认 `3.14.11` 就是当前最新版，无可升级的修复。**不设 `useFlushSync: false`**：React 在发出该告警的场景下本就已经放弃同步刷新，关掉它只会额外影响真正的滚动事件路径——那里的同步提交正是防撕裂需要的。结论是告警噪音，几何风险仅限于 React 已经降级的那些提交。
+- [x] 虚拟列表启用 `directDomUpdates` 并关闭 `useFlushSync`，避免 layout effect 测量时被 React 丢弃的同步 flush。直接 DOM 更新只覆盖已挂载节点的位置和 extent；大幅原生滚动中新进入范围的行仍需 React commit，不能据此宣称没有挂载延迟。`followOnAppend` 保持关闭，几何正确性须运行 browser project，见 [workspace-tabs.md](workspace-tabs.md)。
 
 ### UI 与交互增强
+
+- [ ] **无扩展名的纯文本文件被当作二进制**，走 hex dump 视图而不是编辑器。实测：`.gitconfig` 显示为 `MIME type: application/octet-stream` 加十六进制转储，`.zshrc` / `.npmrc` / `.profile` 等同理——恰好是用户最常想看的一类配置文件。分类发生在 `lib/file-category.ts`，只按扩展名判断，无扩展名即落到后端 metadata 的 MIME，而后端对不认识的内容返回 `application/octet-stream`。**非 tabs 重构引入，属既有行为**（该模块本轮未改动）。修的时候要当心：判据不能只看"是否可解码为 UTF-8"，否则真正的二进制文件会被塞进编辑器；可考虑按已知无扩展名配置文件名单 + 内容嗅探（NUL 字节/控制字符比例）联合判断，并保留用户显式切换到 hex 视图的入口。
 
 - [x] 可折叠工具调用：连续 2+ 个 MCP 工具调用合并为可展开/收起的分组；单个工具调用也可折叠参数/结果。完成后自动收起，`aria-expanded` 无障碍支持。
 - [x] TanStack Router 集成：code-based route tree，auth guard（beforeLoad + redirect search param），thread URL 化（`/t/$threadId`），SPA deep-link fallback（`fallthrough: true`）。

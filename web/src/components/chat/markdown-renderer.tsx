@@ -137,10 +137,12 @@ function CodeBlock({
   className,
   children,
   completed,
+  blockKey,
 }: {
   className?: string;
   children: string;
   completed: boolean;
+  blockKey?: number;
 }) {
   const { t } = useTranslation();
   const [html, setHtml] = useState<string | null>(null);
@@ -195,11 +197,12 @@ function CodeBlock({
       </div>
       {html ? (
         <div
+          data-reading-block={blockKey}
           className="overflow-auto p-3 text-sm leading-relaxed [&_pre]:!m-0 [&_pre]:!bg-transparent [&_pre]:!p-0"
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className="m-0 overflow-auto p-3 text-sm leading-relaxed text-gray-300">
+        <pre data-reading-block={blockKey} className="m-0 overflow-auto p-3 text-sm leading-relaxed text-gray-300">
           <code>{children}</code>
         </pre>
       )}
@@ -212,10 +215,10 @@ const components = (
   completed: boolean,
   onOpenFileReference?: (reference: FileReference) => void,
 ): ComponentProps<typeof Markdown>['components'] => ({
-  h1: ({ children }) => <h1 className="mb-3 mt-5 text-xl font-bold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mb-2 mt-4 text-lg font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mb-2 mt-3 text-base font-semibold first:mt-0">{children}</h3>,
-  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+  h1: ({ children, node }) => <h1 data-reading-block={node?.position?.start.offset} className="mb-3 mt-5 text-xl font-bold first:mt-0">{children}</h1>,
+  h2: ({ children, node }) => <h2 data-reading-block={node?.position?.start.offset} className="mb-2 mt-4 text-lg font-semibold first:mt-0">{children}</h2>,
+  h3: ({ children, node }) => <h3 data-reading-block={node?.position?.start.offset} className="mb-2 mt-3 text-base font-semibold first:mt-0">{children}</h3>,
+  p: ({ children, node }) => <p data-reading-block={node?.position?.start.offset} className="mb-2 last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-1">{children}</ul>,
   ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>,
   li: ({ children }) => <li className="text-sm">{children}</li>,
@@ -271,11 +274,10 @@ const components = (
   em: ({ children }) => <em>{children}</em>,
   del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
   code: ({ node, className, children, ...rest }) => {
-    void node;
     const isBlock = className?.startsWith('language-') || String(children).includes('\n');
     if (isBlock) {
       return (
-        <CodeBlock className={className} completed={completed}>
+        <CodeBlock className={className} completed={completed} blockKey={node?.position?.start.offset}>
           {String(children).replace(/\n$/, '')}
         </CodeBlock>
       );

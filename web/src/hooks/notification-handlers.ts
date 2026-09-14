@@ -1,8 +1,4 @@
-/**
- * Notification dispatcher for Codex app-server events.
- * Maps every ServerNotification method to a typed handler.
- * Unknown methods fall through to a dev-only debug log.
- */
+/** App-server notification dispatch and global metadata updates. */
 import type { QueryClient } from '@tanstack/react-query';
 import {
   accountReadAccountQueryKey,
@@ -18,110 +14,45 @@ import {
   refreshThreadPolicy,
   settleIfObserved,
 } from '@/stores/thread-policy-store';
-import {
-  queryHasId,
-} from '@/lib/query-invalidation';
+import { queryHasId } from '@/lib/query-invalidation';
 import { useAccountStore } from '@/stores/account-store';
 import { useMcpStore } from '@/stores/mcp-store';
 import { useModelStore, type ReasoningEffort } from '@/stores/model-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import type { AuthMode, PlanType } from '@/types/account';
-import type { ThreadTokenUsage, ThreadStatusType } from '@/types/codex-notifications';
+import type {
+  ThreadTokenUsage,
+  ThreadStatusType,
+} from '@/types/codex-notifications';
 import type { McpServerStartupState } from '@/types/mcp';
-import type { TurnItem, TurnPlanState, TurnPlanStepStatus } from '@/types/timeline';
-import type { ApprovalRequest } from '@/types/approval';
-import {
-  mergeTurnItem,
-  normalizeThreadItem,
-} from '@/lib/thread-item-normalizer';
-import {
-  acceptsStreamedUpdate,
-  nextObservationSeq,
-} from '@/lib/turn-item-merge';
+import { nextObservationSeq } from '@/lib/turn-item-merge';
 import { normalizeLiveTurnFailure } from '@/lib/turn-failure';
 import i18n from '@/i18n';
-
-// ---------------------------------------------------------------------------
-// Context injected by the hook — all store actions + queryClient
-// ---------------------------------------------------------------------------
-
-export interface NotificationContext {
-  /**
-   * Thread the notification being handled belongs to.
-   *
-   * Reassigned per notification by the dispatcher so thread-scoped handlers
-   * write to the right runtime. It is therefore **not** "the thread on screen"
-   * — for any notification that carries a threadId the two are equal by
-   * construction, which silently turns `ctx.threadId === params.threadId` into
-   * a tautology. Use {@link getSelectedThreadId} for that question.
-   */
-  threadId: string | null;
-  /** The thread actually being viewed, independent of notification routing. */
-  getSelectedThreadId: () => string | null;
-  queryClient: QueryClient;
-  /** Removes all local runtime state for threads that no longer exist. */
-  forgetThreads: (threadIds: string[]) => void;
-  /** Keeps a destroyed conversation readable while making it unwritable. */
-  markThreadDeletedRemotely: (threadId: string, message: string) => void;
-  updateCurrentTurn: (
-    turnId: string,
-    updater: (
-      items: TurnItem[],
-      completed: boolean,
-    ) => { items: TurnItem[]; completed: boolean },
-  ) => void;
-  updateTurnItem: (
-    turnId: string,
-    itemId: string,
-    updater: (existing: TurnItem | undefined) => TurnItem,
-  ) => void;
-  updateTurnDiff: (turnId: string, diff: string) => void;
-  updateTurnPlan: (
-    turnId: string,
-    plan: TurnPlanState,
-  ) => void;
-  appendPlanDelta: (turnId: string, itemId: string, delta: string) => void;
-  /** Replaces one plan item's text with its authoritative accumulated value. */
-  setPlanText: (turnId: string, itemId: string, text: string) => void;
-  setLoading: (loading: boolean) => void;
-  expandReasoning: (itemId: string) => void;
-  collapseReasoning: (itemId: string) => void;
-  addApproval: (approval: ApprovalRequest) => void;
-  addSystemMessage: (message: string, severity?: 'info' | 'warning' | 'error', turnId?: string) => void;
-  addSystemError: (message: string) => void;
-  upsertTurnFailure: (
-    failure: ReturnType<typeof normalizeLiveTurnFailure>,
-  ) => void;
-  setTokenUsage: (turnId: string, usage: ThreadTokenUsage) => void;
-  setThreadStatus: (status: ThreadStatusType | null) => void;
-  setActiveTurnId: (turnId: string | null) => void;
-  clearActiveTurn: () => void;
-  /** The turn this thread currently considers running, if any. */
-  getActiveTurnId: () => string | null;
-  /** Whether a turn is already known to have finished. */
-  isTurnTerminal: (turnId: string) => boolean;
-  setThreadTitle: (title: string | null) => void;
-  resolveApprovalByRequestId: (requestId: string | number) => void;
-}
-
-type Params = Record<string, unknown>;
-type Handler = (params: Params, ctx: NotificationContext) => void;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Checks if the notification carries a thread scope matching the routed context. */
-function hasThreadScope(params: Params, ctx: NotificationContext): boolean {
-  const eventThreadId = params.threadId as string | undefined;
-  return Boolean(eventThreadId && ctx.threadId === eventThreadId);
-}
+import {
+  type NotificationContext,
+  type Handler,
+  hasThreadScope,
+} from './notification-context';
+import {
+  handleReasoningSummaryTextDelta,
+  handleAgentMessageDelta,
+  handleCommandExecutionOutputDelta,
+  handleFileChangeOutputDelta,
+  handleTurnDiffUpdated,
+  handleItemStarted,
+  handleItemCompleted,
+  handleTurnCompleted,
+  handleTurnPlanUpdated,
+  handlePlanDelta,
+  handleMcpToolCallProgress,
+} from './notification-item-handlers';
 
 // ---------------------------------------------------------------------------
 // Error deduplication — suppress repeated retry toasts within a short window
 // ---------------------------------------------------------------------------
 
 const recentErrors = new Map<string, number>();
+
 const DEDUP_WINDOW_MS = 5_000;
 
 function isDuplicateRetryError(key: string): boolean {
@@ -140,177 +71,24 @@ let invalidateMcpTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedInvalidateMcpServers(queryClient: QueryClient): void {
   if (invalidateMcpTimer) clearTimeout(invalidateMcpTimer);
   invalidateMcpTimer = setTimeout(() => {
-    void queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
+    void queryClient.invalidateQueries({
+      queryKey: mcpServersListServersQueryKey(),
+    });
     invalidateMcpTimer = null;
   }, 500);
 }
 
 function invalidateAccountQueries(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ queryKey: accountReadAccountQueryKey() });
-  void queryClient.invalidateQueries({ queryKey: accountReadRateLimitsQueryKey() });
-  void queryClient.invalidateQueries({ queryKey: codexStatusGetStatusQueryKey() });
+  void queryClient.invalidateQueries({
+    queryKey: accountReadAccountQueryKey(),
+  });
+  void queryClient.invalidateQueries({
+    queryKey: accountReadRateLimitsQueryKey(),
+  });
+  void queryClient.invalidateQueries({
+    queryKey: codexStatusGetStatusQueryKey(),
+  });
 }
-
-function isPlanStepStatus(value: unknown): value is TurnPlanStepStatus {
-  return value === 'pending' || value === 'inProgress' || value === 'completed';
-}
-
-// ---------------------------------------------------------------------------
-// Tier 0 — Already handled (migrated from if-chain)
-// ---------------------------------------------------------------------------
-
-const handleReasoningSummaryTextDelta: Handler = (params, ctx) => {
-  const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
-  if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => {
-    if (existing && !acceptsStreamedUpdate(existing)) return existing;
-    return {
-      type: 'reasoning',
-      itemId,
-      content:
-        (existing?.type === 'reasoning' ? existing.content : '') +
-        (delta ?? ''),
-      completed: false,
-    };
-  });
-  ctx.expandReasoning(itemId);
-};
-
-const handleAgentMessageDelta: Handler = (params, ctx) => {
-  const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
-  if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => {
-    if (existing && !acceptsStreamedUpdate(existing)) return existing;
-    return {
-      type: 'agentMessage',
-      itemId,
-      content:
-        (existing?.type === 'agentMessage' ? existing.content : '') +
-        (delta ?? ''),
-      questions: existing?.type === 'agentMessage' ? existing.questions : [],
-      completed: false,
-    };
-  });
-};
-
-const handleCommandExecutionOutputDelta: Handler = (params, ctx) => {
-  const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
-  if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => {
-    if (existing && !acceptsStreamedUpdate(existing)) return existing;
-    return {
-      ...(existing?.type === 'commandExecution'
-        ? existing
-        : { type: 'commandExecution' as const, itemId, content: '' }),
-      content:
-        (existing?.type === 'commandExecution' ? existing.content : '') +
-        (delta ?? ''),
-      completed: false,
-    };
-  });
-};
-
-const handleFileChangeOutputDelta: Handler = (params, ctx) => {
-  const { turnId, itemId, delta } = params as { turnId?: string; itemId?: string; delta?: string };
-  if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => {
-    if (existing && !acceptsStreamedUpdate(existing)) return existing;
-    return {
-      ...(existing?.type === 'fileChange'
-        ? existing
-        : { type: 'fileChange' as const, itemId, content: '' }),
-      content:
-        (existing?.type === 'fileChange' ? existing.content : '') +
-        (delta ?? ''),
-      completed: false,
-    };
-  });
-};
-
-const handleTurnDiffUpdated: Handler = (params, ctx) => {
-  const { turnId } = params as { turnId?: string };
-  const diff = params.diff as string | undefined;
-  if (!turnId || typeof diff !== 'string' || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnDiff(turnId, diff);
-};
-
-const handleItemStarted: Handler = (params, ctx) => {
-  const { turnId } = params as { turnId?: string };
-  if (!turnId || !hasThreadScope(params, ctx)) return;
-  const item = params.item as Record<string, unknown> | undefined;
-  if (!item) return;
-  const itemId =
-    (params.itemId as string | undefined) ??
-    (item.id as string | undefined) ??
-    '';
-  const normalized = normalizeThreadItem(item, false, itemId);
-  if (normalized.kind === 'render' || normalized.kind === 'unknown') {
-    // `item/started` carries an empty shell. Recovery can install the terminal
-    // payload for an item before its own start notification is processed — on
-    // reconnect the snapshot legitimately runs ahead of the replayed stream —
-    // and letting the shell win there would blank out a finished item.
-    ctx.updateTurnItem(turnId, normalized.item.itemId, (existing) =>
-      existing && !acceptsStreamedUpdate(existing) ? existing : normalized.item,
-    );
-  }
-};
-
-const handleItemCompleted: Handler = (params, ctx) => {
-  const { turnId } = params as { turnId?: string };
-  if (!turnId || !hasThreadScope(params, ctx)) return;
-  const item = params.item as Record<string, unknown> | undefined;
-  if (!item) return;
-  const completedItemId =
-    (params.itemId as string | undefined) ??
-    (item.id as string | undefined) ??
-    '';
-  const normalized = normalizeThreadItem(item, true, completedItemId);
-  if (normalized.kind === 'render' || normalized.kind === 'unknown') {
-    ctx.updateTurnItem(turnId, normalized.item.itemId, (existing) =>
-      mergeTurnItem(existing, normalized.item),
-    );
-    if (normalized.item.type === 'reasoning') {
-      ctx.collapseReasoning(normalized.item.itemId);
-    }
-    return;
-  }
-  // Plan items were previously dropped here, so plan text only ever grew by
-  // delta and a fragment lost to a disconnect stayed lost. Like every other
-  // terminal payload this one carries the whole accumulated text, so it
-  // replaces rather than appends.
-  if (normalized.kind === 'plan') {
-    ctx.setPlanText(turnId, normalized.itemId, normalized.text);
-  }
-};
-
-/** turn/completed payload is { threadId, turn: { id, status, error } }. */
-const handleTurnCompleted: Handler = (params, ctx) => {
-  const turn = params.turn as
-    | { id?: string; status?: string; error?: Record<string, unknown> | null }
-    | undefined;
-  const turnId = turn?.id;
-  if (!turnId) return;
-
-  if (!hasThreadScope(params, ctx)) {
-    return;
-  }
-
-  ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
-  // Only the turn that is actually running may stop the composer. A replayed or
-  // late `turn/completed` naming an earlier turn used to clear the pointer
-  // regardless, which released Send and hid the spinner while a different turn
-  // was still streaming.
-  const active = ctx.getActiveTurnId();
-  if (active === null || active === turnId) {
-    ctx.setLoading(false);
-    ctx.clearActiveTurn();
-  }
-
-  if (turn.status === 'failed' && turn.error) {
-    ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, turn.error));
-  }
-
-};
 
 /**
  * Collaboration mode has no side-effect-free read, so this notification is the
@@ -387,12 +165,18 @@ const handleError: Handler = (params, ctx) => {
   } else {
     if (ctx.threadId === threadId) {
       showSnackbar(message, 'error', 5000);
+      const alreadyTerminal = Boolean(turnId && ctx.isTurnTerminal(turnId));
       if (turnId) {
         ctx.upsertTurnFailure(normalizeLiveTurnFailure(turnId, error));
         ctx.updateCurrentTurn(turnId, (items) => ({ items, completed: true }));
       }
-      ctx.setLoading(false);
-      ctx.clearActiveTurn();
+      // The two facts are released on different evidence. Clearing the active
+      // pointer needs this exact turn named, or a stale unnamed failure would
+      // declare a running turn finished. An outstanding submission has no turn
+      // yet by definition, so a fatal error on this thread is all the evidence
+      // it can ever get — leaving it pending disables the composer for good.
+      if (!alreadyTerminal || ctx.getActiveTurnId() === turnId) ctx.setTurnStartPending(false);
+      if (turnId && ctx.getActiveTurnId() === turnId) ctx.clearActiveTurn();
     }
   }
 };
@@ -416,63 +200,14 @@ const handleConfigWarning: Handler = (params) => {
 /** Displays upstream warnings, including omitted unsupported service tiers, without changing turn state. */
 const handleWarning: Handler = (params, ctx) => {
   if (typeof params.message !== 'string') return;
-  if (hasThreadScope(params, ctx)) ctx.addSystemMessage(params.message, 'warning');
+  if (hasThreadScope(params, ctx))
+    ctx.addSystemMessage(params.message, 'warning');
   else showSnackbar(params.message, 'warning', 5000);
 };
 
 const handleDeprecationNotice: Handler = (params) => {
   const summary = params.summary as string;
   showSnackbar(summary, 'warning', 5000);
-};
-
-const handleTurnPlanUpdated: Handler = (params, ctx) => {
-  const turnId = params.turnId as string | undefined;
-  if (!turnId || !hasThreadScope(params, ctx)) return;
-  const rawPlan = Array.isArray(params.plan) ? params.plan : [];
-  const steps = rawPlan
-    .map((step) => step as { step?: unknown; status?: unknown })
-    .filter(
-      (step): step is { step: string; status: TurnPlanStepStatus } =>
-        typeof step.step === 'string' && isPlanStepStatus(step.status),
-    )
-    .map((step) => ({ step: step.step, status: step.status }));
-  ctx.updateTurnPlan(turnId, {
-    explanation: typeof params.explanation === 'string' ? params.explanation : null,
-    steps,
-  });
-};
-
-const handlePlanDelta: Handler = (params, ctx) => {
-  const { turnId, itemId, delta } = params as {
-    turnId?: string;
-    itemId?: string;
-    delta?: string;
-  };
-  if (!turnId || !itemId || !delta || !hasThreadScope(params, ctx)) return;
-  ctx.appendPlanDelta(turnId, itemId, delta);
-};
-
-const handleMcpToolCallProgress: Handler = (params, ctx) => {
-  const { turnId, itemId, message } = params as {
-    turnId?: string;
-    itemId?: string;
-    message?: string;
-  };
-  if (!turnId || !itemId || !hasThreadScope(params, ctx)) return;
-  ctx.updateTurnItem(turnId, itemId, (existing) => ({
-    ...(existing?.type === 'mcpToolCall'
-      ? existing
-      : {
-      type: 'mcpToolCall' as const,
-      itemId,
-      content: '',
-      completed: false,
-      toolServer: '',
-      toolName: '',
-      toolArgs: '',
-        }),
-    toolProgress: message ?? '',
-  }));
 };
 
 const handleMcpStartupStatusUpdated: Handler = (params, ctx) => {
@@ -493,7 +228,9 @@ const handleMcpStartupStatusUpdated: Handler = (params, ctx) => {
 // Tier 2 — Thread/Turn lifecycle
 // ---------------------------------------------------------------------------
 
-const handleThreadStarted: Handler = () => {}; // Overview has its own global hint.
+const handleThreadStarted: Handler = () => {};
+
+// Overview has its own global hint.
 
 const handleThreadStatusChanged: Handler = (params, ctx) => {
   const threadId = params.threadId as string | undefined;
@@ -503,7 +240,10 @@ const handleThreadStatusChanged: Handler = (params, ctx) => {
   if (ctx.threadId === threadId) {
     ctx.setThreadStatus(status);
     if (status.type === 'systemError') {
-      ctx.addSystemMessage(i18n.t('Thread encountered a system error'), 'error');
+      ctx.addSystemMessage(
+        i18n.t('Thread encountered a system error'),
+        'error',
+      );
     }
   }
 };
@@ -565,7 +305,6 @@ const handleThreadDeleted: Handler = (params, ctx) => {
   } else {
     ctx.forgetThreads([threadId]);
   }
-
 };
 
 const handleTurnStarted: Handler = (params, ctx) => {
@@ -587,7 +326,7 @@ const handleTurnStarted: Handler = (params, ctx) => {
   // the composer back into a running state it could never leave, because the
   // matching `turn/completed` had already been consumed.
   if (ctx.isTurnTerminal(turnId)) return;
-  ctx.setLoading(true);
+  ctx.setTurnStartPending(false);
   ctx.setActiveTurnId(turnId);
 };
 
@@ -638,7 +377,9 @@ const handleAccountRateLimitsUpdated: Handler = (params, ctx) => {
   const rateLimits = params.rateLimits as RateLimitSnapshotDto | undefined;
   if (!rateLimits) return;
   useAccountStore.getState().setRateLimitSnapshot(rateLimits);
-  void ctx.queryClient.invalidateQueries({ queryKey: accountReadRateLimitsQueryKey() });
+  void ctx.queryClient.invalidateQueries({
+    queryKey: accountReadRateLimitsQueryKey(),
+  });
 };
 
 const handleSkillsChanged: Handler = (_params, ctx) => {
@@ -654,19 +395,29 @@ const handleAppListUpdated: Handler = (_params, ctx) => {
 
 /** Refresh MCP status and show toast after OAuth login completes. */
 const handleMcpOauthLoginCompleted: Handler = (params, ctx) => {
-  void ctx.queryClient.invalidateQueries({ queryKey: mcpServersListServersQueryKey() });
+  void ctx.queryClient.invalidateQueries({
+    queryKey: mcpServersListServersQueryKey(),
+  });
   const name = typeof params.name === 'string' ? params.name : 'MCP server';
   const success = params.success === true;
   if (success) {
     showSnackbar(i18n.t('{{name}} login completed', { name }), 'success');
   } else {
     const error = typeof params.error === 'string' ? params.error : '';
-    showSnackbar(i18n.t('{{name}} login failed: {{error}}', { name, error }), 'error');
+    showSnackbar(
+      i18n.t('{{name}} login failed: {{error}}', { name, error }),
+      'error',
+    );
   }
 };
 
 function isMcpStartupStatus(value: unknown): value is McpServerStartupState {
-  return value === 'starting' || value === 'ready' || value === 'failed' || value === 'cancelled';
+  return (
+    value === 'starting' ||
+    value === 'ready' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -713,12 +464,12 @@ const HANDLERS: Record<string, Handler> = {
   'turn/completed': handleTurnCompleted,
 
   // Tier 1 — high value
-  'error': handleError,
+  error: handleError,
   'thread/tokenUsage/updated': handleTokenUsageUpdated,
   'serverRequest/resolved': handleServerRequestResolved,
-  'configWarning': handleConfigWarning,
-  'warning': handleWarning,
-  'deprecationNotice': handleDeprecationNotice,
+  configWarning: handleConfigWarning,
+  warning: handleWarning,
+  deprecationNotice: handleDeprecationNotice,
   'turn/plan/updated': handleTurnPlanUpdated,
   'item/plan/delta': handlePlanDelta,
   'item/mcpToolCall/progress': handleMcpToolCallProgress,
@@ -789,3 +540,5 @@ export function handleNotification(
     ctx.threadId = previousThreadId;
   }
 }
+
+export type { NotificationContext } from './notification-context';

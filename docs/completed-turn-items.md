@@ -39,26 +39,25 @@ The source inspection does not substitute for a locally run peer-followup probe.
 
 ## Client behavior
 
-- Completed rendered turns remain eligible for item queries even when already
-  `full`; full-item application accepts those refreshed reads.
-- Complete query results are reused between explicit invalidations. Opening or
-  rejoining a conversation cancels pre-gap item requests and invalidates that
-  conversation's item queries. Mounted turns refetch; other cached turns refresh
-  when rendered. Partial responses remain refetchable and never establish full
-  coverage.
-- Process replacement cancels old item requests. Readiness invalidates queries,
-  including visible completed owners absent from `autoResumeCompleted`'s target
-  list. Passive history refresh does not acquire writer ownership or create
-  background runtimes.
-- Late events route by their supplied thread and turn IDs. For a retained terminal
-  turn, item start preserves turn completion while introducing an unfinished item;
-  item completion finishes it by ID. Replayed starts cannot downgrade a terminal
-  item, and replayed completion does not append a duplicate or stop a newer turn.
-- Refreshed pages merge under the existing item authority rules: retain newer live
-  terminal observations and repair fragments without concatenating full payloads.
+Foreground opens and older history pages request full items. Rendering a completed
+turn never itself fetches or enriches it. A full snapshot is coverage of that
+read, not proof that the turn's item membership is permanently closed.
 
-This does not continuously refresh every retained background transcript, infer
-recipients from parent relationships, or use a timer as a claim of finality.
+Open/reconnect/app-server readiness own freshness. They reconcile full pages and
+repair retained older turns outside that window with bounded item paging (four
+workers). Partial responses can repair fragments but report incomplete coverage;
+failed refresh leaves warm content readable. Request baselines and recovery epochs
+reject superseded evidence, including after deletion or runtime eviction.
+
+Late events route by their supplied thread/turn IDs. A late item start preserves
+its turn's completed state; completion finishes the item by ID. Replayed events
+cannot duplicate an item, downgrade a terminal payload or stop a newer submission.
+Readiness includes viewed completed owners absent from the backend's execution
+reattachment list. Sibling workspace tabs retain that conversation's subscription.
+
+This does not poll every retained background transcript, infer recipients from
+parent relationships, or use a timer as proof of finality. See
+[workspace-tabs.md](workspace-tabs.md) for display gating and inline anchoring.
 
 ## Reproduction and limits
 

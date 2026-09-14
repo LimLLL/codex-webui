@@ -29,7 +29,6 @@ import {
   UnknownActivityItem,
   WebSearchItem,
 } from './turn-items/rich-activity-items';
-import { useTurnItemsTopUp } from '@/hooks/use-turn-items-topup';
 import {
   isPlanDisplayable,
   isTurnItemDisplayable,
@@ -96,7 +95,7 @@ function assertNever(value: never): never {
  * id: resolving them per item would rescan the whole map on every item render
  * and re-render every item whenever any approval anywhere changed.
  */
-function ItemWithRequests({
+function ItemBody({
   item,
   turnId,
   approvals,
@@ -252,6 +251,11 @@ function ItemWithRequests({
   return assertNever(item);
 }
 
+/** Stable item markers survive regrouping and add no extent outside the measured turn row. */
+function ItemWithRequests(props: Parameters<typeof ItemBody>[0]) {
+  return <div data-transcript-item={props.item.itemId}><ItemBody {...props} /></div>;
+}
+
 export function TurnBlock({ entry }: Props) {
   const { t } = useTranslation();
   const userInputRequests = useTimelineStore((s) => s.userInputRequests);
@@ -266,14 +270,6 @@ export function TurnBlock({ entry }: Props) {
       ),
     ),
   );
-  // History opens in the cheap `summary` view, which withholds reasoning and
-  // plan items; a rendered turn fetches its own full items once.
-  useTurnItemsTopUp({
-    threadId: useTimelineStore((s) => s.threadId),
-    turnId: entry.turnId,
-    itemsView: entry.itemsView,
-    completed: entry.completed,
-  });
   // Render user-input requests whose itemId doesn't match any existing turn item.
   const itemIds = new Set(entry.items.map((item) => item.itemId));
   const unattachedInputs = Object.values(userInputRequests).filter(

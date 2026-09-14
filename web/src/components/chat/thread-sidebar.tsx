@@ -68,7 +68,8 @@ export function ThreadSidebar() {
   const { t } = useTranslation();
   const threadId = useTimelineStore((s) => s.threadId);
   const threadMode = useTimelineStore((s) => s.threadMode);
-  const loading = useTimelineStore((s) => s.loading);
+  const turnStartPending = useTimelineStore((s) => s.turnStartPending);
+  const activeTurnId = useTimelineStore((s) => s.activeTurnId);
   const approvals = useTimelineStore((s) => s.approvals);
   const threadStatus = useTimelineStore((s) => s.threadStatus);
   const threadsById = useTimelineStore((s) => s.threadsById);
@@ -376,7 +377,7 @@ export function ThreadSidebar() {
   const renderThreadRow = (thread: ThreadDto, archived: boolean) => {
     const row = rowByThreadId.get(thread.id);
     const readRuntime = (id: string) =>
-      id === threadId ? { loading, approvals, threadStatus } : threadsById[id];
+      id === threadId ? { turnStartPending, activeTurnId, approvals, threadStatus } : threadsById[id];
 
     // Row flags come from the server, which already lifted them off hidden
     // branch members. Local socket state is layered on top because it is
@@ -393,7 +394,7 @@ export function ThreadSidebar() {
     const observedRuntimes = (row?.memberThreadIds ?? [thread.id])
       .filter((id) => subscribedThreadIds.has(id)).map(readRuntime)
       .filter((runtime) => runtime !== undefined);
-    const isRunning = observedRuntimes.some((runtime) => runtime.loading);
+    const isRunning = observedRuntimes.some((runtime) => (runtime.turnStartPending || runtime.activeTurnId));
     const activeFlags = observedRuntimes.flatMap((runtime) =>
       runtime.threadStatus?.type === 'active' ? runtime.threadStatus.activeFlags : [],
     );

@@ -253,30 +253,17 @@ inline code 额外要求整个 token 合格，不从更大表达式里抠子串�
 
 被判定为「本地但无法解析」的链接渲染为惰性文本，**不能**退化成 `<a>`——退化即原样复现 404。
 
-### 打开通道（`lib/open-file-request.ts`）
+### 打开通道与共享文档
 
-`codex-webui:open-file` 事件携带 `{ path, line?, sourceThreadId? }`，由 `thread-view` 接收。用户消息的 @mention 与图片徽章走同一通道。
+`codex-webui:open-file` 携带 `{ path, line?, sourceThreadId? }`。发起动作时按来源会话解析绝对路径；工作区只接受该来源的请求，文件打开不再依赖单个全局 selected-file。tab descriptor 按路径去重，行号和请求序号不构成 tab 身份。
 
-- 行号是**一次性导航意图**（`files-store.pendingLine`），不是 tab 的持久属性；tab 仍按 path 去重，同一文件不同行是同一个 tab
-- 面板必须在 ack route 请求**之前**把行号转交给 store
-- 纯 path 打开清除既有行号意图；`selectFile` 不全局解析后缀，@mention 与文件树的路径保持字面语义
-- 归属作废：请求携带发起会话 id，route 在渲染期丢弃非当前会话的请求（仅过滤会让它在切回时复活）；面板卸载/换会话时清 `pendingLine`，**并同时重置「已处理」的 seq 记号**——两者描述同一件事，只清目标却仍宣称已处理，会在 effect replay（StrictMode）下让首次打开永久丢掉跳转
-- 定位前重新读一次 store：effect 闭包捕获的 `pendingLine` 可能已在 render 与 effect 之间被取消，仅凭捕获值会跳到届时在屏的那个文件上
-- 只有文本 viewer 支持行号，由 `FileContentViewer` dispatcher 判定；其余 viewer 消费掉行号并提示不支持，避免 PDF 的行号变成页码
+`workspace-store` 的每个 file view 保存 cursor/scroll 与一次性 reveal intent。激活时先恢复普通 view state，再在 editor 持有正确 model 后 reveal；新请求取代旧请求，关闭/离开取消 intent。非文本 viewer 消费并提示不支持行号。异步读取只更新 document，不重开已关闭的 tab。
 
-### CodeViewer 的三条硬约束
+`document-store` 按绝对路径共享工作模型，独立 Files route 的单选视图与会话 tabs 连接到同一个文档。Monaco model 在 editor widget 之外保留；干净且无 owner 的 model 可释放，dirty/saving model 保留文本和 undo。URI 使用 Monaco 的 `Uri.file`，不手工拼接含 fragment/转义的路径。
 
-- **行号定位时机**：不能只等 mount。`@monaco-editor/react` 跨文件复用同一个 editor 实例、只换 model，且挂载是异步的——用布尔 ready 标志会因「重复设同值不触发重渲染」而在第二个文件之后静默失效。实例本身存进 state，新实例即新值
-- **model 身份校验**：wrapper 会把 `path` prop 当 URI 解析，所以传入路径需逐段 `encodeURIComponent` 成 `file://` URI，否则文件名里的 `#` 会被当 fragment 截断、`%` 会被当转义。校验比对 scheme/authority/query/fragment/path 全等，不做 `endsWith` 后缀匹配（会误接受 `/other/work/app.ts`）
-- **保存前置**：内容加载成功且**无进行中的刷新** + 有随内容返回的 mtime + editor 持有该文件的 model，缺一不可。读取失败时**保留**已有 editor 而非卸载（卸载会释放 model，丢掉未保存的编辑），改为禁用保存并显示重载失败横幅。
+首次读取把 content 与 server mtime 成对作为 saved baseline。后台读取不能覆盖 dirty model 或提升其 expectedMtime。Save 捕获实际提交文本及 revision；成功返回的 mtime 属于这份文本，若请求期间又有编辑，文档仍 dirty。失败保留 draft 和旧 baseline。Query cache 不反复把 fetched text 写入 dirty editor。服务端读取前采集 mtime 的保守校验方向保留不变。
 
-  写入前置**必须与它所描述的内容同源**。原先 mtime 来自 FileViewer 的独立 metadata 查询，两个查询各有各的 30 秒新鲜度时钟，于是存在这条真实的数据丢失路径：metadata 过期 31 秒、内容还新鲜 29 秒 → 文件被外部改动 → 可见性回归只重取 metadata → 新 mtime 落地而编辑器仍是旧内容 → 保存通过服务端冲突校验，覆盖他人改动。
-
-  现在 `files/read` 直接返回与该次读取配对的 mtime（`fs.stat` 本来就已执行，不增加 syscall），CodeViewer 只认这一个来源，整类不一致从结构上消失。`isFetching` 则关掉「同一查询正在重取」这个更窄的窗口。
-
-  mtime 在读取**之前**采集，这个方向是有意的：文件若在读取期间被改，得到的 mtime 比内容更旧，保存会被拒绝而非静默胜出（fail-safe）
-
-`selectFile` 重选同一文件时保留 mtime，且 metadata 同步 effect 以路径为依赖——否则元数据已缓存、mtime 值未变，effect 不重跑，保存会被永久禁用。
+完整 view/document/terminal 生命周期见 [workspace-tabs.md](workspace-tabs.md)。
 
 ## 注意事项
 

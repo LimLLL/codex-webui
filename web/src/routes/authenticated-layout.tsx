@@ -12,6 +12,7 @@ import {
   SheetContent,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { TerminalHost } from '@/components/terminal/terminal-host';
 import { ChatHeader } from '@/components/chat/chat-header';
 import { ThreadSidebar } from '@/components/chat/thread-sidebar';
 import { SnackbarContainer } from '@/components/snackbar/snackbar-container';
@@ -57,7 +58,6 @@ export function AuthenticatedLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [homeDir, setHomeDir] = useState<string | null>(null);
 
-  const threadCwd = useTimelineStore((s) => s.threadCwd);
   const setMaxIdleSubscriptions = useTimelineStore((s) => s.setMaxIdleSubscriptions);
   const cleanupIdleThreadSubscriptions = useTimelineStore((s) => s.cleanupIdleThreadSubscriptions);
   const setRootDir = useFilesStore((s) => s.setRootDir);
@@ -120,21 +120,31 @@ export function AuthenticatedLayout() {
     return () => window.removeEventListener('codex-webui:auth-expired', handleAuthExpired);
   }, [navigate]);
 
-  // Sync file tree root based on current route context
+  // Conversation roots are adopted by their keyed WorkspaceTree. This owner
+  // handles the standalone browser only, so late metadata cannot reset browsing.
   useEffect(() => {
+    let cancelled = false;
     const dir = pathname.startsWith('/files')
       ? homeDir
-      : pathname.startsWith('/t/')
-        ? threadCwd
-        : null;
+      : null;
+    // `setRootDir` resets the expansion set and the selection, so it must only
+    // be reached when the root genuinely changes — navigating between two
+    // conversations that share a working directory would otherwise collapse
+    // the whole tree on every hop. The store's own equality guard does the
+    // rest; clearing first would defeat it.
     if (dir) {
+      // A rejected root is still shown: the tree reports the directory it
+      // cannot read, instead of silently leaving the previous one on screen.
       void filesAddRoot({ body: { root: dir }, throwOnError: true, meta: { silent: true } })
-        .then(() => setRootDir(dir))
-        .catch(() => { /* root rejected */ });
-    } else {
+        .then(() => { if (!cancelled) setRootDir(dir); })
+        .catch(() => { if (!cancelled) setRootDir(dir); });
+    } else if (!pathname.startsWith('/t/')) {
       setRootDir(null);
     }
-  }, [pathname, threadCwd, homeDir, setRootDir]);
+    // Retain the tree cache when entering a conversation; its keyed explorer
+    // withholds presentation until its own cwd adoption completes.
+    return () => { cancelled = true; };
+  }, [pathname, homeDir, setRootDir]);
 
   const { t } = useTranslation();
   const handleToggleDiagnostics = useCallback(() => {
@@ -186,15 +196,16 @@ export function AuthenticatedLayout() {
         )}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col isolate">
-          <ChatHeader
+          {!pathname.startsWith('/t/') && <ChatHeader
             dark={dark}
             onToggleDark={toggleDark}
             onToggleDiagnostics={handleToggleDiagnostics}
-          />
+          />}
           <CodexStatusBanner />
           <Outlet />
         </div>
       </div>
+      <TerminalHost />
       <SnackbarContainer />
     </TooltipProvider>
   );

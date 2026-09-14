@@ -1,27 +1,8 @@
 /**
- * Recovers state this client may never have received live.
- *
- * Two situations need it, and they need the same thing:
- *
- *  - Opening a thread mid-turn. The open path asks for the cheap `summary`
- *    view, which carries only user messages and a turn's final assistant
- *    message. A running turn has no final message yet, so everything the agent
- *    already produced comes back empty and the transcript looks erased until
- *    the turn ends.
- *  - Reconnecting after a dropped socket. Socket.IO guarantees ordering, not
- *    replay of what was missed while disconnected.
- *
- * In both cases the durable history already holds the answer: app-server
- * persists an item when that item completes, not when its turn does, so a
- * running turn does expose its finished items. What it cannot supply is the
- * item still in flight — that one is repaired by its own terminal payload when
- * it arrives, which carries the whole accumulated result rather than a tail.
- *
- * Reconnect additionally has to repair TURN LIFECYCLE, not just items. Items
- * and lifecycle are separate facts carried by separate notifications, and a
- * turn that started before the gap and finished during it emits its
- * `turn/completed` into the void. Recovering only its items leaves the
- * transcript correct and the composer spinning forever.
+ * Repairs missed lifecycle and late items on open, reconnect, and app-server recovery.
+ * Full history pages repair the turns they cover. Only retained turns outside that
+ * window need per-turn reads; rendering or scrolling never initiates hydration.
+ * Live observations made after a request outrank its persisted snapshot.
  */
 import {
   threadsListTurnItems,
@@ -30,6 +11,14 @@ import {
 import { useTimelineStore } from '@/stores/timeline-store';
 import { currentObservationSeq } from '@/lib/turn-item-merge';
 import type { ThreadTurnsPageDto } from '@/generated/api';
+import { HISTORY_PAGE_SIZE } from './history-prefetch';
+import {
+  readTranscriptBookmark,
+  readingAnchorTurnId,
+} from './transcript-anchor';
+import { assertFullHistoryPage } from './full-history';
+import { getApiErrorMessage } from './api-error';
+import i18n from '@/i18n';
 import {
   currentRecoveryEpoch,
   supersedeRecovery,
@@ -46,25 +35,36 @@ export { supersedeRecovery } from './thread-recovery-epoch';
  * recovery joined a request whose response was already destined to be
  * discarded, and the repair never happened at all.
  */
-const inFlight = new Map<string, Promise<void>>();
+const inFlight = new Map<string, Promise<boolean>>();
 
 /** Pages one recovery will follow before settling for a partial repair. */
 const RECOVERY_PAGE_LIMIT = 10;
 
-/** Turn headers read to settle lifecycle after a gap. */
-const LIFECYCLE_PAGE_LIMIT = 20;
+/** Per-turn item reads issued at once, so one repair cannot saturate the socket. */
+const RECOVERY_CONCURRENCY = 4;
+
+/**
+ * Retained completed turns re-read for late sub-agent items per recovery.
+ *
+ * Nothing marks these turns as repaired — late items may always arrive — so an
+ * unbounded sweep is re-issued in full on every reconnect and grows with every
+ * page of history the reader loads. Bounding it trades coverage of the oldest
+ * retained turns for an open that does not wait on dozens of serial reads.
+ */
+const STALE_SWEEP_LIMIT = 8;
 
 /**
  * Fetches and merges one turn's persisted items.
  *
  * @param threadId - Conversation owning the turn
  * @param turnId - Turn to repair
- * @returns Resolves when the snapshot has been applied, or skipped as unusable
+ * @returns Whether the complete persisted item list was recovered in the current epoch
  */
 export function recoverTurnItems(
   threadId: string,
   turnId: string,
-): Promise<void> {
+  reportError = true,
+): Promise<boolean> {
   // Both baselines are captured before the request goes out. The observation
   // counter decides which side of a conflict is newer; the epoch decides
   // whether this recovery still belongs to the current view of the thread.
@@ -78,6 +78,8 @@ export function recoverTurnItems(
     try {
       const items: Array<Record<string, unknown>> = [];
       let cursor: string | undefined;
+      let complete = false;
+      const cursors = new Set<string>();
       // Bounded on purpose. The endpoint reports an explicit incomplete outcome
       // when it stops early, and a partial repair is still worth applying — but
       // a turn whose items outrun this many pages is not something to keep
@@ -87,32 +89,45 @@ export function recoverTurnItems(
           path: { threadId, turnId },
           ...(cursor && { query: { cursor } }),
         });
-        if (!data) break;
+        if (currentRecoveryEpoch(threadId) !== epoch) return false;
+        if (!data)
+          throw new Error(i18n.t('Failed to recover conversation items.'));
         items.push(...(data.items as Array<Record<string, unknown>>));
         // `complete` is the only completeness signal. A null cursor alone does
         // not mean the history ended — it can also mean paging is unavailable
         // or the response was malformed, and treating those as "that was all"
         // is how a truncated transcript starts looking authoritative.
-        if (data.complete || !data.nextCursor) break;
+        complete = data.complete;
+        if (complete || !data.nextCursor || cursors.has(data.nextCursor)) break;
         cursor = data.nextCursor;
+        cursors.add(cursor);
       }
-      if (items.length === 0) return;
       // Re-validate rather than trusting the pre-request check: the
       // conversation can be deleted, evicted or superseded while this is in
       // flight, and applying then would rebuild state the user discarded.
-      if (currentRecoveryEpoch(threadId) !== epoch) return;
+      if (currentRecoveryEpoch(threadId) !== epoch) return false;
       const store = useTimelineStore.getState();
-      if (!store.getThreadRuntime(threadId)) return;
+      if (!store.getThreadRuntime(threadId)) return false;
       store.applyRecoveredTurnItemsForThread(
         threadId,
         turnId,
         items,
         baselineSeq,
       );
-    } catch {
-      // A failed read recovers nothing and must not claim otherwise. Leaving
-      // the turn as-is keeps it eligible for the next attempt; the completed
-      // turn top-up will also cover it once the turn finishes.
+      if (!complete)
+        throw new Error(
+          i18n.t(
+            'Conversation item recovery returned incomplete data. Retry refreshing history.',
+          ),
+        );
+      return true;
+    } catch (error) {
+      if (reportError && currentRecoveryEpoch(threadId) === epoch)
+        useTimelineStore.getState().setOpenStateForThread(threadId, {
+          historyError: getApiErrorMessage(error),
+          historyRequest: 'error',
+        });
+      return false;
     } finally {
       inFlight.delete(key);
     }
@@ -132,10 +147,14 @@ async function recoverTurnLifecycle(
   threadId: string,
   itemTargets: Set<string>,
   initialPage?: ThreadTurnsPageDto,
-): Promise<void> {
+  initialBaseline?: number,
+): Promise<boolean> {
+  const baselineSeq = initialPage
+    ? (initialBaseline ?? 0)
+    : currentObservationSeq();
   const epoch = currentRecoveryEpoch(threadId);
   const before = useTimelineStore.getState().getThreadRuntime(threadId);
-  if (!before) return;
+  if (!before) return false;
   const known = new Set(
     before.timeline.flatMap((entry) =>
       entry.kind === 'turn' ? [entry.turnId] : [],
@@ -152,15 +171,17 @@ async function recoverTurnLifecycle(
               await threadsListTurns({
                 path: { threadId },
                 query: {
-                  itemsView: 'summary',
-                  limit: LIFECYCLE_PAGE_LIMIT,
+                  itemsView: 'full',
+                  limit: HISTORY_PAGE_SIZE,
                   sortDirection: 'desc',
                   cursor: cursor ?? undefined,
                 },
               })
             ).data;
-      if (!data) return;
-      if (currentRecoveryEpoch(threadId) !== epoch) return;
+      if (!data)
+        throw new Error(i18n.t('Failed to recover conversation history.'));
+      assertFullHistoryPage(data);
+      if (currentRecoveryEpoch(threadId) !== epoch) return false;
       const seen = new Set(turns.map((turn) => turn.id));
       turns.push(...data.data.filter((turn) => !seen.has(turn.id)));
       const previous: string | null = cursor;
@@ -176,8 +197,7 @@ async function recoverTurnLifecycle(
     }
     const store = useTimelineStore.getState();
     const runtime = store.getThreadRuntime(threadId);
-    if (!runtime || currentRecoveryEpoch(threadId) !== epoch) return;
-    if (turns.length === 0) return;
+    if (!runtime || currentRecoveryEpoch(threadId) !== epoch) return false;
     store.hydrateOpenedThread({
       threadId,
       turnsNewestFirst: turns,
@@ -186,24 +206,66 @@ async function recoverTurnLifecycle(
       knownTurnIdsAtRead: known,
     });
     store.settleTurnLifecycleForThread(threadId, turns);
-    const repairs: Promise<void>[] = [];
-    for (const turn of turns.slice(0, LIFECYCLE_PAGE_LIMIT)) {
-      // Older summary rows use the existing on-demand item top-up when viewed.
-      // Summary suffices for older history on a first open. Turns missed from
-      // an existing window and running turns also need their completed items.
-      if (
-        !itemTargets.has(turn.id) &&
-        (turn.status === 'inProgress' ||
-          (known.size > 0 && !known.has(turn.id)))
-      ) {
-        itemTargets.add(turn.id);
-        repairs.push(recoverTurnItems(threadId, turn.id));
-      }
+    // These pages already carry full item lists. Apply recovery authority to
+    // repair pre-gap live prefixes, then avoid a redundant per-turn request.
+    for (const turn of turns) {
+      itemTargets.delete(turn.id);
+      store.applyRecoveredTurnItemsForThread(
+        threadId,
+        turn.id,
+        turn.items as Array<Record<string, unknown>>,
+        baselineSeq,
+      );
     }
-    await Promise.all(repairs);
-  } catch {
-    // Failure supplies no lifecycle/absence evidence. A subsequent open or
-    // reconnect can retry; partially fetched header windows are not adopted.
+    return true;
+  } catch (error) {
+    // Retained full data remains readable, but failed recovery is visible.
+    if (currentRecoveryEpoch(threadId) === epoch)
+      useTimelineStore.getState().setOpenStateForThread(threadId, {
+        historyError: getApiErrorMessage(error),
+        historyRequest: 'error',
+      });
+    return false;
+  }
+}
+
+/** Concurrent open/reconnect callers wait for the latest repair of the same conversation. */
+const recovering = new Map<
+  string,
+  { latest: Promise<boolean>; callers: number }
+>();
+
+/**
+ * Runs a replacement repair and reports the newest one's outcome to every caller.
+ *
+ * Each call does issue its own read, deliberately: a reconnect arriving during
+ * an open carries post-gap truth that the open's pre-gap snapshot cannot, so
+ * superseding is the correct resolution rather than joining. What is shared is
+ * the *answer* — an open awaiting an older repair must not fail its loading
+ * gate merely because a newer read replaced it, so callers keep following the
+ * latest handle until it settles. Deletion is still rejected by thread epoch.
+ */
+export async function recoverThreadAfterReconnect(
+  threadId: string,
+  initialPage?: ThreadTurnsPageDto,
+  initialBaseline?: number,
+): Promise<boolean> {
+  const task = runThreadRecovery(threadId, initialPage, initialBaseline);
+  const batch = recovering.get(threadId) ?? { latest: task, callers: 0 };
+  batch.latest = task;
+  batch.callers++;
+  recovering.set(threadId, batch);
+  try {
+    let observed = task;
+    let complete = await observed;
+    while (batch.latest !== observed) {
+      observed = batch.latest;
+      complete = await observed;
+    }
+    return complete;
+  } finally {
+    batch.callers--;
+    if (batch.callers === 0) recovering.delete(threadId);
   }
 }
 
@@ -221,18 +283,37 @@ async function recoverTurnLifecycle(
  *
  * @param threadId - Conversation to repair
  */
-export async function recoverThreadAfterReconnect(
+async function runThreadRecovery(
   threadId: string,
   initialPage?: ThreadTurnsPageDto,
-): Promise<void> {
+  initialBaseline?: number,
+): Promise<boolean> {
   const runtime = useTimelineStore.getState().getThreadRuntime(threadId);
-  if (!runtime) return;
+  if (!runtime) return false;
 
   supersedeRecovery(threadId);
+  const epoch = currentRecoveryEpoch(threadId);
   useTimelineStore.getState().setHistoryLoadingForThread(threadId, false);
 
-  const targets = new Set<string>();
-  if (runtime.activeTurnId) targets.add(runtime.activeTurnId);
+  // Two target sets, because they answer to different evidence and carry
+  // different consequences.
+  //
+  // `interrupted` holds turns this client can see are wrong: an item or plan
+  // fragment that never terminated, plus the turn it believes is running. The
+  // transcript stays visibly broken until they are repaired, so they block the
+  // reveal and a failure among them is reported as an incomplete recovery.
+  //
+  // `stale` holds retained completed turns. A completed turn can still acquire
+  // items — a sub-agent's `item/started`/`item/completed` pair arrives after
+  // its parent's `turn/completed` — and a gap swallows those. But this is a
+  // sweep over turns nothing indicates are wrong, so it is bounded and its
+  // failures do not fail the open: one unreadable old turn must not replace a
+  // perfectly readable transcript with an error screen, and the set would
+  // otherwise grow with every page the reader loads and be re-read in full on
+  // every single reconnect.
+  const interrupted = new Set<string>();
+  const stale: string[] = [];
+  if (runtime.activeTurnId) interrupted.add(runtime.activeTurnId);
   for (const entry of runtime.timeline) {
     if (entry.kind !== 'turn') continue;
     if (
@@ -240,18 +321,83 @@ export async function recoverThreadAfterReconnect(
       Object.values(entry.plan?.planTextByItemId ?? {}).some(
         (item) => !item.completed,
       )
-    ) {
-      targets.add(entry.turnId);
-    }
+    )
+      interrupted.add(entry.turnId);
+    else if (entry.completed) stale.push(entry.turnId);
   }
-  const repairs = [...targets].map((turnId) =>
-    recoverTurnItems(threadId, turnId),
+  // Read full pages first, which settles lifecycle and removes covered item
+  // targets; anything still listed was never reached by a page.
+  // `recoverTurnLifecycle` removes whatever its pages already carried in full,
+  // so what remains in the set is precisely what still needs its own read.
+  const needsItemRead = new Set([...interrupted, ...stale]);
+  const lifecycleComplete = await recoverTurnLifecycle(
+    threadId,
+    needsItemRead,
+    initialPage,
+    initialBaseline,
   );
-  // Runs alongside rather than after: the two repair independent facts, and
-  // making lifecycle wait on item paging would keep a finished turn spinning
-  // for the length of the slowest transcript repair.
-  await Promise.all([
-    ...repairs,
-    recoverTurnLifecycle(threadId, targets, initialPage),
-  ]);
+  if (currentRecoveryEpoch(threadId) !== epoch) return false;
+  // Newest first: a turn the reader just left is likelier to be both looked at
+  // again and still gaining sub-agent output than one from hours ago.
+  const sweep = stale
+    .filter((turnId) => needsItemRead.has(turnId) && !interrupted.has(turnId))
+    .reverse();
+  const anchor = readTranscriptBookmark(threadId)?.anchor;
+  const readingTurn = anchor ? readingAnchorTurnId(anchor) : null;
+  const readingIndex = readingTurn ? sweep.indexOf(readingTurn) : -1;
+  if (readingIndex > 0) sweep.unshift(...sweep.splice(readingIndex, 1));
+  const dropped = Math.max(0, sweep.length - STALE_SWEEP_LIMIT);
+  if (dropped > 0)
+    console.info(
+      `[thread-recovery] ${threadId}: late-item sweep bounded to ${STALE_SWEEP_LIMIT} of ${sweep.length} retained completed turns; ${dropped} not re-read`,
+    );
+  /** Runs a bounded queue; background outcomes never mutate first-page readiness. */
+  const repairItems = async (
+    targets: string[],
+    reportError: boolean,
+  ): Promise<boolean> => {
+    const remaining = [...targets];
+    let complete = true;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(RECOVERY_CONCURRENCY, remaining.length) },
+        async () => {
+          for (
+            let turnId = remaining.shift();
+            turnId !== undefined;
+            turnId = remaining.shift()
+          ) {
+            if (currentRecoveryEpoch(threadId) !== epoch) return;
+            if (!(await recoverTurnItems(threadId, turnId, reportError)))
+              complete = false;
+          }
+        },
+      ),
+    );
+    return complete;
+  };
+  const required = [...interrupted].filter((turnId) =>
+    needsItemRead.has(turnId),
+  );
+  const itemsComplete = await repairItems(required, true);
+  if (currentRecoveryEpoch(threadId) !== epoch) return false;
+  // Launch only after required work, and deliberately do not await the sweep.
+  // Its aggregate warning is separate from request/error state used by the gate.
+  if (lifecycleComplete && itemsComplete)
+    void repairItems(sweep.slice(0, STALE_SWEEP_LIMIT), false).then(
+      (complete) => {
+        if (complete || currentRecoveryEpoch(threadId) !== epoch) return;
+        const store = useTimelineStore.getState();
+        if (!store.getThreadRuntime(threadId)?.historyError)
+          store.setOpenStateForThread(threadId, {
+            historyError: i18n.t(
+              'Some older messages could not be refreshed. Reopen the conversation to retry.',
+            ),
+          });
+        console.warn(
+          `[thread-recovery] ${threadId}: late-item sweep incomplete`,
+        );
+      },
+    );
+  return lifecycleComplete && itemsComplete;
 }

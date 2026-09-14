@@ -1,3 +1,5 @@
+import { useSurfaceOpen } from "@/hooks/use-surface-open"
+
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
@@ -8,7 +10,8 @@ import { XIcon } from "lucide-react"
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const visibility = useSurfaceOpen(props)
+  return <DialogPrimitive.Root data-slot="dialog" {...props} {...visibility} />
 }
 
 function DialogTrigger({

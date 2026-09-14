@@ -24,6 +24,11 @@ export type SidebarViewState =
 // ── Store interface ──────────────────────────────────────────────────
 
 interface LayoutState {
+  /** Global explorer preference; transient phone overlays never overwrite it. */
+  workspaceTreeCollapsed: boolean;
+  workspaceTreeWidth: number;
+  setWorkspaceTreeCollapsed: (collapsed: boolean) => void;
+  setWorkspaceTreeWidth: (width: number) => void;
   // ── Persisted ──────────────────────────────────────────────────────
   /** Whether the desktop sidebar is manually collapsed. */
   desktopSidebarCollapsed: boolean;
@@ -51,6 +56,10 @@ interface LayoutState {
 export const useLayoutStore = create<LayoutState>()(
   persist(
     (set, get) => ({
+      workspaceTreeCollapsed: true,
+      workspaceTreeWidth: 260,
+      setWorkspaceTreeCollapsed: (workspaceTreeCollapsed) => set({ workspaceTreeCollapsed }),
+      setWorkspaceTreeWidth: (width) => set({ workspaceTreeWidth: Math.max(180, Math.min(600, width)) }),
       // ── Persisted defaults ───────────────────────────────────────────
       desktopSidebarCollapsed: false,
       collapsedGroupKeys: [],
@@ -85,6 +94,8 @@ export const useLayoutStore = create<LayoutState>()(
     {
       name: 'codex.webui.layout',
       partialize: (state) => ({
+        workspaceTreeCollapsed: state.workspaceTreeCollapsed,
+        workspaceTreeWidth: state.workspaceTreeWidth,
         desktopSidebarCollapsed: state.desktopSidebarCollapsed,
         collapsedGroupKeys: state.collapsedGroupKeys,
       }),

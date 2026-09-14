@@ -5,9 +5,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { useCodexSocket } from './use-codex-socket';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useSnackbarStore } from '@/stores/snackbar-store';
-import { useTurnItemsTopUp } from './use-turn-items-topup';
 import type { TurnDto } from '@/generated/api';
-import { threadsListTurnItemsQueryKey } from '@/generated/api/@tanstack/react-query.gen';
 
 const transport = vi.hoisted(() => ({
   listeners: new Map<string, (value: unknown) => void>(),
@@ -42,6 +40,7 @@ vi.mock('@/generated/api/sdk.gen', async (original) => ({
   ...await original<typeof import('@/generated/api/sdk.gen')>(),
   pendingApprovalsListPending: transport.read,
   threadsListTurnItems: transport.items,
+  threadsListTurns: vi.fn(async () => ({ data: { data: [], nextCursor: null, backwardsCursor: null } })),
 }));
 vi.mock('@/lib/thread-restore', () => ({ restoreThread: transport.restore }));
 const initial = useTimelineStore.getState();
@@ -84,18 +83,15 @@ beforeEach(() => {
 it('refreshes a viewed completed owner on readiness even when only its child is announced', async () => {
   const store = useTimelineStore.getState();
   store.setActiveThread('owner');
-  store.hydrateOpenedThread({ threadId: 'owner', turnsNewestFirst: [{ id: 'old', status: 'completed', itemsView: 'summary', items: [], error: null, startedAt: null, completedAt: null, durationMs: null } satisfies TurnDto], historyCursor: null, readOnlyReason: null });
+  store.hydrateOpenedThread({ threadId: 'owner', turnsNewestFirst: [{ id: 'old', status: 'completed', itemsView: 'full', items: [], error: null, startedAt: null, completedAt: null, durationMs: null } satisfies TurnDto], historyCursor: null, readOnlyReason: null });
   store.applyFullTurnItemsForThread('owner', 'old', [{ type: 'agentMessage', id: 'answer', text: 'done' }]);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const key = threadsListTurnItemsQueryKey({ path: { threadId: 'owner', turnId: 'old' } });
   const original = { items: [{ type: 'agentMessage', id: 'answer', text: 'done' }], complete: true, nextCursor: null };
-  client.setQueryData(key, original);
   transport.items.mockResolvedValue({ data: original });
   const view = renderHook(() => {
     useCodexSocket();
-    useTurnItemsTopUp({ threadId: 'owner', turnId: 'old', itemsView: 'full', completed: true });
   }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-  await waitFor(() => expect(transport.items).toHaveBeenCalled());
+  await waitFor(() => expect(transport.read).toHaveBeenCalled());
   await waitFor(() => expect(client.isFetching()).toBe(0));
   const activity = { type: 'subAgentActivity', id: 'subagent-completed-child-turn', kind: 'completed', agentThreadId: 'child', agentPath: '/root/child' };
   transport.items.mockResolvedValue({ data: { ...original, items: [...original.items, activity] } });
@@ -115,9 +111,9 @@ it('refreshes a viewed completed owner on readiness even when only its child is 
 it('ingests both late activity events into the initiating turn without reopening it or changing another active turn', async () => {
   const store = useTimelineStore.getState();
   store.setActiveThread('requester');
-  store.hydrateOpenedThread({ threadId: 'requester', turnsNewestFirst: [{ id: 'old', status: 'completed', itemsView: 'summary', items: [], error: null, startedAt: null, completedAt: null, durationMs: null } satisfies TurnDto], historyCursor: null, readOnlyReason: null });
+  store.hydrateOpenedThread({ threadId: 'requester', turnsNewestFirst: [{ id: 'old', status: 'completed', itemsView: 'full', items: [], error: null, startedAt: null, completedAt: null, durationMs: null } satisfies TurnDto], historyCursor: null, readOnlyReason: null });
   store.setActiveTurnIdForThread('requester', 'new');
-  store.setLoadingForThread('requester', true);
+  store.setTurnStartPendingForThread('requester', true);
   const view = mount();
   await waitFor(() => expect(transport.read).toHaveBeenCalled());
   const params = { threadId: 'requester', turnId: 'old', item: {
@@ -131,7 +127,7 @@ it('ingests both late activity events into the initiating turn without reopening
   send('item/started');
   send('item/completed');
   expect(turn()).toMatchObject({ completed: true, items: [expect.objectContaining({ itemId: params.item.id, completed: true })] });
-  expect(store.getThreadRuntime('requester')).toMatchObject({ activeTurnId: 'new', loading: true });
+  expect(store.getThreadRuntime('requester')).toMatchObject({ activeTurnId: 'new', turnStartPending: true });
   expect(store.getThreadRuntime('worker')).toBeNull();
   view.unmount();
 });

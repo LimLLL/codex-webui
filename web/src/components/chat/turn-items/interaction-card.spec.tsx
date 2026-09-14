@@ -108,10 +108,10 @@ it('opening an elicitation URL does not answer the request', async () => {
 
 it('retains an attributable refusal without ending the turn or duplicating it on recovery', () => {
   const store = useTimelineStore.getState(); store.selectThread('t');
-  store.setLoadingForThread('t', true); store.setActiveTurnIdForThread('t', 'turn');
+  store.setTurnStartPendingForThread('t', true); store.setActiveTurnIdForThread('t', 'turn');
   const failure = { instanceId: 'refused', threadId: 't', turnId: 'turn', message: 'This WebUI cannot handle this request.' };
   ingestRequestFailure(failure); ingestRequestFailure(failure);
   const runtime = store.getThreadRuntime('t')!;
-  expect(runtime.loading).toBe(true); expect(runtime.activeTurnId).toBe('turn');
+  expect(runtime.turnStartPending).toBe(false); expect(store.isThreadBusy('t')).toBe(true); expect(runtime.activeTurnId).toBe('turn');
   expect(runtime.timeline.filter((entry) => entry.kind === 'system')).toHaveLength(1);
 });
