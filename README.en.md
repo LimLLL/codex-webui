@@ -9,7 +9,11 @@ The backend (NestJS) talks to `codex app-server` over stdio JSON-RPC and pushes 
 
 [简体中文](./README.md)
 
-![Main UI](./images/main-en.png)
+| | |
+|:--:|:--:|
+| <img src="./images/main-en.png" width="440" alt="Chat and threads"><br>**Chat & Threads** | <img src="./images/branches-en.png" width="440" alt="Message-level branching"><br>**Message-Level Branching** |
+| <img src="./images/approval-en.png" width="440" alt="Approval flow"><br>**Approval Flow** | <img src="./images/files-en.png" width="440" alt="File management and preview"><br>**File Management & Preview** |
+| <img src="./images/terminal-en.png" width="440" alt="Terminal"><br>**Terminal** | <img src="./images/integrations-en.png" width="440" alt="Integrations and plugins"><br>**Integrations & Plugins** |
 
 ## Features
 
@@ -32,9 +36,6 @@ The backend (NestJS) talks to `codex app-server` over stdio JSON-RPC and pushes 
 - Multi-device CAS conflict prevention
 
 **File Management & Preview**
-
-![File Management](./images/sidebar-file-en.png)
-
 - Tree browser with drag-and-drop (dnd-kit)
 - Monaco code editor + Git diff split view
 - File preview: PDF, images, video, audio, fonts, binary (hex dump)
@@ -43,16 +44,14 @@ The backend (NestJS) talks to `codex app-server` over stdio JSON-RPC and pushes 
 - Upload / download / rename / copy / move / mkdir
 
 **Terminal**
-
-![Terminal](./images/sidebar-terminal-en.png)
-
 - Multi-tab shared terminal (node-pty + xterm.js)
 - Reconnect with no output loss
 - Headless VT replay
 
 **Integrations & Plugins**
-
-![Integrations](./images/side-integration-en.png)
+- Plugin marketplace: browse, install, uninstall, and sync what is already installed
+- MCP servers: status, reload all, OAuth login
+- Apps / connectors: list available connectors and their tool summaries (experimental)
 
 **Other**
 - JWT + API Key authentication

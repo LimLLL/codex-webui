@@ -9,7 +9,11 @@
 
 [English](./README.en.md)
 
-![主界面](./images/main.png)
+| | |
+|:--:|:--:|
+| <img src="./images/main.png" width="440" alt="对话与线程"><br>**对话与线程** | <img src="./images/branches.png" width="440" alt="消息级分支"><br>**消息级分支** |
+| <img src="./images/approval.png" width="440" alt="审批流程"><br>**审批流程** | <img src="./images/files.png" width="440" alt="文件管理与预览"><br>**文件管理与预览** |
+| <img src="./images/terminal.png" width="440" alt="终端"><br>**终端** | <img src="./images/integrations.png" width="440" alt="集成与插件"><br>**集成与插件** |
 
 ## 功能
 
@@ -32,9 +36,6 @@
 - 多设备同时在线时的 CAS 防冲突
 
 **文件管理与预览**
-
-![文件管理](./images/sidebar-file.png)
-
 - 树形文件浏览器，支持拖拽移动
 - Monaco Editor 代码编辑 + Git diff 分栏对比
 - 文件预览：PDF、图片、视频、音频、字体、二进制（hex dump）
@@ -43,16 +44,14 @@
 - 上传 / 下载 / 重命名 / 复制 / 移动 / 新建目录
 
 **终端**
-
-![终端](./images/sidebar-terminal.png)
-
 - 多 tab 共享终端（node-pty + xterm.js）
 - 断线重连，输出不丢失
 - headless VT 回放
 
 **集成与插件**
-
-![集成](./images/sidebar-intergration.png)
+- 插件市场：浏览、安装、卸载，并与本地已装插件同步
+- MCP 服务器：查看状态、整体重载、OAuth 登录
+- Apps / 连接器：列出可用连接器与其工具清单（实验性）
 
 **其他**
 - JWT + API Key 认证
