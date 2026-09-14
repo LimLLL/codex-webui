@@ -85,6 +85,13 @@
       "when": 1789099011063,
       "tag": "0011_gray_xavin",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789351042180,
+      "tag": "0012_terminal_lifecycle",
+      "breakpoints": true
     }
   ]
 }

@@ -42,7 +42,7 @@ identity or the remembered desktop width. The left navigation is unchanged.
 | `workspace-store` | In-memory per-conversation tab order, active view, editor view state and one-shot reveal requests; reset on reload |
 | `layout-store` | Persisted explorer collapse state and preferred width, alongside existing navigation preferences |
 | `document-store` | Shared text model, saved content/revision pair, dirty/conflict/save state for an absolute file |
-| `terminal-store` | Shared session metadata and explicit socket operations |
+| `terminal-store` | Shared metadata, typed operations, creation-free discovery and presented-only recovery |
 | `terminal-view-store` / `TerminalHost` | Local retained attachments and the currently visible presentation rectangle |
 | `timeline-store` and its action modules | Conversation-scoped history, opening, submission, execution and pending decisions |
 | `transcript-anchor` | In-memory reading bookmarks independent of runtime-cache eviction |
@@ -184,13 +184,14 @@ passes compensates for that; it does not remove it.
 
 ## Terminals and verification
 
+Logical terminal identity and tab position survive replacement of the physical PTY. Only the presented terminal in a visible browser page requests replacement; hidden lost terminals stay lost until selected. The backend enforces three automatic attempts per identity in a rolling 24 hours, persisted across restart. A visible limit message offers manual recovery without resetting that budget. Replacement displays a persistent shell/cwd notice and the most recent previous shell's local output in a separate read-only section; disconnected input is discarded. See [terminal.md](terminal.md) for durable close ordering and directory precedence.
+
 Terminal instances live in `TerminalHost`, beyond route and sibling-tab lifetimes.
 Inactive instances stay mounted, attached and receiving output. Only a visibly
 usable active instance fits/reports dimensions, including after reconnect.
 Closing a terminal tab explicitly closes the shared session; shared attachments
-retain the confirmation. A failed close keeps the view. Natural or remote exit
-keeps the output visible until this browser closes its view. Route cleanup only
-detaches local ownership and never invokes destructive close.
+retain the confirmation. A failed close keeps the view. Natural exit keeps its retained output; remote logical close preserves local output while permanently revoking replacement eligibility. Route cleanup only
+detaches local ownership and never invokes destructive close. Conversation opening discovers and attaches extant sessions, including exited buffers, without selecting their tabs or creating processes. Listing a session does not authorize replacing it if it disappears before attachment.
 
 Vitest has separate `unit` (existing jsdom) and `browser` projects. Browser tests
 exercise, in Chromium and WebKit: the production virtualizer under hidden

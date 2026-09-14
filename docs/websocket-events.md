@@ -30,10 +30,13 @@ codex app-server (stdout JSONL)
 | `codex.serverResponse` | `{ id, instanceId, result }` | 必须引用原 proposal；与 REST 共用 CAS 和原连接答复 |
 | `fs.subscribe` | `{ path }` | 订阅目录变更，首次创建 chokidar watcher |
 | `fs.unsubscribe` | `{ path }` | 取消订阅，无订阅者时关闭 watcher |
-| `terminal.open` | `{ cwd, cols, rows }` | 打开 PTY session，回调返回 `{ terminalId }` |
-| `terminal.input` | `{ terminalId, data }` | 用户键盘输入 |
-| `terminal.resize` | `{ terminalId, cols, rows }` | 终端窗口大小变化 |
-| `terminal.close` | `{ terminalId }` | 关闭终端 session |
+| `terminal.open` | `{ contextKey, cwd?, cols?, rows?, title? }` | 创建逻辑终端与 PTY，ACK 返回 terminal metadata |
+| `terminal.list` | `{ contextKey }` | 仅列出现存 session，不创建 |
+| `terminal.reconnect` | `{ contextKey, terminalId }` | 仅附着；返回 terminal/state/sequence |
+| `terminal.recover` | `{ contextKey, terminalId, manual }` | 前台终端恢复；后端仲裁 durable eligibility 与滚动限额 |
+| `terminal.input` | `{ contextKey, terminalId, sessionId, data }` | 仅作用于指定物理 shell |
+| `terminal.resize` | `{ contextKey, terminalId, sessionId, cols, rows }` | 终端窗口大小变化 |
+| `terminal.close` | `{ contextKey, terminalId }` | 所有状态均持久化撤销逻辑身份；成功才确认 |
 
 ### Server → Client
 
@@ -45,8 +48,8 @@ codex app-server (stdout JSONL)
 | `conversation.pending.changed` | `{ generation }` | Authenticated global pending-set invalidation, including expiry/cancellation |
 | `conversation.pending.resolved` | `{ instanceId, generation, requestId, threadId, status }` | 区分 submitted 与 resolved/cancelled/expired/failed，不表示执行成功 |
 | `fs.changed` | `{ event, path }` | 文件变更通知 (add/change/unlink/addDir/unlinkDir) |
-| `terminal.output` | `{ terminalId, data }` | PTY 输出 |
-| `terminal.exit` | `{ terminalId, exitCode }` | PTY 进程退出 |
+| `terminal.output` | `{ terminalId, sessionId, sequence, data }` | 与 snapshot 同序列边界的 PTY 输出 |
+| `terminal.exit` | `{ terminal, closed:false }` 或 `{ terminalId, contextKey, closed:true }` | 自然退出或明确关闭；二者不混用 |
 
 `thread/settings/updated`、`thread/goal/updated`、`thread/goal/cleared` 以及 inline review 产生的 `turn/*` / `item/*` notification 走同一个 `codex.notification` 通道，按 `params.threadId` 投递到对应 room。除上述错误投影外，后端不改写事件。
 
@@ -226,3 +229,5 @@ classification and client ordering rules are in
 两类使用独立 interaction timeline row。Legacy、机器面未实现方法及未知 method 在 ingress 错误答复，不生成不可操作卡片。
 `codex.serverRequestFailed` 包含 `{ instanceId, threadId, turnId, message }`；说明来自客户端，不改变 app-server turn outcome。
 `warning` 的原始 message 显示为会话系统警告或全局提示，包含上游对 unsupported service tier 的解释。
+
+TerminalGateway 显式使用 ApiKeyGuard 和 gateway-local exception filter，鉴权拒绝也通过 typed ACK 返回。终端错误 ACK 保留 `errorCode` / `params`，传输超时与 session_lost、not_found、closed、context_mismatch、socket_not_attached、recovery_limit、launch_failed 分开。详见 [terminal.md](terminal.md)。

@@ -1,5 +1,5 @@
 /** Stable terminal instances presented over a route-owned rectangle without reparenting React trees. */
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TerminalPane } from './terminal-pane';
 import { useTerminalViewStore } from '@/stores/terminal-view-store';
 import { useTerminalSocketEvents } from '@/hooks/use-terminal-socket';
@@ -29,8 +29,14 @@ export function TerminalHost() {
   const retained = useTerminalViewStore((s) => s.retained);
   const target = useTerminalViewStore((s) => s.target);
   const [usableTarget, setUsableTarget] = useState<HTMLElement | null>(null);
+  const [visible, setVisible] = useState(document.visibilityState !== 'hidden');
   const [rect, setRect] = useState({ left: 0, top: 0, width: 1, height: 1 });
   useTerminalSocketEvents();
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
 
   useLayoutEffect(() => {
     if (!target) return;
@@ -63,6 +69,7 @@ export function TerminalHost() {
 
   return Object.entries(retained).map(([terminalId, contextKey]) => {
     const active =
+      visible &&
       target?.terminalId === terminalId &&
       target.element.isConnected &&
       usableTarget === target.element &&

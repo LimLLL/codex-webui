@@ -12,9 +12,13 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { Logger, OnModuleDestroy, UseFilters, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { TerminalService } from './terminal.service';
+import { TerminalExceptionFilter, terminalErrorAck } from './terminal-errors';
+import { BusinessException } from '../common/business.exception';
+import { ApiKeyGuard } from '../auth/api-key.guard';
+import { ErrorCode } from '../common/error-codes';
 import type {
   TerminalAck,
   TerminalContextDto,
@@ -24,9 +28,19 @@ import type {
   TerminalOpenParams,
   TerminalRenameDto,
   TerminalResizeDto,
+  TerminalRecoverDto,
 } from './terminal.types';
 
 @WebSocketGateway({ namespace: '/ws', cors: { origin: '*' } })
+// The application-wide `APP_GUARD` does not reach `@SubscribeMessage` handlers —
+// measured: removing this decorator lets an invalid token through `terminal.list`
+// with `ok: true`. Connection-level authentication in the conversation gateway is
+// what covers the socket today, which leaves this gateway's events depending on a
+// different gateway's handler. This makes that dependency explicit and local.
+// The filter is gateway-scoped so the guard's refusal still reaches the caller's
+// acknowledgement with its code intact.
+@UseFilters(TerminalExceptionFilter)
+@UseGuards(ApiKeyGuard)
 export class TerminalGateway
   implements OnGatewayInit, OnGatewayDisconnect, OnModuleDestroy
 {
@@ -43,6 +57,8 @@ export class TerminalGateway
       this.terminalService.onOutput((event) => {
         this.emitToSockets(event.socketIds, 'terminal.output', {
           terminalId: event.terminalId,
+          sessionId: event.sessionId,
+          sequence: event.sequence,
           data: event.data,
         });
       }),
@@ -103,7 +119,11 @@ export class TerminalGateway
     @MessageBody() data: TerminalOpenParams,
   ): Promise<TerminalAck> {
     try {
-      const terminal = await this.terminalService.open(client.id, data);
+      const terminal = await this.terminalService.open(
+        client.id,
+        data,
+        () => client.connected,
+      );
       this.logger.debug(`Client ${client.id} opened terminal ${terminal.id}`);
       return { ok: true, terminal, config: this.terminalService.getConfig() };
     } catch (error) {
@@ -118,15 +138,48 @@ export class TerminalGateway
     @MessageBody() data: TerminalIdDto,
   ): Promise<TerminalAck> {
     try {
-      const { terminal, state } = await this.terminalService.reconnect(
-        client.id,
-        data.contextKey,
-        data.terminalId,
-      );
+      const { terminal, state, sequence } =
+        await this.terminalService.reconnect(
+          client.id,
+          data.contextKey,
+          data.terminalId,
+          () => client.connected,
+        );
       return {
         ok: true,
         terminal,
         state,
+        sequence,
+        config: this.terminalService.getConfig(),
+      };
+    } catch (error) {
+      return this.toErrorAck(error);
+    }
+  }
+
+  /** Recovers a presented terminal, with an explicit manual action after the automatic budget is exhausted. */
+  @SubscribeMessage('terminal.recover')
+  async handleRecover(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: TerminalRecoverDto,
+  ): Promise<TerminalAck> {
+    try {
+      if (typeof data.manual !== 'boolean') {
+        throw BusinessException.badRequest(
+          ErrorCode.http.badRequest,
+          'Recovery requires an explicit automatic or manual mode',
+        );
+      }
+      const attachment = await this.terminalService.recover(
+        client.id,
+        data.contextKey,
+        data.terminalId,
+        data.manual,
+        () => client.connected,
+      );
+      return {
+        ok: true,
+        ...attachment,
         config: this.terminalService.getConfig(),
       };
     } catch (error) {
@@ -162,6 +215,7 @@ export class TerminalGateway
         client.id,
         data.contextKey,
         data.terminalId,
+        data.sessionId,
         data.data,
       );
       return { ok: true };
@@ -181,6 +235,7 @@ export class TerminalGateway
         client.id,
         data.contextKey,
         data.terminalId,
+        data.sessionId,
         data.cols,
         data.rows,
       );
@@ -256,13 +311,13 @@ export class TerminalGateway
     error: unknown,
   ): TerminalAck<T> {
     const ack = this.toErrorAck<T>(error);
-    client.emit('terminal.error', { error: ack.error });
+    client.emit('terminal.error', ack);
     return ack;
   }
 
   private toErrorAck<T = unknown>(error: unknown): TerminalAck<T> {
     const message = error instanceof Error ? error.message : String(error);
     this.logger.warn(`Terminal operation failed: ${message}`);
-    return { ok: false, error: message };
+    return terminalErrorAck<T>(error);
   }
 }

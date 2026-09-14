@@ -34,15 +34,10 @@ export function useWorkspaceClose(context: string) {
   const closeTerminal = async (
     tab: Extract<WorkspaceTab, { kind: 'terminal' }>,
   ) => {
-    const metadata = useTerminalStore.getState().terminals[tab.terminalId];
     setBusy(true);
-    const closed =
-      !metadata ||
-      metadata.status === 'expired' ||
-      metadata.status === 'exited' ||
-      (await useTerminalStore
+    const closed = await useTerminalStore
         .getState()
-        .closeTerminal(context, tab.terminalId));
+        .closeTerminal(context, tab.terminalId);
     setBusy(false);
     if (closed) {
       useTerminalViewStore.getState().release(tab.terminalId);

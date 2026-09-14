@@ -1,6 +1,6 @@
 /** Shared frontend terminal socket types. */
 
-export type TerminalStatus = 'running' | 'exited' | 'expired';
+export type TerminalStatus = 'running' | 'exited' | 'expired' | 'closed';
 
 export interface TerminalConfig {
   maxSessions: number;
@@ -11,6 +11,8 @@ export interface TerminalConfig {
 
 export interface TerminalMetadata {
   id: string;
+  sessionId: string;
+  generation: number;
   contextKey: string;
   title: string;
   cwd: string;
@@ -23,6 +25,7 @@ export interface TerminalMetadata {
   rows: number;
   createdAt: string;
   error?: string | null;
+  errorCode?: string | null;
 }
 
 export interface TerminalContextState {
@@ -34,11 +37,22 @@ export interface TerminalContextState {
 export interface TerminalAck<T = unknown> {
   ok: boolean;
   error?: string;
+  errorCode?: string;
+  params?: Record<string, string | number>;
   terminal?: TerminalMetadata;
   terminals?: TerminalMetadata[];
   state?: string;
+  sequence?: number;
   config?: TerminalConfig;
   data?: T;
+}
+
+/** Output is scoped to a physical shell and ordered relative to attachment snapshots. */
+export interface TerminalOutput {
+  terminalId: string;
+  sessionId: string;
+  sequence: number;
+  data: string;
 }
 
 export interface TerminalDownloadPayload {

@@ -32,6 +32,7 @@ interface WorkspaceState {
   fileViews: Record<string, FileViewState>;
   openFile: (context: string, path: string, line?: number | null) => void;
   openTerminal: (context: string, terminalId: string) => void;
+  adoptTerminal: (context: string, terminalId: string) => void;
   select: (context: string, id: string) => void;
   remove: (context: string, id: string) => void;
   forgetConversations: (threadIds: readonly string[]) => void;
@@ -63,6 +64,15 @@ function clearActiveReveal(state: WorkspaceState, context: string) {
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   contexts: {},
   fileViews: {},
+  /** Adds a discovered terminal without changing tab selection or file reveal intent. */
+  adoptTerminal: (context, terminalId) => set((state) => {
+    const current = state.contexts[context] ?? EMPTY_WORKSPACE;
+    const id = `terminal:${terminalId}`;
+    if (current.tabs.some(tab => tab.id === id)) return state;
+    return { contexts: { ...state.contexts, [context]: {
+      ...current, tabs: [...current.tabs, { id, kind: 'terminal', terminalId }],
+    } } };
+  }),
   openFile: (context, path, line = null) =>
     set((state) => {
       const current = state.contexts[context] ?? EMPTY_WORKSPACE;

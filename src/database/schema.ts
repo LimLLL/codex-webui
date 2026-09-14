@@ -8,6 +8,25 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
+/** Durable terminal intent survives disposal of its PTY and headless buffer. */
+export const terminalIdentities = sqliteTable('terminal_identities', {
+  id: text('id').primaryKey(),
+  contextKey: text('context_key').notNull(),
+  cwd: text('cwd').notNull(),
+  shell: text('shell').notNull(),
+  title: text('title').notNull(),
+  sessionId: text('session_id').notNull(),
+  generation: integer('generation').notNull(),
+  closed: integer('closed', { mode: 'boolean' }).notNull().default(false),
+  /** At most three automatic attempts in the rolling recovery window. */
+  automaticAttempts: text('automatic_attempts', { mode: 'json' })
+    .$type<number[]>()
+    .notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export type TerminalIdentity = typeof terminalIdentities.$inferSelect;
+
 export const tokenUsageSnapshots = sqliteTable(
   'token_usage_snapshots',
   {

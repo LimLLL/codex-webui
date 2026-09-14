@@ -12,6 +12,9 @@ const transport = vi.hoisted(() => ({
 vi.mock('@/socket', () => ({
   getSocket: () => ({
     emit: transport.emit,
+    sendBuffer: [],
+    connected: true,
+    id: 'test-socket',
     timeout: () => ({
       emit: (
         event: string,
@@ -28,6 +31,8 @@ vi.mock('@/stores/snackbar-store', () => ({ showSnackbar: vi.fn() }));
 const original = useTerminalStore.getState();
 const terminal: TerminalMetadata = {
   id: 'pty',
+  sessionId: 'session-0',
+  generation: 0,
   contextKey: 'thread:a',
   title: 'shell',
   cwd: '/workspace',
@@ -42,7 +47,11 @@ const terminal: TerminalMetadata = {
 };
 beforeEach(() => {
   useTerminalStore.setState(original, true);
-  useTerminalViewStore.setState({ retained: {}, target: null });
+  useTerminalViewStore.setState({
+    retained: {},
+    target: null,
+    contextEpochs: {},
+  });
   useWorkspaceStore.setState({ contexts: {}, fileViews: {} });
   transport.response = { ok: true };
   transport.emit.mockReset();
@@ -85,7 +94,7 @@ it('releases local attachment only after explicit shared close succeeds', async 
 
 it('retains output ownership and the local tab when another browser closes the session', () => {
   useTerminalStore.getState().markTerminalClosed('thread:a', 'pty');
-  expect(useTerminalStore.getState().terminals.pty.status).toBe('exited');
+  expect(useTerminalStore.getState().terminals.pty.status).toBe('closed');
   expect(useTerminalViewStore.getState().retained.pty).toBe('thread:a');
   expect(useWorkspaceStore.getState().contexts['thread:a'].tabs).toHaveLength(
     1,
@@ -104,7 +113,9 @@ it('does not create a process when restoring an empty context, or expire session
   transport.response = { ok: true, terminals: [] };
   useTerminalStore.setState({ configLoaded: true });
   await useTerminalStore.getState().ensureContext('empty');
-  expect(transport.emit).toHaveBeenCalledExactlyOnceWith('terminal.list', { contextKey: 'empty' });
+  expect(transport.emit).toHaveBeenCalledExactlyOnceWith('terminal.list', {
+    contextKey: 'empty',
+  });
   transport.response = { ok: false, error: 'offline' };
   await useTerminalStore.getState().ensureContext('thread:a');
   expect(useTerminalStore.getState().terminals.pty.status).toBe('running');

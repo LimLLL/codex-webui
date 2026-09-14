@@ -29,8 +29,9 @@ export interface TestDatabase {
  *
  * @returns The drizzle client and its underlying connection
  */
-export function createTestDatabase(): TestDatabase {
-  const sqlite = new Database(':memory:');
+export function createTestDatabase(databasePath = ':memory:'): TestDatabase {
+  const sqlite = new Database(databasePath);
+  if (databasePath !== ':memory:') sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   const db = drizzle(sqlite, { schema }) as AppDatabase;
   migrate(db, { migrationsFolder: join(process.cwd(), 'drizzle') });

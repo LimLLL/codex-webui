@@ -10,7 +10,11 @@ export interface TerminalConfig {
 }
 
 export interface TerminalMetadata {
+  /** Stable identity of the user's terminal; never reused after logical close. */
   id: string;
+  /** Physical PTY identity, required for input and resize to reject stale packets. */
+  sessionId: string;
+  generation: number;
   contextKey: string;
   title: string;
   cwd: string;
@@ -34,6 +38,8 @@ export interface TerminalOpenParams {
 
 export interface TerminalOutputEvent {
   terminalId: string;
+  sessionId: string;
+  sequence: number;
   data: string;
   socketIds: string[];
 }
@@ -72,12 +78,14 @@ export interface TerminalDetachDto {
 export interface TerminalInputDto {
   contextKey: string;
   terminalId: string;
+  sessionId: string;
   data: string;
 }
 
 export interface TerminalResizeDto {
   contextKey: string;
   terminalId: string;
+  sessionId: string;
   cols: number;
   rows: number;
 }
@@ -91,9 +99,24 @@ export interface TerminalRenameDto {
 export interface TerminalAck<T = unknown> {
   ok: boolean;
   error?: string;
+  errorCode?: string;
+  params?: Record<string, string | number>;
   terminal?: TerminalMetadata;
   terminals?: TerminalMetadata[];
   state?: string;
+  sequence?: number;
   config?: TerminalConfig;
   data?: T;
+}
+
+/** Only an explicitly presented terminal may request creation through this endpoint. */
+export interface TerminalRecoverDto extends TerminalIdDto {
+  manual: boolean;
+}
+
+/** Exact snapshot boundary permits clients to discard already replayed live output. */
+export interface TerminalAttachment {
+  terminal: TerminalMetadata;
+  state: string;
+  sequence: number;
 }

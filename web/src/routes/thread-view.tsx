@@ -33,6 +33,7 @@ import {
 import { useLayoutStore } from '@/stores/layout-store';
 import { useTerminalStore } from '@/stores/terminal-store';
 import { useTerminalViewStore } from '@/stores/terminal-view-store';
+import { useTerminalDiscovery } from '@/hooks/use-terminal-discovery';
 import { threadsListTurns, threadsReadThread } from '@/generated/api/sdk.gen';
 
 /** URL identity owns opening; tab identity controls only presentation and never subscription. */
@@ -45,6 +46,7 @@ export function ThreadView() {
 function ConversationWorkspace({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
   const context = `thread:${threadId}`;
+  useTerminalDiscovery(context);
   const navigate = useNavigate();
   const dark = useThemeStore((s) => s.dark);
   const toggleDark = useThemeStore((s) => s.toggleDark);
@@ -156,6 +158,7 @@ function ConversationWorkspace({ threadId }: { threadId: string }) {
 
   const newTerminal = async () => {
     if (creatingTerminal) return;
+    if (!cwd) return;
     setCreatingTerminal(true);
     const terminal = await useTerminalStore
       .getState()
@@ -187,6 +190,7 @@ function ConversationWorkspace({ threadId }: { threadId: string }) {
           onSelect={(id) => select(context, id)}
           onClose={requestClose}
           onNewTerminal={() => void newTerminal()}
+          terminalCreationDisabled={creatingTerminal || !cwd}
           onExplorer={() =>
             desktop
               ? useLayoutStore

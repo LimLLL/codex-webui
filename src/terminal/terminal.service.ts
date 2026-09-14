@@ -1,30 +1,29 @@
-/**
- * Manages shared node-pty terminal sessions.
- *
- * Terminals are grouped by context (`global` or `thread:<threadId>`). Multiple
- * authenticated sockets may attach to the same terminal, while the service keeps
- * a headless xterm mirror as the authoritative VT state for reconnection and
- * download snapshots.
- */
+/** Coordinates shared PTYs with durable terminal intent; UI visibility never owns a process. */
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { BusinessException } from '../common/business.exception';
-import { ErrorCode } from '../common/error-codes';
-import { SerializeAddon } from '@xterm/addon-serialize';
-import { Terminal as HeadlessTerminal } from '@xterm/headless';
-import * as pty from 'node-pty';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
 import { basename } from 'node:path';
+import { BusinessException } from '../common/business.exception';
+import { ErrorCode } from '../common/error-codes';
 import { FilesService } from '../files/files.service';
-import {
-  isTerminalSettingKey,
-  TERMINAL_SETTING_DEFAULTS,
-  TERMINAL_SETTING_KEYS,
-} from '../settings/settings.definitions';
 import { SettingsService } from '../settings/settings.service';
+import { isTerminalSettingKey } from '../settings/settings.definitions';
+import type { TerminalIdentity } from '../database/schema';
+import { TerminalRegistryService } from './terminal-registry.service';
+import { TerminalSession } from './terminal-session';
+import {
+  assertTerminalCapacity,
+  readTerminalConfig,
+  requireTerminalSessionId,
+  requireTerminalConnection,
+  normalizeTerminalContext,
+  resolveTerminalDirectory,
+  resolveTerminalShell,
+  terminalDimension,
+  terminalTitle,
+} from './terminal-launch';
 import type {
+  TerminalAttachment,
   TerminalClosedEvent,
   TerminalConfig,
   TerminalExitEvent,
@@ -32,603 +31,469 @@ import type {
   TerminalMetadataEvent,
   TerminalOpenParams,
   TerminalOutputEvent,
-  TerminalStatus,
 } from './terminal.types';
 
-const DEFAULT_TERMINAL_CONFIG: TerminalConfig = {
-  maxSessions: TERMINAL_SETTING_DEFAULTS.maxSessions,
-  graceMs: TERMINAL_SETTING_DEFAULTS.graceMs,
-  scrollback: TERMINAL_SETTING_DEFAULTS.scrollback,
-  defaultCwd: null,
-};
-const MIN_COLS = 20;
-const MAX_COLS = 300;
-const MIN_ROWS = 5;
-const MAX_ROWS = 120;
-const MAX_TITLE_LENGTH = 80;
-const MAX_INPUT_BYTES = 1024 * 1024;
-
-type TerminalEventName = 'output' | 'metadata' | 'exit' | 'closed';
-
-interface TerminalSession {
-  id: string;
-  contextKey: string;
-  process: pty.IPty;
-  headless: HeadlessTerminal;
-  serializeAddon: SerializeAddon;
-  attachedSocketIds: Set<string>;
-  title: string;
-  cwd: string;
-  shell: string;
-  status: TerminalStatus;
-  exitCode: number | null;
-  signal: number | null;
-  cols: number;
-  rows: number;
-  createdAt: string;
-  graceTimer: NodeJS.Timeout | null;
-  headlessWriteQueue: Promise<void>;
-  closed: boolean;
-}
-
+/** All physical allocation occurs synchronously after asynchronous preparation and revalidation. */
 @Injectable()
 export class TerminalService implements OnModuleDestroy {
   private readonly logger = new Logger(TerminalService.name);
   private readonly sessions = new Map<string, TerminalSession>();
+  private readonly recovering = new Map<
+    string,
+    {
+      result: Promise<TerminalSession>;
+      connections: Array<() => boolean>;
+    }
+  >();
   private readonly events = new EventEmitter();
-  private config: TerminalConfig = { ...DEFAULT_TERMINAL_CONFIG };
-  private unregisterSettingsChange: (() => void) | null = null;
+  private readonly unregisterSettingsChange: () => void;
+  private config: TerminalConfig;
+  private destroying = false;
 
   constructor(
     private readonly filesService: FilesService,
-    private readonly settingsService: SettingsService,
+    settingsService: SettingsService,
+    private readonly registry: TerminalRegistryService,
   ) {
-    this.config = this.loadConfig();
-    this.unregisterSettingsChange = this.settingsService.onChange((event) => {
+    this.config = readTerminalConfig(settingsService);
+    this.unregisterSettingsChange = settingsService.onChange((event) => {
       if (!isTerminalSettingKey(event.key)) return;
-      this.config = this.loadConfig();
+      this.config = readTerminalConfig(settingsService);
       this.logger.log(
-        'Terminal config updated; changes apply to new terminals and future detach timers.',
+        'Terminal settings updated for future launches and detach timers',
       );
     });
     this.events.setMaxListeners(20);
   }
 
+  /** Stops owned physical sessions while retaining eligible identities for a later foreground recovery. */
   onModuleDestroy(): void {
+    this.destroying = true;
+    this.unregisterSettingsChange();
+    // One shell that refuses to die must not strand the others. `dispose` throws
+    // so an interactive close can report incomplete cleanup, but during shutdown
+    // that same throw would abandon every remaining PTY as an orphan process.
     for (const session of this.sessions.values()) {
-      this.cleanupSession(session, 'module destroy');
-    }
-    this.sessions.clear();
-    if (this.unregisterSettingsChange) {
-      this.unregisterSettingsChange();
-      this.unregisterSettingsChange = null;
+      try {
+        this.dispose(session);
+      } catch {
+        // Already logged with its terminal id by `dispose`.
+      }
     }
     this.events.removeAllListeners();
   }
 
-  /** Returns terminal runtime limits derived from settings/env/defaults. */
+  /** Returns current limits and defaults, without hydrating or creating a terminal. */
   getConfig(): TerminalConfig {
     return { ...this.config };
   }
 
-  /** Registers a listener for PTY output events. */
+  /** Subscribes to mirrored output with a physical-session identity and snapshot sequence. */
   onOutput(listener: (event: TerminalOutputEvent) => void): () => void {
-    return this.registerListener('output', listener);
+    return this.listen('output', listener);
   }
-
-  /** Registers a listener for terminal metadata changes. */
+  /** Subscribes to metadata updates for currently attached sockets. */
   onMetadata(listener: (event: TerminalMetadataEvent) => void): () => void {
-    return this.registerListener('metadata', listener);
+    return this.listen('metadata', listener);
   }
-
-  /** Registers a listener for PTY exit events. */
+  /** Subscribes to natural exits, whose retained buffers remain attachable. */
   onExit(listener: (event: TerminalExitEvent) => void): () => void {
-    return this.registerListener('exit', listener);
+    return this.listen('exit', listener);
   }
-
-  /** Registers a listener for terminal close/delete events. */
+  /** Subscribes to explicit logical closure; grace reclamation is not a logical close. */
   onClosed(listener: (event: TerminalClosedEvent) => void): () => void {
-    return this.registerListener('closed', listener);
+    return this.listen('closed', listener);
   }
 
-  /** Lists terminal metadata for a single context. */
+  /** Lists extant physical sessions only; durable missing records cannot leak into discovery. */
   list(contextKey: string): TerminalMetadata[] {
-    const normalizedContext = this.normalizeContextKey(contextKey);
-    return Array.from(this.sessions.values())
-      .filter((session) => session.contextKey === normalizedContext)
-      .map((session) => this.toMetadata(session));
+    const context = normalizeTerminalContext(contextKey);
+    return [...this.sessions.values()]
+      .filter(
+        (session) =>
+          session.published &&
+          session.metadata.contextKey === context &&
+          !this.registry.get(context, session.metadata.id).closed,
+      )
+      .map((session) => session.describe());
   }
 
-  /** Opens a new shared terminal and attaches the requesting socket. */
+  /** Creates one new logical terminal using the explicit directory before any global default. */
   async open(
     socketId: string,
     params: TerminalOpenParams,
+    connected: () => boolean = () => true,
   ): Promise<TerminalMetadata> {
-    if (this.sessions.size >= this.config.maxSessions) {
-      throw BusinessException.badRequest(
-        ErrorCode.terminal.maxSessionsReached,
-        `Maximum terminal sessions reached (${this.config.maxSessions})`,
-        { max: this.config.maxSessions },
-      );
-    }
-
-    const contextKey = this.normalizeContextKey(params.contextKey);
-    const cols = this.clampDimension(params.cols, MIN_COLS, MAX_COLS, 80);
-    const rows = this.clampDimension(params.rows, MIN_ROWS, MAX_ROWS, 24);
-    const shell = this.resolveShell();
-    const cwd = await this.resolveTerminalCwd(contextKey, params.cwd);
-
-    this.logger.log(`Spawning shell: ${shell}, cwd: ${cwd}`);
-
-    const proc = pty.spawn(shell, [], {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env: { ...process.env },
-    });
-
-    const headless = new HeadlessTerminal({
-      allowProposedApi: true,
-      cols,
-      rows,
-      scrollback: this.config.scrollback,
-    });
-    const serializeAddon = new SerializeAddon();
-    headless.loadAddon(serializeAddon);
-
-    const session: TerminalSession = {
+    const contextKey = normalizeTerminalContext(params.contextKey);
+    const cwd = await resolveTerminalDirectory(
+      this.filesService,
+      contextKey,
+      params.cwd,
+      this.config.defaultCwd,
+    );
+    requireTerminalConnection(!this.destroying && connected());
+    const shell = resolveTerminalShell();
+    const row: TerminalIdentity = {
       id: randomUUID(),
       contextKey,
-      process: proc,
-      headless,
-      serializeAddon,
-      attachedSocketIds: new Set([socketId]),
-      title: this.normalizeTitle(params.title, basename(shell)),
       cwd,
-      shell: basename(shell),
-      status: 'running',
-      exitCode: null,
-      signal: null,
-      cols,
-      rows,
-      createdAt: new Date().toISOString(),
-      graceTimer: null,
-      headlessWriteQueue: Promise.resolve(),
+      shell,
+      title: terminalTitle(params.title, basename(shell)),
+      sessionId: randomUUID(),
+      generation: 0,
       closed: false,
+      automaticAttempts: [],
+      createdAt: new Date().toISOString(),
     };
-
-    this.sessions.set(session.id, session);
-    proc.onData((output) => this.mirrorAndBroadcast(session.id, output));
-    proc.onExit(({ exitCode, signal }) => {
-      this.handleExit(session.id, exitCode, signal ?? null);
-    });
-
-    this.logger.log(
-      `Opened terminal ${session.id} (pid ${proc.pid}, cwd: ${cwd})`,
-    );
-    this.emitMetadata(session);
-    return this.toMetadata(session);
+    const session = this.allocate(row, params.cols, params.rows);
+    try {
+      this.registry.create(row);
+    } catch (error) {
+      this.dispose(session);
+      throw error;
+    }
+    this.publish(session);
+    this.attachSocket(session, socketId);
+    return session.describe();
   }
 
-  /** Attaches a socket to an existing terminal and returns serialized VT state. */
+  /** Attaches existing sessions only. Discovery and hidden panes must use this operation. */
   async reconnect(
     socketId: string,
     contextKey: string,
     terminalId: string,
-  ): Promise<{ terminal: TerminalMetadata; state: string }> {
-    const session = this.getContextSession(contextKey, terminalId);
-    this.attachSocket(session, socketId);
-    const state = await this.serializeState(session);
-    return { terminal: this.toMetadata(session), state };
+    connected: () => boolean = () => true,
+  ): Promise<TerminalAttachment> {
+    const session = this.getSession(contextKey, terminalId);
+    return this.attach(session, socketId, connected);
   }
 
-  /** Detaches a socket from one terminal, or every terminal if no id is passed. */
+  /**
+   * Recovers one presented terminal. An existing replacement wins even if the
+   * request that created it lost its acknowledgement. Manual attempts bypass the
+   * rolling automatic limit but never bypass durable closure or reset the limit.
+   */
+  async recover(
+    socketId: string,
+    contextKey: string,
+    terminalId: string,
+    manual: boolean,
+    connected: () => boolean = () => true,
+  ): Promise<TerminalAttachment> {
+    const context = normalizeTerminalContext(contextKey);
+    const row = this.registry.requireOpen(context, terminalId);
+    let session = this.sessions.get(row.id);
+    if (!session) {
+      let pending = this.recovering.get(row.id);
+      if (!pending) {
+        const connections = [connected];
+        pending = {
+          connections,
+          result: this.replace(row, manual, () =>
+            connections.some((isConnected) => isConnected()),
+          ).finally(() => this.recovering.delete(row.id)),
+        };
+        this.recovering.set(row.id, pending);
+      } else {
+        pending.connections.push(connected);
+      }
+      session = await pending.result;
+    }
+    return this.attach(session, socketId, connected);
+  }
+
+  /** Detaches this socket only; a browser may own many retained terminal attachments. */
   detach(socketId: string, terminalId?: string): void {
     for (const session of this.sessions.values()) {
-      if (terminalId && session.id !== terminalId) continue;
-      this.detachFromSession(session, socketId);
+      if (terminalId && session.metadata.id !== terminalId) continue;
+      if (!session.attachedSocketIds.delete(socketId)) continue;
+      this.emitMetadata(session);
+      if (!session.attachedSocketIds.size) this.startGraceTimer(session);
     }
   }
 
-  /** Writes input from an attached socket to a terminal. */
+  /** Rejects input addressed to a former PTY even if the socket attached to its replacement. */
   write(
     socketId: string,
-    contextKey: string,
-    terminalId: string,
+    context: string,
+    id: string,
+    sessionId: string,
     data: string,
   ): void {
-    const session = this.getAttachedSession(socketId, contextKey, terminalId);
-    if (session.status !== 'running') {
-      throw BusinessException.badRequest(
-        ErrorCode.terminal.exited,
-        'Terminal process has exited',
-      );
-    }
-    if (Buffer.byteLength(data, 'utf8') > MAX_INPUT_BYTES) {
-      throw BusinessException.badRequest(
-        ErrorCode.terminal.inputTooLarge,
-        'Terminal input is too large',
-      );
-    }
-    session.process.write(data);
+    requireTerminalSessionId(sessionId);
+    const session = this.getAttached(socketId, context, id, sessionId);
+    session.write(data);
   }
 
-  /** Resizes a terminal from any attached socket. Last resize wins. */
+  /** Applies the latest visible view's size to the addressed physical session only. */
   resize(
     socketId: string,
-    contextKey: string,
-    terminalId: string,
+    context: string,
+    id: string,
+    sessionId: string,
     cols: number,
     rows: number,
   ): TerminalMetadata {
-    const session = this.getAttachedSession(socketId, contextKey, terminalId);
-    const nextCols = this.clampDimension(
-      cols,
-      MIN_COLS,
-      MAX_COLS,
-      session.cols,
-    );
-    const nextRows = this.clampDimension(
-      rows,
-      MIN_ROWS,
-      MAX_ROWS,
-      session.rows,
-    );
-
-    if (nextCols === session.cols && nextRows === session.rows) {
-      return this.toMetadata(session);
-    }
-
-    session.cols = nextCols;
-    session.rows = nextRows;
-    if (session.status === 'running') {
-      session.process.resize(nextCols, nextRows);
-    }
-    session.headless.resize(nextCols, nextRows);
-    this.emitMetadata(session);
-    return this.toMetadata(session);
+    requireTerminalSessionId(sessionId);
+    const session = this.getAttached(socketId, context, id, sessionId);
+    if (session.resize(cols, rows)) this.emitMetadata(session);
+    return session.describe();
   }
 
-  /** Renames a terminal tab shared by all attached clients. */
+  /** Renames the logical terminal and its current presentation in the same synchronous operation. */
   rename(
     socketId: string,
-    contextKey: string,
-    terminalId: string,
+    context: string,
+    id: string,
     title: string,
   ): TerminalMetadata {
-    const session = this.getAttachedSession(socketId, contextKey, terminalId);
-    session.title = this.normalizeTitle(title, session.shell);
+    const session = this.getAttached(socketId, context, id);
+    const next = terminalTitle(title, session.metadata.shell);
+    this.registry.rename(context, id, next);
+    session.metadata.title = next;
     this.emitMetadata(session);
-    return this.toMetadata(session);
+    return session.describe();
   }
 
-  /** Returns a plain-text snapshot of the active headless terminal buffer. */
+  /** Exports the current physical session's retained output as plain text. */
   async download(
     socketId: string,
-    contextKey: string,
-    terminalId: string,
+    context: string,
+    id: string,
   ): Promise<{ filename: string; content: string }> {
-    const session = this.getAttachedSession(socketId, contextKey, terminalId);
-    await this.flushHeadless(session);
-    const content = this.readActiveBuffer(session.headless);
-    const safeTitle = session.title
-      .replace(/[^a-z0-9._-]+/gi, '-')
-      .replace(/^-|-$/g, '');
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    return {
-      filename: `${safeTitle || 'terminal'}-${timestamp}.txt`,
-      content,
-    };
+    const session = this.getAttached(socketId, context, id);
+    const download = await session.download();
+    this.registry.requireOpen(context, id);
+    return download;
   }
 
-  /** Explicitly closes a terminal tab and kills the PTY for every attached socket. */
-  close(socketId: string, contextKey: string, terminalId: string): boolean {
-    const session = this.getAttachedSession(socketId, contextKey, terminalId);
-    const socketIds = Array.from(session.attachedSocketIds);
-    const context = session.contextKey;
-    this.cleanupSession(session, 'explicit close');
-    this.sessions.delete(terminalId);
+  /**
+   * Revokes the logical identity before physical cleanup or acknowledgement.
+   * Running, exited, missing and already closed terminals all reach this path;
+   * attachment is not a prerequisite for revoking an authenticated identity.
+   */
+  close(_socketId: string, contextKey: string, terminalId: string): boolean {
+    const context = normalizeTerminalContext(contextKey);
+    this.registry.close(context, terminalId);
+    const session = this.sessions.get(terminalId);
+    const socketIds = session ? [...session.attachedSocketIds] : [];
     this.events.emit('closed', {
       terminalId,
       contextKey: context,
       socketIds,
     } satisfies TerminalClosedEvent);
-    this.logger.log(`Closed terminal ${terminalId}`);
+    if (session) {
+      this.dispose(session);
+    }
+    this.logger.log(`Closed logical terminal ${terminalId}`);
     return true;
   }
 
-  private registerListener<T>(
-    eventName: TerminalEventName,
-    listener: (event: T) => void,
-  ): () => void {
-    this.events.on(eventName, listener);
-    return () => this.events.off(eventName, listener);
-  }
-
-  /** Builds terminal config from runtime settings (DB > env > default). */
-  private loadConfig(): TerminalConfig {
-    return {
-      maxSessions: this.settingsService.getNumberSetting(
-        TERMINAL_SETTING_KEYS.maxSessions,
-      ),
-      graceMs: this.settingsService.getNumberSetting(
-        TERMINAL_SETTING_KEYS.graceMs,
-      ),
-      scrollback: this.settingsService.getNumberSetting(
-        TERMINAL_SETTING_KEYS.scrollback,
-      ),
-      defaultCwd: this.settingsService.getStringSetting(
-        TERMINAL_SETTING_KEYS.defaultCwd,
-      ),
+  /** Revalidates after awaited filesystem work; no await separates allocation from publication. */
+  private async replace(
+    row: TerminalIdentity,
+    manual: boolean,
+    connected: () => boolean,
+  ): Promise<TerminalSession> {
+    await resolveTerminalDirectory(
+      this.filesService,
+      row.contextKey,
+      row.cwd,
+      this.config.defaultCwd,
+    );
+    requireTerminalConnection(!this.destroying && connected());
+    const current = this.registry.requireOpen(row.contextKey, row.id);
+    assertTerminalCapacity(this.sessions.size, this.config.maxSessions);
+    if (!manual) this.registry.chargeAutomaticAttempt(row.contextKey, row.id);
+    const next = {
+      ...current,
+      generation: current.generation + 1,
+      sessionId: randomUUID(),
     };
-  }
-
-  private resolveShell(): string {
-    if (process.env.SHELL) return process.env.SHELL;
-    const platform = os.platform();
-    if (platform === 'win32') return 'powershell.exe';
-    if (platform === 'darwin') return '/bin/zsh';
-    if (platform === 'linux') return '/bin/bash';
-    return 'sh';
-  }
-
-  private normalizeContextKey(contextKey: string): string {
-    const value = contextKey.trim();
-    if (value === 'global') return value;
-    if (value.startsWith('thread:') && value.length > 'thread:'.length) {
-      return value;
+    const session = this.allocate(next);
+    try {
+      this.registry.publish(current, next.sessionId);
+    } catch (error) {
+      this.dispose(session);
+      throw error;
     }
-    throw BusinessException.badRequest(
-      ErrorCode.terminal.invalidContext,
-      'contextKey must be global or thread:<id>',
+    this.publish(session);
+    // Even an acknowledgement-losing or subsequently disconnected caller cannot strand a process.
+    this.startGraceTimer(session);
+    this.logger.log(
+      `Replaced terminal ${row.id}, generation ${next.generation}, manual=${manual}`,
     );
+    return session;
   }
 
-  private normalizeTitle(value: string | undefined, fallback: string): string {
-    const title = value?.trim() ?? '';
-    if (!title) return fallback;
-    return title.slice(0, MAX_TITLE_LENGTH);
-  }
-
-  private clampDimension(
-    value: number | undefined,
-    min: number,
-    max: number,
-    fallback: number,
-  ): number {
-    if (value === undefined || !Number.isFinite(value)) return fallback;
-    return Math.min(max, Math.max(min, Math.floor(value)));
-  }
-
-  private async resolveTerminalCwd(
-    contextKey: string,
-    requestedCwd: string | undefined,
-  ): Promise<string> {
-    if (this.config.defaultCwd) {
-      try {
-        return await this.resolveDirectory(this.config.defaultCwd);
-      } catch (error) {
-        const rawMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `DEFAULT_TERMINAL_CWD is invalid or outside workspace roots: ${rawMessage}`,
-        );
-        throw BusinessException.badRequest(
-          ErrorCode.terminal.invalidCwd,
-          'Default terminal cwd is invalid or outside allowed workspace roots',
-        );
-      }
+  private allocate(
+    row: TerminalIdentity,
+    cols?: number,
+    rows?: number,
+  ): TerminalSession {
+    assertTerminalCapacity(this.sessions.size, this.config.maxSessions);
+    try {
+      const session = new TerminalSession(
+        row,
+        terminalDimension(cols, 20, 300, 80),
+        terminalDimension(rows, 5, 120, 24),
+        this.config.scrollback,
+      );
+      this.sessions.set(row.id, session);
+      return session;
+    } catch (error) {
+      this.logger.error(
+        { terminalId: row.id, error: String(error) },
+        'Terminal launch failed',
+      );
+      throw BusinessException.internal(
+        ErrorCode.terminal.launchFailed,
+        'Failed to start terminal shell',
+      );
     }
-
-    if (contextKey.startsWith('thread:')) {
-      if (!requestedCwd?.trim()) {
-        throw BusinessException.badRequest(
-          ErrorCode.terminal.cwdRequired,
-          'Thread terminal cwd is required',
-        );
-      }
-      return this.resolveDirectory(requestedCwd);
-    }
-
-    return this.resolveDirectory(this.filesService.getHomeDir());
   }
 
-  private async resolveDirectory(inputPath: string): Promise<string> {
-    const safeCwd = await this.filesService.resolveSafePath(inputPath);
-    if (fs.existsSync(safeCwd) && fs.statSync(safeCwd).isDirectory()) {
-      return safeCwd;
-    }
-    throw BusinessException.forbidden(
-      ErrorCode.terminal.cwdNotDirectory,
-      'Terminal cwd must be an existing directory',
+  private publish(session: TerminalSession): void {
+    session.published = true;
+    session.process.onData((data) =>
+      session.mirror(
+        data,
+        (sequence) => {
+          this.events.emit('output', {
+            terminalId: session.metadata.id,
+            sessionId: session.metadata.sessionId,
+            sequence,
+            data,
+            socketIds: [...session.attachedSocketIds],
+          } satisfies TerminalOutputEvent);
+        },
+        (error) =>
+          this.logger.error({ error: String(error) }, 'Terminal mirror failed'),
+      ),
     );
+    session.process.onExit(({ exitCode, signal }) => {
+      if (session.disposed) return;
+      Object.assign(session.metadata, {
+        status: 'exited',
+        exitCode,
+        signal: signal ?? null,
+      });
+      this.events.emit('exit', {
+        terminal: session.describe(),
+        socketIds: [...session.attachedSocketIds],
+      } satisfies TerminalExitEvent);
+      this.emitMetadata(session);
+      if (!session.attachedSocketIds.size) this.startGraceTimer(session);
+    });
+  }
+
+  private async attach(
+    session: TerminalSession,
+    socketId: string,
+    connected: () => boolean,
+  ): Promise<TerminalAttachment> {
+    session.assertPublished();
+    requireTerminalConnection(!this.destroying && connected());
+    this.registry.requireOpen(session.metadata.contextKey, session.metadata.id);
+    this.attachSocket(session, socketId);
+    try {
+      const snapshot = await session.snapshot();
+      requireTerminalConnection(!this.destroying && connected());
+      this.registry.requireOpen(
+        session.metadata.contextKey,
+        session.metadata.id,
+      );
+      if (this.sessions.get(session.metadata.id) !== session)
+        throw BusinessException.conflict(
+          ErrorCode.terminal.staleSession,
+          'Terminal session changed',
+        );
+      return { terminal: session.describe(), ...snapshot };
+    } catch (error) {
+      if (!connected()) this.detach(socketId, session.metadata.id);
+      throw error;
+    }
   }
 
   private attachSocket(session: TerminalSession, socketId: string): void {
-    if (session.closed) {
-      throw BusinessException.badRequest(
-        ErrorCode.terminal.closed,
-        'Terminal is closed',
-      );
-    }
-    if (session.graceTimer) {
-      clearTimeout(session.graceTimer);
-      session.graceTimer = null;
-    }
+    if (session.graceTimer) clearTimeout(session.graceTimer);
+    session.graceTimer = null;
     session.attachedSocketIds.add(socketId);
     this.emitMetadata(session);
   }
 
-  private detachFromSession(session: TerminalSession, socketId: string): void {
-    if (!session.attachedSocketIds.delete(socketId)) return;
-    this.emitMetadata(session);
-    if (session.attachedSocketIds.size === 0) {
-      this.startGraceTimer(session);
-    }
-  }
-
   private startGraceTimer(session: TerminalSession): void {
-    if (session.graceTimer || session.closed) return;
+    if (session.graceTimer || session.disposed) return;
     session.graceTimer = setTimeout(() => {
-      const current = this.sessions.get(session.id);
-      if (!current || current.attachedSocketIds.size > 0) return;
-      this.cleanupSession(current, 'reconnect grace expired');
-      this.sessions.delete(current.id);
-      this.events.emit('closed', {
-        terminalId: current.id,
-        contextKey: current.contextKey,
-        socketIds: [],
-      } satisfies TerminalClosedEvent);
-      this.logger.log(`Expired detached terminal ${current.id}`);
-    }, this.config.graceMs);
-    this.logger.debug(
-      `Terminal ${session.id} detached; cleanup in ${this.config.graceMs}ms`,
-    );
-  }
-
-  private getContextSession(
-    contextKey: string,
-    terminalId: string,
-  ): TerminalSession {
-    const normalizedContext = this.normalizeContextKey(contextKey);
-    const session = this.sessions.get(terminalId);
-    if (!session) {
-      throw BusinessException.notFound(
-        ErrorCode.terminal.notFound,
-        'Terminal not found',
-      );
-    }
-    if (session.contextKey !== normalizedContext) {
-      throw BusinessException.forbidden(
-        ErrorCode.terminal.contextMismatch,
-        'Terminal context mismatch',
-      );
-    }
-    return session;
-  }
-
-  private getAttachedSession(
-    socketId: string,
-    contextKey: string,
-    terminalId: string,
-  ): TerminalSession {
-    const session = this.getContextSession(contextKey, terminalId);
-    if (!session.attachedSocketIds.has(socketId)) {
-      throw BusinessException.forbidden(
-        ErrorCode.terminal.socketNotAttached,
-        'Socket is not attached to this terminal',
-      );
-    }
-    return session;
-  }
-
-  private mirrorAndBroadcast(terminalId: string, output: string): void {
-    const session = this.sessions.get(terminalId);
-    if (!session || session.closed) return;
-
-    // Broadcast output immediately for real-time UX
-    this.events.emit('output', {
-      terminalId,
-      data: output,
-      socketIds: Array.from(session.attachedSocketIds),
-    } satisfies TerminalOutputEvent);
-
-    // Write to headless mirror asynchronously (for reconnection/download state)
-    session.headlessWriteQueue = session.headlessWriteQueue
-      .catch(() => undefined)
-      .then(
-        () =>
-          new Promise<void>((resolve) => {
-            session.headless.write(output, () => resolve());
-          }),
+      session.graceTimer = null;
+      if (
+        session.attachedSocketIds.size ||
+        this.sessions.get(session.metadata.id) !== session
       )
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Failed to mirror terminal output: ${message}`);
-      });
+        return;
+      try {
+        this.dispose(session);
+        this.logger.log(
+          `Reclaimed terminal PTY ${session.metadata.sessionId}; identity remains recoverable`,
+        );
+      } catch (error) {
+        this.logger.error(
+          { error: String(error) },
+          'Terminal grace cleanup failed',
+        );
+      }
+    }, this.config.graceMs);
   }
 
-  private handleExit(
-    terminalId: string,
-    exitCode: number,
-    signal: number | null,
-  ): void {
-    const session = this.sessions.get(terminalId);
-    if (!session || session.closed) return;
-    session.status = 'exited';
-    session.exitCode = exitCode;
-    session.signal = signal;
-    const event = {
-      terminal: this.toMetadata(session),
-      socketIds: Array.from(session.attachedSocketIds),
-    } satisfies TerminalExitEvent;
-    this.events.emit('exit', event);
-    this.emitMetadata(session);
-    if (session.attachedSocketIds.size === 0) {
-      this.startGraceTimer(session);
+  private dispose(session: TerminalSession): void {
+    try {
+      session.dispose();
+      this.sessions.delete(session.metadata.id);
+    } catch (error) {
+      this.logger.error(
+        { terminalId: session.metadata.id, error: String(error) },
+        'Terminal cleanup failed',
+      );
+      throw BusinessException.internal(
+        ErrorCode.terminal.cleanupFailed,
+        'Terminal process cleanup failed',
+      );
     }
+  }
+
+  private getSession(contextKey: string, id: string): TerminalSession {
+    const context = normalizeTerminalContext(contextKey);
+    this.registry.requireOpen(context, id);
+    const session = this.sessions.get(id);
+    if (!session)
+      throw BusinessException.notFound(
+        ErrorCode.terminal.lost,
+        'Terminal session was lost',
+      );
+    session.assertPublished();
+    return session;
+  }
+
+  private getAttached(
+    socketId: string,
+    context: string,
+    id: string,
+    sessionId?: string,
+  ): TerminalSession {
+    const session = this.getSession(context, id);
+    session.requireAttachment(socketId, sessionId);
+    return session;
   }
 
   private emitMetadata(session: TerminalSession): void {
     this.events.emit('metadata', {
-      terminal: this.toMetadata(session),
-      socketIds: Array.from(session.attachedSocketIds),
+      terminal: session.describe(),
+      socketIds: [...session.attachedSocketIds],
     } satisfies TerminalMetadataEvent);
   }
 
-  private async serializeState(session: TerminalSession): Promise<string> {
-    await this.flushHeadless(session);
-    return session.serializeAddon.serialize();
-  }
-
-  private async flushHeadless(session: TerminalSession): Promise<void> {
-    await session.headlessWriteQueue.catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to flush terminal state: ${message}`);
-    });
-  }
-
-  private readActiveBuffer(headless: HeadlessTerminal): string {
-    const lines: string[] = [];
-    const buffer = headless.buffer.active;
-    for (let index = 0; index < buffer.length; index++) {
-      const line = buffer.getLine(index);
-      if (line) lines.push(line.translateToString(true));
-    }
-    return lines.join('\n');
-  }
-
-  private cleanupSession(session: TerminalSession, reason: string): void {
-    if (session.closed) return;
-    session.closed = true;
-    if (session.graceTimer) clearTimeout(session.graceTimer);
-    session.graceTimer = null;
-    try {
-      if (session.status === 'running') session.process.kill();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to kill terminal ${session.id}: ${message}`);
-    }
-    session.headless.dispose();
-    session.attachedSocketIds.clear();
-    this.logger.debug(`Cleaned up terminal ${session.id}: ${reason}`);
-  }
-
-  private toMetadata(session: TerminalSession): TerminalMetadata {
-    return {
-      id: session.id,
-      contextKey: session.contextKey,
-      title: session.title,
-      cwd: session.cwd,
-      shell: session.shell,
-      status: session.status,
-      exitCode: session.exitCode,
-      signal: session.signal,
-      attachedCount: session.attachedSocketIds.size,
-      cols: session.cols,
-      rows: session.rows,
-      createdAt: session.createdAt,
-    };
+  private listen<T>(event: string, listener: (event: T) => void): () => void {
+    this.events.on(event, listener);
+    return () => this.events.off(event, listener);
   }
 }

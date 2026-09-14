@@ -23,6 +23,7 @@ interface Props {
   onClose: (tab: WorkspaceTab) => void;
   onExplorer: () => void;
   onNewTerminal: () => void;
+  terminalCreationDisabled?: boolean;
 }
 
 /** Provides a pinned conversation destination without mounting another content tree on phones. */
@@ -34,15 +35,20 @@ export function WorkspaceControls({
   onClose,
   onExplorer,
   onNewTerminal,
+  terminalCreationDisabled,
 }: Props) {
   const { t } = useTranslation();
   const desktop = useBreakpoint() === 'desktop';
   const terminals = useTerminalStore((s) => s.terminals);
   const [chooser, setChooser] = useState(false);
-  const label = (tab: WorkspaceTab) =>
-    tab.kind === 'file'
-      ? (tab.path.split('/').pop() ?? tab.path)
-      : (terminals[tab.terminalId]?.title ?? t('Terminal'));
+  const label = (tab: WorkspaceTab) => {
+    if (tab.kind === 'file') return tab.path.split('/').pop() ?? tab.path;
+    const terminal = terminals[tab.terminalId];
+    const title = terminal?.title ?? t('Terminal');
+    if (terminal?.status === 'expired') return `${title} · ${t('lost')}`;
+    if (terminal?.status === 'closed') return `${title} · ${t('closed')}`;
+    return title;
+  };
   const selected = workspace.tabs.find((tab) => tab.id === workspace.activeId);
   const choose = (id: string) => {
     onSelect(id);
@@ -189,6 +195,7 @@ export function WorkspaceControls({
         title={t('New terminal')}
         aria-label={t('New terminal')}
         onClick={onNewTerminal}
+        disabled={terminalCreationDisabled}
       >
         <TerminalSquare className="h-4 w-4" />
       </button>

@@ -250,3 +250,7 @@ Plan prose 按 item 保存 `{ text, completed, observedSeq }`，终态后拒绝 
 完成 turn 的 `full` 仅表示读取 detail，不表示 item 集合永远封闭。迟到事件仍按原 thread/turn/item 身份摄入；遗漏由 open/reconnect/app-server recovery 负责，行渲染不发请求。详见 [completed-turn-items.md](completed-turn-items.md)。
 
 后台迟到项 sweep 与必要恢复分开等待：当前书签所属 turn 优先进入八轮预算，sweep 不阻塞 open，也不把失败写成首屏请求失败。保留了有界读取取舍，预算外历史不宣称已刷新。只读降级同样在恢复历史书签后才 ready。
+
+### Shared terminal recovery
+
+`terminal-store` 区分 durable terminal id 和物理 sessionId/generation；typed ACK 不把 timeout/auth/context mismatch 当成 expired。明确 closed 状态拒绝后来的旧 metadata，close 对所有生命周期状态请求后端。`use-terminal-discovery` 仅 list + attach 后加入 workspace，不选择 tab、不调用 recover；context removal 使迟到结果失效。`TerminalHost` 保留每 id 一个 pane，只有正在呈现且页面可见的 pane 可请求有次数限制的 replacement。详见 [terminal.md](terminal.md)。

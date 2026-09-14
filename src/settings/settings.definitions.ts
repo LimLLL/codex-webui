@@ -167,7 +167,7 @@ export const SETTINGS_DEFINITIONS = [
     type: 'string',
     category: 'terminal',
     description:
-      'Default working directory for new terminals. Must be an existing directory within workspace roots. Empty to use thread cwd or home.',
+      'Default working directory for global terminals without an explicit directory. Conversation terminals always use their conversation directory. Must be within workspace roots. Empty to use home.',
     defaultValue: '',
     envKey: 'DEFAULT_TERMINAL_CWD',
   },

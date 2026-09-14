@@ -1,4 +1,4 @@
-/** xterm.js pane bound to one shared backend terminal session. */
+/** A retained xterm view follows one durable terminal while binding input to its current physical shell. */
 import {
   useCallback,
   useEffect,
@@ -8,13 +8,18 @@ import {
 } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
-import i18n from '@/i18n';
+import { useTranslation } from 'react-i18next';
 import { getSocket } from '@/socket';
+import { emitTerminalInput } from '@/lib/terminal-transport';
 import { useTerminalStore } from '@/stores/terminal-store';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { TerminalMetadata } from '@/types/terminal';
+import type {
+  TerminalAck,
+  TerminalMetadata,
+  TerminalOutput,
+} from '@/types/terminal';
 
 interface Props {
   contextKey: string;
@@ -22,29 +27,53 @@ interface Props {
   active: boolean;
   className?: string;
 }
+type Phase =
+  | 'connecting'
+  | 'ready'
+  | 'disconnected'
+  | 'error'
+  | 'closed'
+  | 'lost'
+  | 'limited';
 
+/** Keeps the latest replaced shell's local output separate from the new shell's reset VT state. */
+function readOutput(term: Terminal): string {
+  const lines: string[] = [];
+  const buffer = term.buffer.active;
+  for (let index = 0; index < buffer.length; index++) {
+    const line = buffer.getLine(index);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join('\n').trimEnd();
+}
+
+/** Replacement is requested only while presented, and input is never buffered across connections. */
 export function TerminalPane({
   contextKey,
   terminalId,
   active,
   className,
 }: Props) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const attachedRef = useRef(false);
   const activeRef = useRef(active);
+  const attachedRef = useRef(false);
+  const sessionRef = useRef<string | null>(null);
+  const connectRef = useRef<(manual?: boolean) => void>(() => undefined);
+  const terminal = useTerminalStore((s) => s.terminals[terminalId]);
+  const closing = useTerminalStore((s) => s.closing[terminalId]);
+  const [scrollback] = useState(useTerminalStore.getState().config.scrollback);
+  const [phase, setPhase] = useState<Phase>('connecting');
+  const [failure, setFailure] = useState<string | null>(null);
+  const [previousOutput, setPreviousOutput] = useState<string | null>(null);
+
   useLayoutEffect(() => {
     activeRef.current = active;
   }, [active]);
 
-  const config = useTerminalStore((s) => s.config);
-  const [scrollback] = useState(config.scrollback);
-  const reconnectTerminal = useTerminalStore((s) => s.reconnectTerminal);
-  const detachTerminal = useTerminalStore((s) => s.detachTerminal);
-  const resizeTerminal = useTerminalStore((s) => s.resizeTerminal);
-
-  /** Only the visibly presented attachment may change the shared PTY dimensions. */
+  /** Hidden, unmeasured and disconnected panes never report geometry to a shared PTY. */
   const fitVisible = useCallback(() => {
     const element = containerRef.current;
     const term = termRef.current;
@@ -56,43 +85,21 @@ export function TerminalPane({
     )
       return;
     fitRef.current?.fit();
-    if (attachedRef.current)
-      resizeTerminal(contextKey, terminalId, term.cols, term.rows);
-  }, [contextKey, resizeTerminal, terminalId]);
-
-  /** Replays the attachment snapshot, then reports geometry only if this view is still active. */
-  const attach = useCallback(async () => {
-    const term = termRef.current;
-    if (!term) return;
-    const response = await reconnectTerminal(contextKey, terminalId);
-    if (termRef.current !== term) return;
-    if (!response) {
-      attachedRef.current = false;
-      term.write(
-        `\r\n[${i18n.t('Terminal no longer exists. Create a new terminal.')}]\r\n`,
-      );
-      return;
+    if (attachedRef.current && sessionRef.current) {
+      useTerminalStore
+        .getState()
+        .resizeTerminal(
+          contextKey,
+          terminalId,
+          sessionRef.current,
+          term.cols,
+          term.rows,
+        );
     }
-    term.reset();
-    if (response.state) term.write(response.state);
-    if (response.terminal.status === 'exited') {
-      const code =
-        response.terminal.exitCode ?? response.terminal.signal ?? '?';
-      term.write(
-        `\r\n[${i18n.t('Process exited with code {{code}}', { code })}]\r\n`,
-      );
-      attachedRef.current = false;
-    } else {
-      attachedRef.current = true;
-    }
-    requestAnimationFrame(() => {
-      if (termRef.current === term) fitVisible();
-    });
-  }, [contextKey, reconnectTerminal, terminalId, fitVisible]);
+  }, [contextKey, terminalId]);
 
   useEffect(() => {
     if (!containerRef.current) return;
-
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
@@ -106,62 +113,201 @@ export function TerminalPane({
       },
       allowProposedApi: true,
     });
-    const fitAddon = new FitAddon();
-    const serializeAddon = new SerializeAddon();
-    term.loadAddon(fitAddon);
-    term.loadAddon(serializeAddon);
+    const fit = new FitAddon();
+    term.loadAddon(fit);
     term.open(containerRef.current);
     termRef.current = term;
-    fitRef.current = fitAddon;
-
+    fitRef.current = fit;
     const socket = getSocket();
-    const handleConnect = () => {
-      void attach();
-    };
-    const handleOutput = (event: { terminalId: string; data: string }) => {
-      if (event.terminalId === terminalId) term.write(event.data);
+    let disposed = false;
+    let epoch = 0;
+    let pending: Promise<void> | null = null;
+    let replaying = true;
+    let output: TerminalOutput[] = [];
+    let sequence = 0;
+
+    const showFailure = (response: TerminalAck) => {
+      attachedRef.current = false;
+      output = [];
+      replaying = false;
+      setFailure(response.error ?? t('Terminal operation failed'));
+      setPhase(
+        response.errorCode === 'terminal.closed'
+          ? 'closed'
+          : response.errorCode === 'terminal.recovery_limit'
+            ? 'limited'
+            : response.errorCode === 'terminal.session_lost'
+              ? 'lost'
+              : response.errorCode === 'terminal.disconnected'
+                ? 'disconnected'
+                : 'error',
+      );
     };
 
+    /** One local flight owns replay; transport changes and close invalidate its eventual result. */
+    const connect = (manual = false) => {
+      if (pending || disposed) return;
+      if (!socket.connected) {
+        setPhase('disconnected');
+        return;
+      }
+      const requestEpoch = ++epoch;
+      attachedRef.current = false;
+      replaying = true;
+      output = [];
+      setPhase('connecting');
+      const run = async () => {
+        const store = useTerminalStore.getState();
+        let response = await store.reconnectTerminal(contextKey, terminalId);
+        if (disposed || requestEpoch !== epoch) return;
+        // Only a known lost physical session may ask the backend to resolve durable eligibility.
+        if (
+          !response.ok &&
+          response.errorCode === 'terminal.session_lost' &&
+          activeRef.current
+        ) {
+          response = await store.recoverTerminal(
+            contextKey,
+            terminalId,
+            manual,
+          );
+        }
+        if (disposed || requestEpoch !== epoch) return;
+        if (!response.ok || !response.terminal) {
+          showFailure(response);
+          return;
+        }
+        const current = useTerminalStore.getState();
+        if (
+          current.closing[terminalId] ||
+          current.terminals[terminalId]?.status === 'closed' ||
+          (current.terminals[terminalId]?.generation ?? 0) >
+            response.terminal.generation
+        )
+          return;
+        const observed = current.terminals[terminalId];
+        const attachedTerminal =
+          observed?.sessionId === response.terminal.sessionId
+            ? observed
+            : response.terminal;
+        const changed =
+          sessionRef.current !== null &&
+          sessionRef.current !== attachedTerminal.sessionId;
+        if (changed) {
+          setPreviousOutput(readOutput(term));
+          term.blur();
+        }
+        sessionRef.current = attachedTerminal.sessionId;
+        sequence = response.sequence ?? 0;
+        term.reset();
+        if (response.state) term.write(response.state);
+        for (const chunk of output) {
+          if (
+            chunk.sessionId === sessionRef.current &&
+            chunk.sequence > sequence
+          ) {
+            term.write(chunk.data);
+            sequence = chunk.sequence;
+          }
+        }
+        output = [];
+        replaying = false;
+        attachedRef.current = attachedTerminal.status === 'running';
+        setFailure(null);
+        setPhase('ready');
+        if (attachedTerminal.status === 'exited')
+          term.write(
+            `\r\n[${t('Process exited with code {{code}}', { code: attachedTerminal.exitCode ?? '?' })}]\r\n`,
+          );
+        requestAnimationFrame(() => {
+          if (!disposed) fitVisible();
+        });
+      };
+      const flight = run().finally(() => {
+        if (pending === flight) pending = null;
+      });
+      pending = flight;
+    };
+    connectRef.current = connect;
+    const handleConnect = () => connect();
+    const handleDisconnect = () => {
+      ++epoch;
+      pending = null;
+      attachedRef.current = false;
+      replaying = true;
+      output = [];
+      term.blur();
+      setPhase('disconnected');
+    };
+    const handleOutput = (event: TerminalOutput) => {
+      if (event.terminalId !== terminalId || !socket.connected) return;
+      if (replaying) {
+        output.push(event);
+        return;
+      }
+      if (event.sessionId !== sessionRef.current || event.sequence <= sequence)
+        return;
+      sequence = event.sequence;
+      term.write(event.data);
+    };
     const handleExit = (event: {
       terminal?: TerminalMetadata;
       terminalId?: string;
       closed?: boolean;
     }) => {
-      const tid = event.terminal?.id ?? event.terminalId;
-      if (tid !== terminalId) return;
+      if ((event.terminal?.id ?? event.terminalId) !== terminalId) return;
       if (event.closed) {
-        term.write(`\r\n[${i18n.t('Terminal closed')}]\r\n`);
+        ++epoch;
+        pending = null;
         attachedRef.current = false;
-      } else if (event.terminal?.exitCode !== undefined) {
+        replaying = false;
+        output = [];
+        term.blur();
+        setPhase('closed');
+      } else if (event.terminal?.sessionId === sessionRef.current) {
+        attachedRef.current = false;
         term.write(
-          `\r\n[${i18n.t('Process exited with code {{code}}', { code: event.terminal.exitCode })}]\r\n`,
+          `\r\n[${t('Process exited with code {{code}}', { code: event.terminal.exitCode ?? '?' })}]\r\n`,
         );
-        attachedRef.current = false;
       }
     };
-
     socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
     socket.on('terminal.output', handleOutput);
     socket.on('terminal.exit', handleExit);
-    void attach();
-
-    const inputDisposable = term.onData((data) => {
-      if (!attachedRef.current || !activeRef.current) return;
-      socket.emit('terminal.input', { contextKey, terminalId, data });
+    connect();
+    const input = term.onData((data) => {
+      const current = useTerminalStore.getState();
+      if (
+        !attachedRef.current ||
+        !activeRef.current ||
+        !socket.connected ||
+        !sessionRef.current ||
+        current.closing[terminalId]
+      )
+        return;
+      emitTerminalInput(contextKey, terminalId, sessionRef.current, data);
     });
-
     return () => {
+      disposed = true;
+      ++epoch;
+      connectRef.current = () => undefined;
       socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
       socket.off('terminal.output', handleOutput);
       socket.off('terminal.exit', handleExit);
-      inputDisposable.dispose();
-      detachTerminal(terminalId);
-      attachedRef.current = false;
+      input.dispose();
+      useTerminalStore.getState().detachTerminal(terminalId);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      attachedRef.current = false;
     };
-  }, [attach, scrollback, contextKey, detachTerminal, terminalId]);
+  }, [contextKey, terminalId, scrollback, fitVisible, t]);
+
+  useEffect(() => {
+    if (active && !attachedRef.current) connectRef.current();
+  }, [active]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -175,12 +321,74 @@ export function TerminalPane({
     };
   }, [active, fitVisible]);
 
+  const closed = terminal?.status === 'closed' || phase === 'closed';
   return (
     <div
-      ref={containerRef}
-      className={cn('h-full w-full', className)}
+      className={cn(
+        'flex h-full min-h-0 w-full flex-col bg-background',
+        className,
+      )}
       style={{ visibility: active ? 'visible' : 'hidden' }}
       inert={!active}
-    />
+    >
+      {terminal && terminal.generation > 0 && (
+        <div
+          role="status"
+          className="shrink-0 border-b border-border px-3 py-2 text-xs"
+        >
+          {t(
+            'Previous terminal was lost. Replacement shell {{shell}} started in {{cwd}}.',
+            { shell: terminal.shell, cwd: terminal.cwd },
+          )}
+        </div>
+      )}
+      {previousOutput !== null && (
+        <details className="shrink-0 border-b border-border px-3 py-1 text-xs">
+          <summary>{t('Previous shell output (read-only)')}</summary>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap">
+            {previousOutput || t('No retained output')}
+          </pre>
+        </details>
+      )}
+      {(phase !== 'ready' || closed || closing) && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs"
+        >
+          <span>
+            {closed
+              ? t('Terminal closed')
+              : closing
+                ? t('Terminal close is awaiting confirmation. Retry Close.')
+                : phase === 'limited'
+                  ? t('Automatic recovery paused: three attempts in 24 hours.')
+                  : phase === 'lost'
+                    ? t(
+                        'Terminal session lost. Select this terminal to recover it.',
+                      )
+                    : phase === 'connecting'
+                      ? t('Connecting terminal…')
+                      : failure
+                        ? // Natural-language keys are this project's convention, so a
+                          // server message is localized when translated and shown as
+                          // sent when not. The sentence is both lookup key and fallback.
+                          t(failure)
+                        : t('Terminal connection is offline')}
+          </span>
+          {!closed && !closing && phase !== 'connecting' && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => connectRef.current(phase === 'limited')}
+            >
+              {phase === 'limited'
+                ? t('Start replacement shell')
+                : t('Retry connection')}
+            </Button>
+          )}
+        </div>
+      )}
+      <div ref={containerRef} className="min-h-0 flex-1" />
+    </div>
   );
 }

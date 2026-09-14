@@ -10,7 +10,30 @@ export function useTerminalSocketEvents() {
     const socket = getSocket();
 
     const handleMetadata = (event: { terminal: TerminalMetadata }) => {
-      useTerminalStore.getState().upsertTerminal(event.terminal);
+      const store = useTerminalStore.getState();
+      // Attach emits metadata before its snapshot can fail. Only successful
+      // open/attach acknowledgements may admit a new, selectable terminal. Keep
+      // early lifecycle evidence in the metadata cache without creating a tab.
+      const terminal = event.terminal;
+      const previous = store.terminals[terminal.id];
+      if (
+        store.contexts[terminal.contextKey]?.terminalIds.includes(terminal.id)
+      ) {
+        store.upsertTerminal(terminal);
+      } else if (
+        !store.closing[terminal.id] &&
+        previous?.status !== 'closed' &&
+        (!previous || previous.generation <= terminal.generation) &&
+        !(
+          previous?.sessionId === terminal.sessionId &&
+          previous.status === 'exited' &&
+          terminal.status === 'running'
+        )
+      ) {
+        useTerminalStore.setState({
+          terminals: { ...store.terminals, [terminal.id]: terminal },
+        });
+      }
     };
 
     const handleExit = (event: {
@@ -20,11 +43,13 @@ export function useTerminalSocketEvents() {
       closed?: boolean;
     }) => {
       if (event.closed && event.terminalId && event.contextKey) {
-        useTerminalStore.getState().markTerminalClosed(event.contextKey, event.terminalId);
+        useTerminalStore
+          .getState()
+          .markTerminalClosed(event.contextKey, event.terminalId);
         return;
       }
       if (event.terminal) {
-        useTerminalStore.getState().upsertTerminal(event.terminal);
+        handleMetadata({ terminal: event.terminal });
       }
     };
 

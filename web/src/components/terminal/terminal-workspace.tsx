@@ -6,6 +6,7 @@ import { TerminalStatusBar } from '@/components/terminal/terminal-status-bar';
 import { TerminalTabs } from '@/components/terminal/terminal-tabs';
 import { useTerminalStore } from '@/stores/terminal-store';
 import { cn } from '@/lib/utils';
+import { useTerminalDiscovery } from '@/hooks/use-terminal-discovery';
 
 interface Props {
   contextKey: string;
@@ -16,20 +17,19 @@ interface Props {
 export function TerminalWorkspace({ contextKey, cwd, className }: Props) {
   const { t } = useTranslation();
   const context = useTerminalStore((s) => s.contexts[contextKey]);
-  const ensureContext = useTerminalStore((s) => s.ensureContext);
+  useTerminalDiscovery(contextKey);
   const selectTerminal = useTerminalStore((s) => s.selectTerminal);
 
   const terminalIds = useMemo(() => context?.terminalIds ?? [], [context?.terminalIds]);
-  const activeTerminalId = context?.activeTerminalId ?? terminalIds[0] ?? null;
+  const activeTerminalId = context?.activeTerminalId ?? null;
 
+  // Discovery must not move an existing selection, but this surface *is* the
+  // terminal: with nothing selected at all there is no intent to preserve, and
+  // landing on "Select a terminal" would be the standalone route's whole content.
+  // Conversation tabs never reach here — they render `TerminalSurface` directly.
   useEffect(() => {
-    void ensureContext(contextKey);
-  }, [contextKey, ensureContext]);
-
-  useEffect(() => {
-    if (!activeTerminalId && terminalIds[0]) {
+    if (!activeTerminalId && terminalIds[0])
       selectTerminal(contextKey, terminalIds[0]);
-    }
   }, [activeTerminalId, contextKey, selectTerminal, terminalIds]);
 
   return (
@@ -49,6 +49,9 @@ export function TerminalWorkspace({ contextKey, cwd, className }: Props) {
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             {t('No terminals')}
           </div>
+        )}
+        {terminalIds.length > 0 && !activeTerminalId && (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('Select a terminal')}</div>
         )}
         {activeTerminalId && <TerminalSurface terminalId={activeTerminalId} contextKey={contextKey} />}
       </div>

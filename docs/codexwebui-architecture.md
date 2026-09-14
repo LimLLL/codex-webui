@@ -309,7 +309,7 @@ Diff：Monaco Diff Editor 或 react-diff-view
 全局 Web Terminal 建议使用 `node-pty + xterm.js` 自建，不优先使用 app-server `command/exec` PTY。你的产品需求是：
 
 - 终端可以全局打开，不一定属于某个 Codex thread 页面。
-- 在会话页面打开时，默认 `cwd` 使用该会话的 `cwd`。
+- 在会话页面新建时，必须使用该会话的 `cwd`；全局默认值不能覆盖或补足它。
 - 从全局入口打开时，默认 `cwd` 使用用户 home，例如 `/root`、`/home/codex` 或容器内配置的 `DEFAULT_TERMINAL_CWD`。
 - 终端是用户主动打开的自由 shell，风险通过 Docker/访问控制/首次提示承担。
 - 终端 session 生命周期由 WebUI 管理，而不是跟随某个 Codex turn 或 item。
@@ -324,30 +324,16 @@ TerminalService
 bash / zsh / sh
 ```
 
-后端接口建议：
-
-```text
-client → server:
-  terminal.open     { cwd?, shell?, cols, rows, source?: 'global' | 'thread', threadId? }
-  terminal.input    { terminalId, data }
-  terminal.resize   { terminalId, cols, rows }
-  terminal.close    { terminalId }
-
-server → client:
-  terminal.opened   { terminalId, cwd, shell }
-  terminal.output   { terminalId, data }
-  terminal.exited   { terminalId, exitCode, signal }
-  terminal.error    { terminalId?, message }
-```
+当前实现使用 contextKey（`global` / `thread:<threadId>`）与持久化逻辑 terminal id，物理 PTY 另有 sessionId。完整协议及迁移说明见 [terminal.md](terminal.md)；此前本节的 source/threadId 和 terminal.opened 只是未落地的草案，不再作为当前契约。
 
 `cwd` 选择规则：
 
-```text
-1. 如果从 thread 页面打开，优先使用 thread.cwd / lastTurn.cwd / workspace root。
-2. 如果从全局入口打开，使用 DEFAULT_TERMINAL_CWD。
-3. 如果未配置 DEFAULT_TERMINAL_CWD，使用容器内 HOME。
-4. 所有 cwd 必须经过 realpath 校验；默认建议限制在 workspace roots 或显式允许的 roots。
-```
+1. 会话新建必须提供会话 cwd；缺失即失败。
+2. 全局新建提供显式 cwd 时使用该目录；未提供时才选择 `terminal.defaultCwd`（含 `DEFAULT_TERMINAL_CWD` 环境回退），未配置再使用 home。
+3. 替代 PTY 使用逻辑终端记录的实际启动 cwd，忽略之后的全局默认值和会话 cwd 变化。
+4. 只校验选中的一个目录：realpath、存在且是目录、位于允许的 roots。校验失败不能改选默认值或其他 root。
+
+显式 close 持久化撤销资格，包括 exited 和已经回收的 session。restart / grace 丢失可由正在呈现的本地终端请求替换，最多每 id 滚动 24 小时三次自动尝试，超限要求手动操作。仅发现现存会话终端的路径禁止创建进程。
 
 风险提示策略：
 

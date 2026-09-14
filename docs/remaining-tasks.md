@@ -208,14 +208,19 @@
 
 ### Terminal 增强 ✅
 
+- [x] SQLite durable terminal identity、关闭资格撤销、restart/grace 替代仲裁；仅正在呈现的终端自动恢复，每 id 滚动 24 小时最多三次尝试，超限明确转手动。
+- [x] 会话 list + attach 发现现存 session（含 exited buffer），禁止发现创建进程；保留 tab 位置/标题，替换通知与上一 shell 输出分离，断线输入不重放。
+- [x] 实际 SQLite 迁移 / 文件数据库重开、真实 PTY close/grace/shutdown 终止和 Socket.IO 鉴权/丢失确认覆盖。
 - [x] 多 terminal tab/session 管理：context-based（`global` / `thread:<threadId>`），显示 cwd/shell/exitCode/attachedCount，tab create/close/rename/download。
-- [x] `DEFAULT_TERMINAL_CWD` 环境变量 + cwd 回退链（fail-fast if invalid）。
+- [x] 统一 cwd 选择与校验：会话目录必需且优先，全局显式目录优先，无显式目录才使用默认值；替换固定原启动目录，失败不回退。
 - [x] 终端 buffer 限制：前后端 xterm scrollback 统一配置（`WEBUI_TERMINAL_SCROLLBACK`，默认 5000）。
-- [x] Socket owner 校验：所有操作验证 terminal 存在 + context 匹配 + socket 已 attach，失败返回结构化错误。
+- [x] 终端网关显式鉴权，typed ACK 保留错误码；input/resize 校验 attachment + physical sessionId，logical close 无需先附着已丢失的 PTY。
 - [x] 断线重连恢复：`@xterm/headless` + `SerializeAddon` 服务端 VT 镜像，detach + grace period（`WEBUI_TERMINAL_GRACE_MS`，默认 45s），reconnect 返回完整序列化 VT 状态。
 - [x] 终端输出下载：后端从 headless buffer 导出 plain text，前端 blob 下载。
 - [x] 终端共享：同 context 多浏览器 tab 共享终端，输出广播，多 attach close 二次确认。
 - [x] Max terminal cap：全局上限 `WEBUI_TERMINAL_MAX_SESSIONS`（默认 10）。
+- [ ] **`terminal_identities` 的保留期需要一个运维答案。** 现在每个创建过的终端都永久留一行，刻意如此——已批准的行为覆盖"长断线后恢复"且没有给出时限，任何静默过期都会把契约悄悄改窄。代价是表和备份随使用时间单调增长。可安全回收的是**已关闭且不再持有物理资源**的行：未知身份本来就不可自动恢复，删掉它们不改变任何承诺。仍可恢复的行不能删。若将来引入清理，被忘记的 id 必须保持"不可自动恢复"，而不能退化成"未知即可新建"。
+- [ ] 替换提示目前常驻且不可关闭（按 `generation > 0` 判定）。需求要的是"不能被一闪而过的 toast 或会被输出冲掉的一行代替"，常驻是满足它最省事的做法，未必是唯一解——按物理 session 提供"本浏览器不再提示"是合理选项，但可关闭的范围属于产品决策。
 - ~~Docker/实机部署下的终端隔离等级提示~~ — 用户自行负责，不做。
 
 ### Multi-Thread 后续增强

@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 
 interface TerminalViewState {
+  contextEpochs: Record<string, number>;
   retained: Record<string, string>;
   target: { terminalId: string; element: HTMLElement } | null;
   retain: (terminalId: string, contextKey: string) => void;
@@ -18,6 +19,7 @@ interface TerminalViewState {
 /** UI removal releases attachment ownership; it never sends terminal.close. */
 export const useTerminalViewStore = create<TerminalViewState>((set) => ({
   retained: {},
+  contextEpochs: {},
   target: null,
   retain: (terminalId, contextKey) =>
     set((s) => ({ retained: { ...s.retained, [terminalId]: contextKey } })),
@@ -30,6 +32,7 @@ export const useTerminalViewStore = create<TerminalViewState>((set) => ({
     })),
   releaseContext: (contextKey) =>
     set((s) => ({
+      contextEpochs: { ...s.contextEpochs, [contextKey]: (s.contextEpochs[contextKey] ?? 0) + 1 },
       retained: Object.fromEntries(
         Object.entries(s.retained).filter(
           ([, context]) => context !== contextKey,

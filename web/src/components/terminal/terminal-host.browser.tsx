@@ -33,6 +33,10 @@ const socket = {
   on: vi.fn(),
   off: vi.fn(),
   emit,
+  sendBuffer: [],
+  connected: true,
+  id: 'browser-socket',
+  volatile: { emit },
   timeout: () => ({
     emit: (
       _event: string,
@@ -46,6 +50,8 @@ vi.mock('@/socket', () => ({ getSocket: () => socket }));
 function metadata(id: string): TerminalMetadata {
   return {
     id,
+    sessionId: `session-${id}`,
+    generation: 0,
     contextKey: 'thread:t',
     title: `Terminal ${id}`,
     cwd: '/tmp',
@@ -112,6 +118,7 @@ beforeEach(async () => {
   emit.mockClear();
   useTerminalStore.setState({
     terminals: { a: metadata('a'), b: metadata('b') },
+    closing: {},
     contexts: {
       'thread:t': {
         terminalIds: ['a', 'b'],
