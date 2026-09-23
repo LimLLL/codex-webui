@@ -61,7 +61,7 @@ export function ConversationFrame({
         />
         <div
           ref={composer}
-          className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-4xl pb-[env(safe-area-inset-bottom)]"
+          className="absolute inset-x-0 bottom-0 w-full pb-[env(safe-area-inset-bottom)]"
         >
           <ChatInput
             ref={input}

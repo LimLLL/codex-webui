@@ -16,7 +16,9 @@ Path alias: `@/` → `src/`
 - Sidebar: `bg-card/80`（无 backdrop-filter，避免堆叠伪影）
 - Header: `glass-bar`，Popover/登录卡片: `glass-5`，Dialog/AlertDialog: `glass-modal`
 - `glass-1` ~ `glass-5` 描述的是**面板**：四边 border + 悬浮阴影。通栏横条没有"侧边"可以描边（侧边框要么压在视口边缘，要么和侧边栏分隔线叠成双线），也不是浮在页面上的，所以单独一个 `glass-bar`：只有底部一条 hairline + `shadow-sm`
-- Composer footer 不带玻璃层：玻璃在输入框本体（`glass-3`）上，footer 只负责留白。两层叠加会把输入框框在一块可见的"纸板"里
+- Composer footer 不带玻璃层，只负责留白。两层叠加会把输入框框在一块可见的"纸板"里
+- **输入框本体不是玻璃，是实心面**（见「ChatInput 布局」）。玻璃只用在**不需要遮挡正文**的表面上：侧边栏、顶栏、Popover、Dialog 等。侧边栏是主列的兄弟节点，Dialog/Popover portal 到 body；顶栏和转录内的活动面即使位于主列，也不把采样主列正文作为遮挡保证。主列内需要遮挡正文的表面一律用实心
+- **`isolation: isolate` 会形成 backdrop root**：其内部任何 `backdrop-filter` 都采样不到同组内容，滤镜等于失效。外壳主列（`authenticated-layout.tsx`）带 `isolate`，用来保证主列内任何 z-index 都压不过侧边栏（实测：去掉后主列内的正值 z-index 会盖住侧边栏）。代价是主列内的玻璃面拿不到 backdrop。实测 `position` + `z-index` 形成的普通层叠上下文**同样**会触发，换一种写法救不回来。故主列内需要遮挡的表面一律用实心
 - 玻璃类定义在 `@layer` 之外，优先级高于 Tailwind utilities。因此 `.glass-*` 的 `box-shadow` 会盖掉 `ring-*`（v4 的 ring 也是 box-shadow）——玻璃表面上的焦点态要用 `outline-*`
 - `glass-modal` 与 `glass-5` 只差表面色：亮色主题下模态压在 `bg-black/50` 遮罩上，35% 白玻璃会合成为灰（50% 黑底 + 35% 白 ≈ `#ACACAC`），故亮色下表面提到 92% 白。暗色主题遮罩与玻璃同向变深，沿用 `glass-5` 表面色。**只有带遮罩的面板该用它**——Popover 无遮罩，用 `glass-5` 才正确
 - **禁止**在玻璃表面堆叠多个 `backdrop-filter` 或使用 `::before`/`::after` 伪元素（导致渲染闪烁）
@@ -99,7 +101,7 @@ Tailwind v4 的 `hover:` / `group-hover:` 变体**本身就编译在 `@media (ho
 - bookmark 是 row/item/block/text-offset 及其相对视口坐标，不引用可能被高亮替换的 DOM node。触摸/滚动/显式导航取消旧修正；找不到目标时保守退回有效边界或当前 offset。
 - follow intent 与 DOM 末端距离分开。隐藏时保留意图，不逐次跟随追加，也不触发历史预取；重新激活时检查宽度、测量目标范围，落位后再展示。
 - gate、加载历史按钮、回到最新按钮都在 scroller 外。scroller 内只有虚拟 extent 和实测行，顶部 padding 恒定；底部 padding 与 scroll-padding 同源于 composer wrapper 的真实测量。
-- 内容列与 composer 共用居中 max-width；Explorer 或窗口宽度改变仍可能引起换行，需要上述几何恢复。
+- 内容列与 composer 都铺满会话面的可用宽度，只保留响应式水平内边距；Explorer 或窗口宽度改变仍可能引起换行，需要上述几何恢复。
 
 冷开只接受完整 first page（20 turns），先 reconcile live events、测量目标范围、恢复 bookmark/末端再撤 gate；暖内容刷新失败保留内容并显示错误。浏览器测试配置见 [workspace-tabs.md](workspace-tabs.md)。
 
@@ -241,12 +243,18 @@ ChatInput 拆分为三个文件：`chat-input.tsx`（编排）、`use-chat-attac
 ### ChatInput 布局
 
 从 overlay 模型（按钮 `absolute` 叠加在 textarea 底部）改为 stacked 模型：
-- 单一玻璃面板（`glass-3` + `rounded-2xl`）内依次是附件 chips、textarea、按钮行——三者共用一个表面，不再靠 `border-t-0`/`border-b-0` 拼接两个盒子
-- 焦点态用 `focus-within:outline-2`，不能用 ring（见玻璃层级说明）
+- 单一面板（`bg-card` + 边框 + `rounded-2xl`）内依次是附件 chips、textarea、按钮行——三者共用一个表面，不再靠 `border-t-0`/`border-b-0` 拼接两个盒子
+- 焦点态用 `focus-within:outline-2`，沿用玻璃时期的写法（见玻璃层级说明）
 
-#### 浮层定位
+**面板是实心的，不是玻璃。** 它浮在转录之上，半透明表面必须真的挡住底下滚过的内容，而 `backdrop-filter` 在这里做不到：外壳主列是 backdrop root，滤镜压根采样不到东西；即便采样正常，淡到能读作"玻璃"的底色也挡不住文字（暗色玻璃表面仅 8% 白）。
 
-Composer 无条件浮动在 Conversation 内，`ConversationFrame` 用 ResizeObserver 测量包括覆盖 padding/safe area 的外包装。该值同时供 `paddingEnd` 与 `scrollPaddingEnd` 使用，textarea 增长、附件、语言和宽度变化都走同一路径；tab 隐藏不把测量替换为零。Composer 和正文共享居中的 max-width。
+#### 浮层定位与底部淡出
+
+Composer 无条件浮动在 Conversation 内，`ConversationFrame` 用 ResizeObserver 测量包括覆盖 padding/safe area 的外包装。该值同时供 `paddingEnd` 与 `scrollPaddingEnd` 使用，textarea 增长、附件、语言和宽度变化都走同一路径；tab 隐藏不把测量替换为零。
+
+**Composer 与正文都不设 max-width**，各自铺满会话面，只保留 `px-3 sm:px-4 lg:px-6` 让两者对齐。可用宽度由外壳与可拖宽的 Explorer 决定。
+
+面板实心解决不了全部问题：它相对滚动容器是内缩的，正文仍会从它**两侧和上缘**露出来。故滚动容器用 `mask-image` 淡掉自己的底缘（`virtual-transcript.tsx`，斜坡 `COMPOSER_FADE_PX`）。用 mask 而不是叠一层渐变遮罩，是因为 mask 与背景色无关，一条声明同时适用两套主题、任意底色；渐变遮罩必须知道自己淡入的确切背景。斜坡起点正是 `paddingEnd` 已经预留的 composer 带，所以停在底部时不会淡掉任何内容。
 
 ## Markdown 渲染
 
@@ -340,6 +348,8 @@ react-i18next，自然语言 key（英语默认），zh-CN 翻译。语言切换
 
 - Router-driven：`useNavigate()` 导航，`useRouterState()` 判断 active
 - 双视图：Overview（archived 置顶 + workspace 分组，可折叠动画）↔ Detail（单 workspace 分页）
+- **折叠开关归外壳所有，不在侧边栏里**：`ChatHeader` 头部左槽，桌面断点下两态常驻，只翻图标与无障碍名（`aria-expanded` 跟随，`aria-controls` 指向 `SIDEBAR_REGION_ID`）。`ChatHeader` 被共享布局与会话路由分别渲染同一个组件，所以每个桌面路由都有这个开关。
+  之前折叠是侧边栏**底部**的整行按钮、展开是头部的小图标：侧边栏折叠到零宽时那行按钮随之消失，同一个命令只好换个地方换个形态出现。两态复用同一个按钮元素（而非条件渲染两棵树）也让焦点在切换后留在原处
 - Thread context menu：Rename / Archive / Unarchive / Compact / Fork
 - DirectoryPickerDialog：选择工作区目录创建会话
 - **Per-thread 状态图标**（优先级 high→low）：

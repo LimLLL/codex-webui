@@ -20,7 +20,7 @@ import { CodexStatusBanner } from '@/components/codex-status-banner';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useCodexSocket } from '@/hooks/use-codex-socket';
 import { useFilesStore } from '@/stores/files-store';
-import { useLayoutStore } from '@/stores/layout-store';
+import { SIDEBAR_REGION_ID, useLayoutStore } from '@/stores/layout-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useThemeStore } from '@/stores/theme-store';
 import { cn } from '@/lib/utils';
@@ -174,6 +174,7 @@ export function AuthenticatedLayout() {
         {/* Desktop: inline sidebar with collapse animation */}
         {isDesktop && (
           <aside
+            id={SIDEBAR_REGION_ID}
             className={cn(
               'relative z-10 shrink-0 overflow-hidden border-r border-[var(--glass-border-subtle)] transition-[width] duration-200 ease-in-out',
               desktopSidebarCollapsed ? 'w-0 border-r-0' : 'w-64',
@@ -195,6 +196,12 @@ export function AuthenticatedLayout() {
           </Sheet>
         )}
 
+        {/* Isolated so nothing in this column can paint over the sidebar —
+            measured: without it, a positive z-index here covers the sidebar.
+            Note this also makes the column a backdrop root, so a
+            `backdrop-filter` inside it samples nothing. That is why the
+            composer is an opaque surface rather than a glass one; the
+            transcript fades out under it instead. See chat-input.tsx. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col isolate">
           {!pathname.startsWith('/t/') && <ChatHeader
             dark={dark}

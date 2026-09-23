@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
 import {
@@ -21,6 +22,9 @@ import {
 } from '@/lib/transcript-scroll-owner';
 import { shouldPrefetchOlder } from '@/lib/history-prefetch';
 import { TranscriptSnapshot } from './transcript-snapshot';
+
+/** How far a row dissolves over as it passes under the floating composer. */
+const COMPOSER_FADE_PX = 56;
 
 interface Props {
   threadId: string;
@@ -67,6 +71,27 @@ export function VirtualTranscript({
     [owner],
   );
   const getKey = useCallback((index: number) => keys[index], [keys]);
+  /**
+   * Dissolves the scroller's own bottom edge so rows never hard-cut against the
+   * floating composer.
+   *
+   * The composer is opaque, but it is inset from the scroller, so without this
+   * rows still surface in the gutters beside and above it. A mask is used
+   * rather than a painted gradient overlay because a mask is colour-agnostic:
+   * one declaration works in both themes and over any surface, where an overlay
+   * has to know the exact background it fades into.
+   *
+   * The ramp starts where the composer band starts, and `paddingEnd` already
+   * reserves that band, so a transcript resting at the end is never faded.
+   */
+  const composerFade = useMemo<CSSProperties | undefined>(() => {
+    if (bottomInset <= 0) return undefined;
+    const ramp = Math.min(COMPOSER_FADE_PX, bottomInset);
+    const gradient =
+      `linear-gradient(to bottom, #000 calc(100% - ${bottomInset}px), ` +
+      `transparent calc(100% - ${bottomInset - ramp}px))`;
+    return { maskImage: gradient, WebkitMaskImage: gradient };
+  }, [bottomInset]);
   const measure = useCallback(
     (
       node: Element,
@@ -165,6 +190,7 @@ export function VirtualTranscript({
           data-transcript-scroller
           tabIndex={0}
           onFocusCapture={() => owner.beginInput()}
+          style={composerFade}
           className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] [overflow-anchor:none]"
           onWheel={() => owner.beginInput()}
           onTouchStart={() => owner.beginInput(true)}
@@ -209,9 +235,14 @@ export function VirtualTranscript({
                 ref={virtualizer.measureElement}
                 className="absolute left-0 w-full"
               >
+                {/* No centred maximum width: the shell and the resizable
+                    explorer decide how much room the conversation gets, and
+                    the column consumes all of it. Padding matches the
+                    composer's so the two surfaces stay aligned at every
+                    breakpoint. */}
                 <div
                   data-transcript-column
-                  className="mx-auto min-w-0 w-full max-w-4xl overflow-x-hidden px-3 py-2 [overflow-wrap:anywhere] sm:px-4"
+                  className="min-w-0 w-full overflow-x-hidden px-3 py-2 [overflow-wrap:anywhere] sm:px-4 lg:px-6"
                 >
                   {renderRow(item.index)}
                 </div>
@@ -228,7 +259,7 @@ export function VirtualTranscript({
         )}
         {!atEnd && (
           <div
-            className="pointer-events-none absolute inset-x-0 z-20 mx-auto flex max-w-4xl justify-end px-4"
+            className="pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3 sm:px-4 lg:px-6"
             style={{ bottom: bottomInset + 12 }}
           >
             <button

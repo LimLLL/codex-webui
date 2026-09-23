@@ -332,3 +332,27 @@ test('browser navigation while reading history cancels a pending correction befo
   // reading line and carry this sentence off the top.
   await expect.poll(() => Math.abs(y(index - 2) - before)).toBeLessThan(2);
 });
+
+test('rows fill the surface rather than a centred column, and dissolve under the composer band', async () => {
+  const id = `browser:${++threadSequence}`;
+  // Wider than the 896px cap the tab redesign introduced, so a surviving cap
+  // would leave the column narrower than its scroller instead of filling it.
+  render(<Fixture id={id} width={1400} inset={140} />);
+  await finishGesture();
+
+  const column = document.querySelector<HTMLElement>(
+    '[data-transcript-column]',
+  )!;
+  expect(column.getBoundingClientRect().width).toBeCloseTo(
+    scroller().getBoundingClientRect().width,
+    0,
+  );
+
+  // The composer floats over the transcript and is inset from the scroller, so
+  // rows have to be gone before they reach it rather than cut against its edge.
+  // Asserting the mask geometry, not a screenshot: the ramp must start exactly
+  // at the reserved band so a transcript resting at the end is never faded.
+  const mask = getComputedStyle(scroller()).maskImage;
+  expect(mask).toContain('140px');
+  expect(mask).not.toBe('none');
+});

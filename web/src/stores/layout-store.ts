@@ -14,6 +14,15 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+/**
+ * DOM id of the desktop sidebar region.
+ *
+ * The collapse toggle lives in the shell header, not inside the sidebar, so
+ * `aria-controls` needs a name both sides agree on. It sits beside the collapse
+ * state rather than in either component so neither owns the other's markup.
+ */
+export const SIDEBAR_REGION_ID = 'app-sidebar';
+
 // ── Sidebar view types ───────────────────────────────────────────────
 
 export type SidebarViewState =

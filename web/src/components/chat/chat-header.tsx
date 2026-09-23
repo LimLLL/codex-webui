@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Activity, Check, Edit3, EllipsisVertical, Globe, Menu, Moon, Network, PanelLeftOpen, Settings, Sun, X } from 'lucide-react';
+import { Activity, Check, Edit3, EllipsisVertical, Globe, Menu, Moon, Network, PanelLeftClose, PanelLeftOpen, Settings, Sun, X } from 'lucide-react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +23,7 @@ import {
 } from '@/generated/api/@tanstack/react-query.gen';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useConnectionStore } from '@/stores/connection-store';
-import { useLayoutStore } from '@/stores/layout-store';
+import { SIDEBAR_REGION_ID, useLayoutStore } from '@/stores/layout-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useMessageVersions } from '@/hooks/use-message-branches';
 import { BranchGraphDialog } from '@/components/branches/branch-graph-dialog';
@@ -131,6 +131,12 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
     renameThread.mutate({ path: { threadId }, body: { name } });
   };
 
+  // One label drives the accessible name and the tooltip, so they can never
+  // disagree about which direction the control goes.
+  const sidebarToggleLabel = desktopSidebarCollapsed
+    ? t('Expand sidebar')
+    : t('Collapse sidebar');
+
   const handleDiagnosticsToggle = () => {
     if (isDiagnostics) {
       if (threadId) {
@@ -146,7 +152,12 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
   return (
     <>
       <header className="glass-bar sticky top-0 z-10 flex items-center h-11 shrink-0 gap-2 px-3 sm:gap-3 sm:px-4">
-        {/* Hamburger (mobile/tablet) or expand toggle (desktop collapsed) */}
+        {/* Hamburger (mobile/tablet) or the desktop collapse toggle.
+            The desktop toggle renders in both states from this one slot:
+            collapsing used to live at the sidebar's bottom edge while only
+            expanding lived here, so a single command moved and changed shape
+            depending on state. Keeping one button element across both states
+            also keeps focus on it after toggling. */}
         {!isDesktop ? (
           <Button
             size="icon"
@@ -157,7 +168,7 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
           >
             <Menu className="h-5 w-5" />
           </Button>
-        ) : desktopSidebarCollapsed ? (
+        ) : (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -165,14 +176,20 @@ export function ChatHeader({ dark, onToggleDark, onToggleDiagnostics }: Props) {
                 variant="ghost"
                 className="h-8 w-8 shrink-0"
                 onClick={toggleDesktopSidebarCollapsed}
-                aria-label={t('Expand sidebar')}
+                aria-label={sidebarToggleLabel}
+                aria-expanded={!desktopSidebarCollapsed}
+                aria-controls={SIDEBAR_REGION_ID}
               >
-                <PanelLeftOpen className="h-4 w-4" />
+                {desktopSidebarCollapsed ? (
+                  <PanelLeftOpen className="h-4 w-4" />
+                ) : (
+                  <PanelLeftClose className="h-4 w-4" />
+                )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t('Expand sidebar')}</TooltipContent>
+            <TooltipContent>{sidebarToggleLabel}</TooltipContent>
           </Tooltip>
-        ) : null}
+        )}
 
         <div className="min-w-0 flex-1">
           {threadId ? (

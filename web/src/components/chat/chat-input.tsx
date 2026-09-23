@@ -393,7 +393,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const hasContent = value.trim().length > 0 || attachments.length > 0;
 
   // ── Render ───────────────────────────────────────────────
-  // The footer is only a spacing band: the composer below carries the glass
+  // The footer is only a spacing band: the opaque composer below carries the
   // surface, so a second surface here would frame it in a visible slab.
   return (
     <footer
@@ -443,15 +443,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           onNavigateUp={handleMentionNavigateUp}
         />
 
-        {/* One glass pane holds chips, textarea and toolbar so the composer
+        {/* One opaque pane holds chips, textarea and toolbar so the composer
             reads as a single floating surface rather than stacked boxes.
-            Focus uses outline, not ring: ring is a box-shadow utility and the
-            unlayered .glass-* box-shadow would win the cascade against it. */}
-        <div className="glass-3 rounded-2xl transition-all duration-200 focus-within:outline-2 focus-within:outline-primary/40">
+
+            Deliberately not a glass surface. It floats over the transcript, and
+            a translucent pane there has to actually hide what scrolls under it.
+            A backdrop blur cannot do that here: the shell column the composer
+            lives in is a backdrop root, so the filter samples nothing at all,
+            and even where it does apply, a tint light enough to read as glass
+            leaves the text underneath legible. The transcript masks its own
+            bottom edge so rows dissolve before reaching this pane. */}
+        <div className="rounded-2xl border border-border bg-card shadow-lg transition-all duration-200 focus-within:outline-2 focus-within:outline-primary/40">
           <AttachmentChips
             attachments={chipAttachments}
             onRemove={handleRemoveAttachment}
-            className="border-b border-[var(--glass-border-subtle)]"
+            className="border-b border-border"
           />
 
           <Textarea

@@ -111,8 +111,19 @@ does not release Send, and an old turn's event cannot release a newer submission
 The composer always floats. `ConversationFrame` measures the whole covering
 wrapper, including padding and safe area, and supplies the same nonzero measurement
 to `paddingEnd` and `scrollPaddingEnd`. Width, attachments and textarea growth can
-change this measurement. The transcript and composer share a centred max-width
-column; all content remains within its available width.
+change this measurement. The transcript and composer both fill the conversation
+surface — neither caps its width — and share the same responsive horizontal
+padding so the two stay aligned. The shell and the resizable explorer decide how
+much room there is; all content remains within its available width. A width
+change invalidates cached row heights, so it goes through the same geometry and
+reading-anchor path as any other measurement change.
+
+The composer is an opaque surface, and the scroller masks its own bottom edge so
+rows dissolve as they pass under it rather than cutting against its edge or
+surfacing in the gutters beside it. The mask ramp begins exactly where
+`paddingEnd` already reserves the composer band, so a transcript resting at the
+end is never faded. Rationale for not using a blurred pane instead is in
+[frontend-ui.md](frontend-ui.md).
 
 The pinned virtualizer uses `anchorTo: 'end'` with `followOnAppend: false`.
 Indexed follow targets are prohibited: appends use one fixed `scrollToOffset`.

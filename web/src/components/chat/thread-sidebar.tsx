@@ -4,7 +4,7 @@
  * state, queries, mutations, and view routing.
  */
 import { useMemo, useState } from 'react';
-import { FolderOpen, PanelLeftClose, Puzzle, Plus, Settings, Terminal } from 'lucide-react';
+import { FolderOpen, Puzzle, Plus, Settings, Terminal } from 'lucide-react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -80,12 +80,11 @@ export function ThreadSidebar() {
   const addSystemError = useTimelineStore((s) => s.addSystemError);
   const queryClient = useQueryClient();
 
-  // ── Layout store (sidebar view + collapsed groups + collapse) ────────
+  // ── Layout store (sidebar view + collapsed groups) ──────────────────
   const sidebarView = useLayoutStore((s) => s.sidebarView);
   const setSidebarView = useLayoutStore((s) => s.setSidebarView);
   const collapsedGroupKeys = useLayoutStore((s) => s.collapsedGroupKeys);
   const toggleCollapsedGroup = useLayoutStore((s) => s.toggleCollapsedGroup);
-  const toggleDesktopSidebarCollapsed = useLayoutStore((s) => s.toggleDesktopSidebarCollapsed);
   // Derive Set<string> for child components that expect it
   const collapsedGroups = useMemo(() => new Set(collapsedGroupKeys), [collapsedGroupKeys]);
 
@@ -551,17 +550,9 @@ export function ThreadSidebar() {
         )}
       </ScrollArea>
 
-      {/* Desktop collapse toggle (hidden in mobile Sheet) */}
-      <div className="hidden shrink-0 border-t border-border px-2 py-1.5 lg:block">
-        <button
-          type="button"
-          onClick={toggleDesktopSidebarCollapsed}
-          className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <PanelLeftClose className="h-4 w-4 shrink-0" />
-          {t('Collapse sidebar')}
-        </button>
-      </div>
+      {/* The collapse toggle deliberately lives in the shell header, not here:
+          a control pinned to the sidebar's own bottom edge disappears with the
+          sidebar, which forced expanding to live somewhere else entirely. */}
 
       <RenameDialog
         open={renameThread !== null}
