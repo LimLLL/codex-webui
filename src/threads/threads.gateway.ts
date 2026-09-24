@@ -213,6 +213,8 @@ export class ThreadsGateway
    * Extracts threadId from notification params and emits to the room.
    */
   private handleCodexNotification(notification: ServerNotification): void {
+    // FilesGateway routes connection-scoped watch events only to lease owners.
+    if (notification.method === 'fs/changed') return;
     const params = notification.params as Record<string, unknown> | undefined;
     const threadId = params?.['threadId'] as string | undefined;
     const projected = projectNotificationForClient(notification);

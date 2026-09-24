@@ -1,36 +1,49 @@
 /** A disposable editor view over a shared document model and a per-view reading position. */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { AlertTriangle, Loader2, RotateCcw, Save } from 'lucide-react';
+import { AlertTriangle, FilePlus, Loader2, RotateCcw, Save } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import {
   useDocumentStore,
   retainDocument,
+  retainDocumentById,
   releaseDocument,
   reloadDocument,
   saveDocument,
 } from '@/stores/document-store';
 import { useWorkspaceStore, EMPTY_FILE_VIEW } from '@/stores/workspace-store';
 import { showSnackbar } from '@/stores/snackbar-store';
+import { SaveAsDialog } from '@/components/files/save-as-dialog';
 
 interface Props {
   filePath: string;
+  documentId?: string;
   viewId: string;
   active: boolean;
 }
 
 /** Mounts one editor without owning, resetting, or disposing the document's working text. */
-export function CodeViewer({ filePath, viewId, active }: Props) {
+export function CodeViewer({ filePath, documentId: stableDocumentId, viewId, active }: Props) {
   const { t } = useTranslation();
-  const document = useDocumentStore((s) => s.documents[filePath]);
+  const document = useDocumentStore((s) => {
+    const id = stableDocumentId ?? s.pathIndex[filePath];
+    return id ? s.documents[id] : undefined;
+  });
   const view = useWorkspaceStore((s) => s.fileViews[viewId] ?? EMPTY_FILE_VIEW);
   const [editor, setEditor] = useState<Parameters<OnMount>[0] | null>(null);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const documentId = useRef<string | null>(null);
 
   useEffect(() => {
-    retainDocument(filePath, viewId);
-    return () => releaseDocument(filePath, viewId);
-  }, [filePath, viewId]);
+    documentId.current = stableDocumentId
+      ? retainDocumentById(stableDocumentId, viewId)
+      : retainDocument(filePath, viewId);
+    return () => {
+      if (documentId.current) releaseDocument(documentId.current, viewId);
+      documentId.current = null;
+    };
+  }, [filePath, stableDocumentId, viewId]);
 
   const mount: OnMount = useCallback(
     (instance) => {
@@ -88,7 +101,7 @@ export function CodeViewer({ filePath, viewId, active }: Props) {
         event.browserEvent.key.toLowerCase() === 's'
       ) {
         event.preventDefault();
-        void saveDocument(filePath);
+        void saveDocument(documentId.current ?? filePath);
       }
     });
     return () => key.dispose();
@@ -101,7 +114,7 @@ export function CodeViewer({ filePath, viewId, active }: Props) {
           <>
             <AlertTriangle />
             <p>{document.error}</p>
-            <Button onClick={() => void reloadDocument(filePath)}>
+            <Button onClick={() => void reloadDocument(stableDocumentId ?? filePath)}>
               {t('Retry')}
             </Button>
           </>
@@ -130,8 +143,8 @@ export function CodeViewer({ filePath, viewId, active }: Props) {
           variant="ghost"
           className="h-7 w-7"
           title={t('Refresh')}
-          disabled={document.loading || document.saving}
-          onClick={() => void reloadDocument(filePath)}
+          disabled={document.detached || document.loading || document.saving}
+          onClick={() => void reloadDocument(documentId.current ?? filePath)}
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </Button>
@@ -140,11 +153,22 @@ export function CodeViewer({ filePath, viewId, active }: Props) {
           variant="ghost"
           className="h-7 w-7"
           title={t('Save (Ctrl+S)')}
-          disabled={document.saving || document.loading || !document.dirty}
-          onClick={() => void saveDocument(filePath)}
+          disabled={document.detached || document.saving || document.loading || !document.dirty}
+          onClick={() => void saveDocument(documentId.current ?? filePath)}
         >
           <Save className="h-3.5 w-3.5" />
         </Button>
+        {document.detached && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            title={t('Save As')}
+            onClick={() => setSaveAsOpen(true)}
+          >
+            <FilePlus className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1">
         <Editor
@@ -163,6 +187,13 @@ export function CodeViewer({ filePath, viewId, active }: Props) {
           }}
         />
       </div>
+      {document.detached && (
+        <SaveAsDialog
+          open={saveAsOpen}
+          documentId={document.id}
+          onOpenChange={setSaveAsOpen}
+        />
+      )}
     </div>
   );
 }

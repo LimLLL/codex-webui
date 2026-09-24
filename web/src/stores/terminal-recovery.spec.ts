@@ -101,9 +101,10 @@ it('adopts running and exited sessions once without selecting them or sending a 
   expect(useWorkspaceStore.getState().contexts['thread:a'].tabs).toHaveLength(
     3,
   );
-  expect(useWorkspaceStore.getState().contexts['thread:a'].activeId).toBe(
-    'file:/workspace/file.ts',
+  const active = useWorkspaceStore.getState().contexts['thread:a'].tabs.find(
+    (tab) => tab.id === useWorkspaceStore.getState().contexts['thread:a'].activeId,
   );
+  expect(active).toMatchObject({ kind: 'file', path: '/workspace/file.ts' });
   expect(useTerminalStore.getState().terminals.exited.status).toBe('exited');
   expect(
     wire.emit.mock.calls.every(([event]) =>

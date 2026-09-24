@@ -9,8 +9,8 @@ it('does not leave inactive close controls in the roving tab order or activate v
   const onSelect = vi.fn(),
     onClose = vi.fn();
   const tabs = [
-    { id: 'file:/first.ts', kind: 'file' as const, path: '/first.ts' },
-    { id: 'file:/second.ts', kind: 'file' as const, path: '/second.ts' },
+    { id: 'file:/first.ts', kind: 'file' as const, path: '/first.ts', documentId: 'document:first' },
+    { id: 'file:/second.ts', kind: 'file' as const, path: '/second.ts', documentId: 'document:second' },
   ];
   render(
     <WorkspaceControls

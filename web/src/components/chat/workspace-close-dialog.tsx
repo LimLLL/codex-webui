@@ -19,14 +19,18 @@ import {
 import { useTerminalStore } from '@/stores/terminal-store';
 import { useTerminalViewStore } from '@/stores/terminal-view-store';
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store';
+import { SaveAsDialog } from '@/components/files/save-as-dialog';
 
 /** Controls a single user-requested close; async completion always targets its originating context. */
 export function useWorkspaceClose(context: string) {
   const [pending, setPending] = useState<WorkspaceTab | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
   const { t } = useTranslation();
   const document = useDocumentStore((s) =>
-    pending?.kind === 'file' ? s.documents[pending.path] : undefined,
+    pending?.kind === 'file'
+      ? s.documents[pending.documentId]
+      : undefined,
   );
   const locked = busy || Boolean(document?.saving);
   const remove = (tab: WorkspaceTab) =>
@@ -47,7 +51,8 @@ export function useWorkspaceClose(context: string) {
   };
   const requestClose = (tab: WorkspaceTab) => {
     if (tab.kind === 'file') {
-      if (useDocumentStore.getState().documents[tab.path]?.dirty)
+      const current = useDocumentStore.getState().documents[tab.documentId];
+      if (current?.dirty || current?.detached)
         setPending(tab);
       else remove(tab);
     } else if (
@@ -59,8 +64,8 @@ export function useWorkspaceClose(context: string) {
   };
   const dialog = (
     <AlertDialog
-      open={pending !== null}
-      onOpenChange={(open) => !open && !busy && setPending(null)}
+      open={pending !== null && !saveAsOpen}
+      onOpenChange={(open) => !open && !busy && !saveAsOpen && setPending(null)}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -76,9 +81,9 @@ export function useWorkspaceClose(context: string) {
               ? t(
                   'Closing this terminal kills the process for every attached client.',
                 )
-              : t(
-                  'This file has unsaved changes. Saving or discarding changes applies to every view of this file.',
-                )}
+              : document?.detached
+                ? t('This file was deleted. Save As recovers the buffer; discard permanently removes it.')
+                : t('This file has unsaved changes. Saving or discarding changes applies to every view of this file.')}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {document?.error && (
@@ -94,32 +99,34 @@ export function useWorkspaceClose(context: string) {
                 variant="destructive"
                 disabled={locked}
                 onClick={() => {
-                  discardDocument(pending.path);
+                  discardDocument(pending.documentId);
                   remove(pending);
                   setPending(null);
                 }}
               >
                 {t('Discard and close')}
               </Button>
-              <Button
-                disabled={locked}
-                onClick={() => {
-                  const tab = pending;
-                  setBusy(true);
-                  void saveDocument(tab.path).then((ok) => {
-                    setBusy(false);
-                    if (
-                      ok &&
-                      !useDocumentStore.getState().documents[tab.path]?.dirty
-                    ) {
-                      remove(tab);
-                      setPending(null);
-                    }
-                  });
-                }}
-              >
-                {t('Save and close')}
-              </Button>
+              {document?.detached ? (
+                <Button disabled={locked} onClick={() => setSaveAsOpen(true)}>{t('Save As')}</Button>
+              ) : (
+                <Button
+                  disabled={locked}
+                  onClick={() => {
+                    const tab = pending;
+                    setBusy(true);
+                    void saveDocument(tab.documentId).then((ok) => {
+                      setBusy(false);
+                      const current = useDocumentStore.getState().documents[tab.documentId];
+                      if (ok && (!current || !current.dirty)) {
+                        remove(tab);
+                        setPending(null);
+                      }
+                    });
+                  }}
+                >
+                  {t('Save and close')}
+                </Button>
+              )}
             </>
           ) : (
             pending && (
@@ -135,5 +142,19 @@ export function useWorkspaceClose(context: string) {
       </AlertDialogContent>
     </AlertDialog>
   );
-  return { requestClose, dialog };
+  const saveAs = pending?.kind === 'file' ? (
+    <SaveAsDialog
+      open={saveAsOpen}
+      documentId={pending.documentId}
+      onOpenChange={setSaveAsOpen}
+      onSaved={() => {
+        setSaveAsOpen(false);
+        if (!useDocumentStore.getState().documents[pending.documentId]?.dirty) {
+          remove(pending);
+          setPending(null);
+        }
+      }}
+    />
+  ) : null;
+  return { requestClose, dialog: <>{dialog}{saveAs}</> };
 }

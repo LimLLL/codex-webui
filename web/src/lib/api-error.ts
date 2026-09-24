@@ -33,6 +33,16 @@ export function getApiErrorMessage(
   return fallback;
 }
 
+/**
+ * Reads the structured error code, for callers that must branch on the kind of
+ * failure rather than only show it. Returns undefined for legacy message-only
+ * responses and for transport errors, which carry no code to branch on.
+ */
+export function getApiErrorCode(error: unknown): string | undefined {
+  const body = isRecord(error) ? (error as ApiErrorBody) : undefined;
+  return typeof body?.errorCode === 'string' ? body.errorCode : undefined;
+}
+
 function normalizeMessage(message: unknown): string | undefined {
   if (Array.isArray(message)) {
     const values = message.filter(

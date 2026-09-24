@@ -34,6 +34,7 @@ function workspace(count: number, activeId = 'conversation'): WorkspaceContext {
     id: `file:/repo/src/some/deeply/nested/module-${index}.ts`,
     kind: 'file',
     path: `/repo/src/some/deeply/nested/module-${index}.ts`,
+    documentId: `document:${index}`,
   }));
   return { tabs, activeId };
 }

@@ -232,3 +232,19 @@ engine: `getBoundingClientRect` returns zeros, `Range.getClientRects` returns
 nothing, and `ResizeObserver` is a stub, so every claim in this section about
 positions and measurement is unverifiable there. A browser launch failure means
 layout behavior has not been verified; unit tests are not a substitute.
+
+
+## File identity and recovery
+
+File tabs and per-context editor views use stable ids, separate from their live paths. A tab owns its
+document while its editor is unmounted. The document's side maps and immutable Monaco URI use the
+stable document id; language is derived from the live name. Relocation changes path indexes and tab
+labels without changing ordering, focus, view bookmarks, model objects or undo history. Opening a new
+file at the vacated path allocates a new document and tab identity.
+
+Confirmed deletion removes the live path index. Dirty buffers stay detached: ordinary save and reload
+refuse, and close offers discard or Save As. Save As uses the existing atomic no-overwrite create-file
+operation and the shared directory selector, keeps the document id and model, and updates every tab
+referring to it. An application-level recovery bar also covers deleted buffers from the standalone
+Files view, including after navigation. Path reconciliation and document watches live at application
+scope; no file browser needs to be mounted. See files-service.md for external observation limits.

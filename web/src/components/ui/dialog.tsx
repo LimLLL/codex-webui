@@ -52,6 +52,7 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onEscapeKeyDown,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -66,6 +67,12 @@ function DialogContent({
           className
         )}
         {...props}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event)
+          // Radix observes Escape at document capture, before React's input
+          // handler can cancel the inline draft. Leave that Escape to the input.
+          if (event.target instanceof HTMLElement && event.target.closest('[data-file-inline-edit]')) event.preventDefault()
+        }}
       >
         {children}
         {showCloseButton && (

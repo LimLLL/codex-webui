@@ -37,7 +37,6 @@ beforeEach(() => {
   addRoot.mockReset().mockResolvedValue({});
   useFilesStore.setState({
     rootDir: null,
-    expandedDirs: new Set(),
     selectedFile: null,
   });
   useLayoutStore.setState({
@@ -67,8 +66,7 @@ describe('explorer readiness gate', () => {
   });
 
   it('withholds an old root during cold metadata and registration without clearing its cache', async () => {
-    const expandedDirs = new Set(['/old/pkg']);
-    useFilesStore.setState({ rootDir: '/old', expandedDirs });
+    useFilesStore.setState({ rootDir: '/old' });
     let finish!: () => void;
     addRoot.mockReturnValueOnce(
       new Promise<void>((resolve) => {
@@ -87,22 +85,19 @@ describe('explorer readiness gate', () => {
       />,
     );
     expect(screen.queryByTestId('file-tree')).toBeNull();
-    expect(useFilesStore.getState().expandedDirs).toBe(expandedDirs);
     await act(async () => finish());
     expect(screen.getByTestId('file-tree')).toHaveTextContent('/new');
   });
 
-  it('preserves expansion and selection when the next conversation adopts the same cwd', async () => {
+  it('preserves selection when the next conversation adopts the same cwd', async () => {
     const first = renderTree();
     await screen.findByTestId('file-tree');
     act(() => {
-      useFilesStore.getState().toggleDirectory('/w/pkg');
       useFilesStore.getState().selectFile('/w/file.ts');
     });
     first.unmount();
     renderTree();
     await screen.findByTestId('file-tree');
-    expect(useFilesStore.getState().expandedDirs.has('/w/pkg')).toBe(true);
     expect(useFilesStore.getState().selectedFile).toBe('/w/file.ts');
   });
 

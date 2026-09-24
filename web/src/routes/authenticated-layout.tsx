@@ -3,7 +3,7 @@
  * Replaces the old App.tsx conditional rendering.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -12,6 +12,7 @@ import {
   SheetContent,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { DetachedDocumentRecovery } from '@/components/files/detached-document-recovery';
 import { TerminalHost } from '@/components/terminal/terminal-host';
 import { ChatHeader } from '@/components/chat/chat-header';
 import { ThreadSidebar } from '@/components/chat/thread-sidebar';
@@ -20,6 +21,7 @@ import { CodexStatusBanner } from '@/components/codex-status-banner';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useCodexSocket } from '@/hooks/use-codex-socket';
 import { useFilesStore } from '@/stores/files-store';
+import { installFileReconciler } from '@/lib/file-reconciler';
 import { SIDEBAR_REGION_ID, useLayoutStore } from '@/stores/layout-store';
 import { useTimelineStore } from '@/stores/timeline-store';
 import { useThemeStore } from '@/stores/theme-store';
@@ -78,6 +80,9 @@ export function AuthenticatedLayout() {
   );
 
   useCodexSocket(true);
+
+  const queryClient = useQueryClient();
+  useEffect(() => installFileReconciler(queryClient), [queryClient]);
 
   useEffect(() => {
     setMaxIdleSubscriptions(maxIdleSubscriptions);
@@ -209,6 +214,7 @@ export function AuthenticatedLayout() {
             onToggleDiagnostics={handleToggleDiagnostics}
           />}
           <CodexStatusBanner />
+          <DetachedDocumentRecovery />
           <Outlet />
         </div>
       </div>

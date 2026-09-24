@@ -36,6 +36,12 @@ export function createRequestManager() {
   };
   const manager = {
     getGeneration: () => generation,
+    // No child process backs this double, so there is no live client. Observers
+    // that ask must get the real "not connected" answer rather than find the
+    // method missing: a consumer probing for its existence would mask a genuine
+    // rename, and this double stands in for the real manager in the whole-graph
+    // canary.
+    getClient: () => null,
     setServerRequestHandler: (next: ServerRequestHandler) => {
       handler = next;
       install();

@@ -28,8 +28,8 @@ codex app-server (stdout JSONL)
 | `thread.subscribe` | `{ threadId }` | 加入 Socket.IO room |
 | `thread.unsubscribe` | `{ threadId }` | 离开 room |
 | `codex.serverResponse` | `{ id, instanceId, result }` | 必须引用原 proposal；与 REST 共用 CAS 和原连接答复 |
-| `fs.subscribe` | `{ path }` | 订阅目录变更，首次创建 chokidar watcher |
-| `fs.unsubscribe` | `{ path }` | 取消订阅，无订阅者时关闭 watcher |
+| `fs.watch.acquire` | `{ path, leaseId }` | 认证并校验 workspace policy 后申请 native watch；相同 canonical path 共享 |
+| `fs.watch.release` | `{ leaseId }` | 释放单个 UI surface 的租约；socket 断线自动释放全部 |
 | `terminal.open` | `{ contextKey, cwd?, cols?, rows?, title? }` | 创建逻辑终端与 PTY，ACK 返回 terminal metadata |
 | `terminal.list` | `{ contextKey }` | 仅列出现存 session，不创建 |
 | `terminal.reconnect` | `{ contextKey, terminalId }` | 仅附着；返回 terminal/state/sequence |
@@ -231,3 +231,5 @@ classification and client ordering rules are in
 `warning` 的原始 message 显示为会话系统警告或全局提示，包含上游对 unsupported service tier 的解释。
 
 TerminalGateway 显式使用 ApiKeyGuard 和 gateway-local exception filter，鉴权拒绝也通过 typed ACK 返回。终端错误 ACK 保留 `errorCode` / `params`，传输超时与 session_lost、not_found、closed、context_mismatch、socket_not_attached、recovery_limit、launch_failed 分开。详见 [terminal.md](terminal.md)。
+
+文件变更由 FilesGateway 仅发送给持有租约的 session：`fs.changed { watchPath, changedPaths, refresh }`。不再通过 ThreadsGateway 全局广播原始 `fs/changed`。native watch 非递归，重连刷新 desired scopes；详见 [files-service.md](files-service.md)。

@@ -1,13 +1,19 @@
 /** Browser-session view descriptors. Documents and terminal processes have separate owners. */
 import { create } from 'zustand';
 import { useTerminalViewStore } from './terminal-view-store';
+import {
+  ensureDocumentIdentity,
+  pinDocument,
+  releaseDocument,
+  useDocumentStore,
+} from './document-store';
 import type { OnMount } from '@monaco-editor/react';
 
 export type EditorViewState = ReturnType<
   Parameters<OnMount>[0]['saveViewState']
 >;
 export type WorkspaceTab =
-  | { id: string; kind: 'file'; path: string }
+  | { id: string; kind: 'file'; path: string; documentId: string }
   | { id: string; kind: 'terminal'; terminalId: string };
 
 export interface WorkspaceContext {
@@ -40,13 +46,15 @@ interface WorkspaceState {
   revealLine: (viewId: string, line: number | null) => void;
   consumeReveal: (viewId: string, request: number) => void;
   cancelReveal: (viewId: string) => void;
+  syncDocumentPaths: () => void;
 }
 
 let revealSequence = 0;
+let nextFileTabId = 1;
 
 /** Identifies a file view independently of its shared document and transient line request. */
-export function fileViewId(context: string, path: string): string {
-  return JSON.stringify([context, path]);
+export function fileViewId(context: string, identity: string): string {
+  return JSON.stringify([context, identity]);
 }
 
 /** Cancels navigation intent without discarding the editor's ordinary reading state. */
@@ -54,37 +62,52 @@ function clearActiveReveal(state: WorkspaceState, context: string) {
   const current = state.contexts[context];
   const tab = current?.tabs.find((entry) => entry.id === current.activeId);
   if (tab?.kind !== 'file') return state.fileViews;
-  const id = fileViewId(context, tab.path);
+  const id = fileViewId(context, tab.id);
   return {
     ...state.fileViews,
     [id]: { ...(state.fileViews[id] ?? EMPTY_FILE_VIEW), reveal: null },
   };
 }
 
-export const useWorkspaceStore = create<WorkspaceState>((set) => ({
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   contexts: {},
   fileViews: {},
   /** Adds a discovered terminal without changing tab selection or file reveal intent. */
-  adoptTerminal: (context, terminalId) => set((state) => {
-    const current = state.contexts[context] ?? EMPTY_WORKSPACE;
-    const id = `terminal:${terminalId}`;
-    if (current.tabs.some(tab => tab.id === id)) return state;
-    return { contexts: { ...state.contexts, [context]: {
-      ...current, tabs: [...current.tabs, { id, kind: 'terminal', terminalId }],
-    } } };
-  }),
-  openFile: (context, path, line = null) =>
+  adoptTerminal: (context, terminalId) =>
     set((state) => {
       const current = state.contexts[context] ?? EMPTY_WORKSPACE;
-      const id = `file:${path}`;
-      const viewId = fileViewId(context, path);
+      const id = `terminal:${terminalId}`;
+      if (current.tabs.some((tab) => tab.id === id)) return state;
       return {
         contexts: {
           ...state.contexts,
           [context]: {
-            tabs: current.tabs.some((tab) => tab.id === id)
+            ...current,
+            tabs: [...current.tabs, { id, kind: 'terminal', terminalId }],
+          },
+        },
+      };
+    }),
+  openFile: (context, path, line = null) =>
+    set((state) => {
+      const current = state.contexts[context] ?? EMPTY_WORKSPACE;
+      const existing = current.tabs.find(
+        (tab): tab is Extract<WorkspaceTab, { kind: 'file' }> =>
+          tab.kind === 'file' &&
+          tab.path === path &&
+          useDocumentStore.getState().pathIndex[path] === tab.documentId,
+      );
+      const documentId = existing?.documentId ?? ensureDocumentIdentity(path);
+      const id = existing?.id ?? `file:${nextFileTabId++}`;
+      pinDocument(documentId, `tab:${context}:${id}`);
+      const viewId = fileViewId(context, id);
+      return {
+        contexts: {
+          ...state.contexts,
+          [context]: {
+            tabs: existing
               ? current.tabs
-              : [...current.tabs, { id, kind: 'file', path }],
+              : [...current.tabs, { id, kind: 'file', path, documentId }],
             activeId: id,
           },
         },
@@ -140,8 +163,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
           : state.fileViews),
       };
       const removed = current.tabs[index];
-      if (removed.kind === 'file')
-        delete fileViews[fileViewId(context, removed.path)];
+      if (removed.kind === 'file') {
+        delete fileViews[fileViewId(context, removed.id)];
+        releaseDocument(removed.documentId, `tab:${context}:${removed.id}`);
+      }
       return {
         contexts: {
           ...state.contexts,
@@ -163,8 +188,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       for (const threadId of threadIds) {
         const context = `thread:${threadId}`;
         for (const tab of contexts[context]?.tabs ?? []) {
-          if (tab.kind === 'file')
-            delete fileViews[fileViewId(context, tab.path)];
+          if (tab.kind === 'file') {
+            delete fileViews[fileViewId(context, tab.id)];
+            releaseDocument(tab.documentId, `tab:${context}:${tab.id}`);
+          }
         }
         useTerminalViewStore.getState().releaseContext(context);
         delete contexts[context];
@@ -210,4 +237,42 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         },
       };
     }),
+  /** Applies document relocation and closes deleted clean views without touching dirty buffers. */
+  syncDocumentPaths: () => {
+    const documents = useDocumentStore.getState().documents;
+    for (const [context, workspace] of Object.entries(get().contexts)) {
+      for (const tab of workspace.tabs) {
+        if (tab.kind !== 'file') continue;
+        const document = documents[tab.documentId];
+        if (document?.detached && !document.dirty && !document.saving)
+          get().remove(context, tab.id);
+      }
+    }
+    set((state) => {
+      let changed = false;
+      const contexts = Object.fromEntries(
+        Object.entries(state.contexts).map(([key, context]) => {
+          const tabs = context.tabs.map((tab) => {
+            if (tab.kind !== 'file') return tab;
+            const document =
+              useDocumentStore.getState().documents[tab.documentId];
+            if (!document?.path || document.path === tab.path) return tab;
+            changed = true;
+            return { ...tab, path: document.path };
+          });
+          return [key, { ...context, tabs }];
+        }),
+      );
+      const fileViews = { ...state.fileViews };
+      for (const viewId of Object.keys(fileViews)) {
+        if (!viewId.startsWith('["files",')) continue;
+        const [, documentId] = JSON.parse(viewId) as [string, string];
+        if (documentId.startsWith('document:') && !documents[documentId]) {
+          delete fileViews[viewId];
+          changed = true;
+        }
+      }
+      return changed ? { contexts, fileViews } : state;
+    });
+  },
 }));

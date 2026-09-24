@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { settingsListSettings } from '@/generated/api/sdk.gen';
 import { getFileCategory } from '@/lib/file-category';
+import { useDocumentStore } from '@/stores/document-store';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { ArchiveViewer } from './archive-viewer';
@@ -25,16 +26,18 @@ import { XlsxViewer } from './xlsx-viewer';
 
 interface Props {
   filePath: string;
+  documentId?: string;
   source?: PreviewSource;
   viewId?: string;
   active?: boolean;
 }
 
 /** Dispatches to the appropriate viewer component based on file extension. */
-export function FileContentViewer({ filePath, source, viewId = `preview:${filePath}`, active = true }: Props) {
+export function FileContentViewer({ filePath, documentId, source, viewId = `preview:${filePath}`, active = true }: Props) {
   const { t } = useTranslation();
   const previewSource = source ?? filePreviewSource(filePath);
-  const category = getFileCategory(filePath);
+  const buffer = useDocumentStore((state) => documentId ? state.documents[documentId] : undefined);
+  const category = buffer?.model && (buffer.dirty || buffer.detached) ? 'code' : getFileCategory(filePath);
   const onlyOfficeUrl = useOnlyOfficeUrl();
   const canUseOnlyOffice = previewSource.kind === 'file' && !!onlyOfficeUrl;
 
@@ -84,7 +87,7 @@ export function FileContentViewer({ filePath, source, viewId = `preview:${filePa
     case 'code':
     default:
       return previewSource.kind === 'file' ? (
-        <CodeViewer filePath={filePath} viewId={viewId} active={active} />
+        <CodeViewer filePath={filePath} documentId={documentId} viewId={viewId} active={active} />
       ) : (
         <ReadOnlyCodeViewer source={previewSource} />
       );

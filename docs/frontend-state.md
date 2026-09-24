@@ -165,13 +165,13 @@ warm full 内容在刷新失败后保留。
 
 ## 工作区与文档所有权
 
-`workspace-store` 的 tabs、active view、view bookmark 只驻留内存；runtime idle eviction 不删除它们。`document-store` 按绝对路径共享 Monaco 工作模型，dirty model 脱离编辑器仍保留，保存 revision 永远与提交的文本成对。`terminal-view-store` 保留本浏览器 attachment，独立于 shared session 和 tab descriptor。详见 [workspace-tabs.md](workspace-tabs.md)。
+`workspace-store` 的 tabs、active view、view bookmark 只驻留内存；runtime idle eviction 不删除它们。`document-store` 按稳定 document identity 共享 Monaco 工作模型，live path 使用独立索引，dirty model 脱离编辑器仍保留，保存 revision 永远与提交的文本成对。`terminal-view-store` 保留本浏览器 attachment，独立于 shared session 和 tab descriptor。详见 [workspace-tabs.md](workspace-tabs.md)。
 
 `timeline-store` 保持原有公开入口，内部按类型、runtime 投影、历史转换/恢复、轮次与交互 mutation 拆分为 `timeline-*` 模块。
 
 ## files-store
 
-仅持有 tree 的 root/expanded directories 与独立 Files route 的单选路径。文件内容、保存基线与 dirty draft 由 `document-store` 持有；行号意图和 editor bookmark 由 `workspace-store` 的 view record 持有。旧 `panelOpen` 与全局 `pendingLine` 已移除。
+仅持有 flat browser 的 root 与独立 Files route 的单选路径。expanded directories 由共享 DirectorySelectionTree 局部持有，旧全局 expansion 状态已删除。文件内容、保存基线与 dirty draft 由 `document-store` 持有；行号意图和 editor bookmark 由 `workspace-store` 的 view record 持有。旧 `panelOpen` 与全局 `pendingLine` 已移除。
 
 ## model-store
 

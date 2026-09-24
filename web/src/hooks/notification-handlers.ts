@@ -432,7 +432,6 @@ const TIER3_METHODS = new Set([
   'rawResponseItem/completed',
   'command/exec/outputDelta',
   'item/commandExecution/terminalInteraction',
-  'fs/changed',
   'item/reasoning/summaryPartAdded',
   'item/reasoning/textDelta',
   'fuzzyFileSearch/sessionUpdated',

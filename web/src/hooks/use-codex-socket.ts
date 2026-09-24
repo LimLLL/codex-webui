@@ -20,6 +20,7 @@ import { invalidateThreadListSoon, invalidateThreadDetails, queryHasId } from '@
 import i18n from '@/i18n';
 import type { InteractionPresentationDto, PendingRequestResolvedDto } from '@/generated/api';
 import { ingestRequestFailure } from '@/lib/server-request-failures';
+import { reconcileExternalPaths } from '@/lib/file-reconciler';
 
 type CodexLifecycleEvent =
   | { type: 'appServerRestarting'; generation: number; delayMs: number }
@@ -217,6 +218,16 @@ export function useCodexSocket(enabled = true) {
 
     socket.on('codex.notification', handleCodexNotification);
 
+    // The payload also names the watched scope and whether this batch follows a
+    // reconnect; neither changes how a path set is repaired, so both are left
+    // to the transport rather than consumed here.
+    const handleFilesystemChanged = (event: { changedPaths?: unknown }) => {
+      if (!Array.isArray(event?.changedPaths)) return;
+      const paths = event.changedPaths.filter((path): path is string => typeof path === 'string');
+      if (paths.length) void reconcileExternalPaths(paths);
+    };
+    socket.on('fs.changed', handleFilesystemChanged);
+
     const handleCodexLifecycle = (event: CodexLifecycleEvent) => {
       const store = useTimelineStore.getState();
       const liveThreadIds = [...store.subscribedThreadIds];
@@ -366,6 +377,7 @@ export function useCodexSocket(enabled = true) {
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.off('codex.notification', handleCodexNotification);
+      socket.off('fs.changed', handleFilesystemChanged);
       socket.off('codex.lifecycle', handleCodexLifecycle);
       socket.off('codex.serverRequest', handleCodexServerRequest);
       socket.off('codex.serverRequestFailed', ingestRequestFailure);

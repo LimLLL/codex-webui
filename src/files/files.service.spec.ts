@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BusinessException } from '../common/business.exception';
+import { ErrorCode } from '../common/error-codes';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -12,6 +13,12 @@ import {
 import type { ResolvedSetting } from '../settings/settings.service';
 import { SettingsService } from '../settings/settings.service';
 import { FilesService, type FileUploadInput } from './files.service';
+
+// Keep real filesystem behavior, replacing only rename for errno mapping tests.
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>();
+  return { ...fs, rename: vi.fn(fs.rename) };
+});
 
 describe('FilesService', () => {
   let service: FilesService;
@@ -197,6 +204,16 @@ describe('FilesService', () => {
         BusinessException,
       );
     });
+
+    it('should reject a preconditioned write when the target is missing', async () => {
+      const target = path.join(tmpDir, 'missing-precondition.txt');
+      await expect(
+        service.writeFile(target, 'must not create', 123),
+      ).rejects.toMatchObject({
+        errorCode: ErrorCode.files.modifiedSinceRead,
+      });
+      await expect(fs.stat(target)).rejects.toThrow();
+    });
   });
 
   describe('renamePath', () => {
@@ -300,6 +317,18 @@ describe('FilesService', () => {
       const meta = await service.getMetadata(tmpDir);
       expect(meta.type).toBe('directory');
     });
+
+    it('should preserve symlink metadata instead of resolving the link away', async () => {
+      const target = path.join(tmpDir, 'metadata-link-target.txt');
+      const link = path.join(tmpDir, 'metadata-link.txt');
+      await fs.writeFile(target, 'target');
+      await fs.symlink(target, link);
+
+      await expect(service.getMetadata(link)).resolves.toMatchObject({
+        type: 'symlink',
+        path: link,
+      });
+    });
   });
 
   describe('deletePath', () => {
@@ -332,6 +361,22 @@ describe('FilesService', () => {
 
       await expect(fs.lstat(linkFile)).rejects.toThrow();
       await expect(fs.readFile(realFile, 'utf-8')).resolves.toBe('target data');
+    });
+  });
+
+  describe('protected roots', () => {
+    it('should reject deleting an exact workspace root', async () => {
+      await expect(service.deletePath(tmpDir, true)).rejects.toMatchObject({
+        errorCode: ErrorCode.files.cannotModifyRoot,
+      });
+    });
+
+    it('should reject renaming an exact workspace root', async () => {
+      await expect(
+        service.renamePath(tmpDir, 'renamed-root'),
+      ).rejects.toMatchObject({
+        errorCode: ErrorCode.files.cannotModifyRoot,
+      });
     });
   });
 
@@ -391,6 +436,79 @@ describe('FilesService', () => {
           uploadInputs([{ relativePath: 'hello.txt', content: 'blocked' }]),
         ),
       ).rejects.toThrow(BusinessException);
+    });
+
+    it('should reject an existing symlinked upload parent that escapes the root', async () => {
+      const outsideRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), 'upload-outside-'),
+      );
+      const resolvedOutside = await fs.realpath(outsideRoot);
+      const link = path.join(tmpDir, 'upload-link');
+      try {
+        await fs.symlink(resolvedOutside, link, 'dir');
+        await expect(
+          service.saveUploadedFiles(
+            tmpDir,
+            uploadInputs([
+              {
+                relativePath: 'upload-link/new-parent/escaped.txt',
+                content: 'blocked',
+              },
+            ]),
+          ),
+        ).rejects.toMatchObject({
+          errorCode: ErrorCode.files.pathOutsideWorkspace,
+        });
+        await expect(
+          fs.stat(path.join(resolvedOutside, 'new-parent')),
+        ).rejects.toThrow();
+      } finally {
+        await fs.rm(resolvedOutside, { recursive: true, force: true });
+        await fs.rm(link, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('mapped filesystem failures', () => {
+    it.each([
+      ['EXDEV', ErrorCode.files.operationFailed, 400],
+      ['ENOENT', ErrorCode.files.pathNotFound, 404],
+      ['ENOTEMPTY', ErrorCode.files.dirNotEmpty, 400],
+      ['EEXIST', ErrorCode.files.pathExists, 409],
+    ])(
+      'maps %s without leaking raw filesystem messages',
+      async (code, errorCode, status) => {
+        const rename = vi
+          .mocked(fs.rename)
+          .mockRejectedValueOnce(
+            Object.assign(new Error('private syscall diagnostic'), { code }),
+          );
+        try {
+          const operation = service.movePath(
+            path.join(tmpDir, 'hello.txt'),
+            path.join(tmpDir, 'mapped-destination.txt'),
+          );
+          await expect(operation).rejects.toMatchObject({ errorCode, status });
+          await expect(operation).rejects.not.toThrow(
+            'private syscall diagnostic',
+          );
+        } finally {
+          rename.mockClear();
+        }
+      },
+    );
+  });
+
+  describe('watch path policy', () => {
+    it('accepts missing descendants only beneath a real allowed ancestor', async () => {
+      await expect(
+        service.resolveWatchPath(path.join(tmpDir, 'not-created', 'later.txt')),
+      ).resolves.toBe(path.join(tmpDir, 'not-created', 'later.txt'));
+      await expect(
+        service.resolveWatchPath('/definitely-outside-workspace/later'),
+      ).rejects.toMatchObject({
+        errorCode: ErrorCode.files.pathOutsideWorkspace,
+      });
     });
   });
 

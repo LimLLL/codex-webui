@@ -1,5 +1,5 @@
 /**
- * Centralizes file operation mutations, query invalidation, and selection sync.
+ * Store-independent mutations publish confirmed changes to the application reconciler.
  * All file management UI surfaces delegate to this hook.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -17,9 +17,9 @@ import {
   filesReadFileQueryKey,
   filesGetMetadataQueryKey,
 } from '@/generated/api/@tanstack/react-query.gen';
-import { useFilesStore } from '@/stores/files-store';
 import { showSnackbar } from '@/stores/snackbar-store';
 import { clearApiToken, getAuthorizationHeader } from '@/auth-token';
+import { beginFileMutation, emitFileChange, finishFileMutation } from '@/lib/file-change-events';
 
 interface UploadFilesResponse {
   files: Array<{ path: string; size: number }>;
@@ -33,25 +33,6 @@ interface UploadFilesVariables {
 /** Invalidates the tree query for a specific directory. */
 function treeKey(dir: string) {
   return filesReadTreeQueryKey({ query: { root: dir } });
-}
-
-/** Extracts parent directory from a path. */
-function parentDir(filePath: string): string {
-  return filePath.substring(0, filePath.lastIndexOf('/')) || '/';
-}
-
-/** Remaps selected descendants after a directory rename or move. */
-function remapSelectedPath(
-  selectedFile: string | null,
-  oldPath?: string,
-  newPath?: string,
-): string | null {
-  if (!selectedFile || !oldPath || !newPath) return null;
-  if (selectedFile === oldPath) return newPath;
-  if (selectedFile.startsWith(`${oldPath}/`)) {
-    return `${newPath}${selectedFile.slice(oldPath.length)}`;
-  }
-  return null;
 }
 
 /** Returns auth headers for direct fetch calls that bypass the generated client. */
@@ -75,8 +56,6 @@ function readApiError(errorBody: unknown, fallback: string): string {
 export function useFileOperations() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const selectFile = useFilesStore((s) => s.selectFile);
-  const selectedFile = useFilesStore((s) => s.selectedFile);
 
   /** Invalidates tree queries for one or more parent directories. */
   const invalidateDirs = (...dirs: string[]) => {
@@ -86,78 +65,79 @@ export function useFileOperations() {
     }
   };
 
+  // Appearance is as confusing to a watcher as disappearance: an unbracketed
+  // create lets a concurrent two-path batch resolve one path present and one
+  // missing, which the reconciler reads as a rename that never happened.
   const createFile = useMutation({
     ...filesCreateFileMutation(),
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
     onSuccess: (_res, variables) => {
-      const dir = parentDir(variables.body!.path);
-      invalidateDirs(dir);
+      emitFileChange({ source: 'local', kind: 'invalidate', paths: [variables.body!.path] });
       showSnackbar(t('File created'), 'success');
     },
   });
 
   const createDirectory = useMutation({
     ...filesCreateDirectoryMutation(),
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
     onSuccess: (_res, variables) => {
-      const dir = parentDir(variables.body!.path);
-      invalidateDirs(dir);
+      emitFileChange({ source: 'local', kind: 'invalidate', paths: [variables.body!.path] });
       showSnackbar(t('Directory created'), 'success');
     },
   });
 
   const renamePath = useMutation({
     ...filesRenamePathMutation(),
-    onSuccess: (res, variables) => {
-      const dir = parentDir(variables.body!.path);
-      invalidateDirs(dir);
-      const nextSelected = remapSelectedPath(selectedFile, res.oldPath, res.newPath);
-      if (nextSelected) {
-        selectFile(nextSelected);
-      }
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
+    onSuccess: (res) => {
+      if (res.oldPath && res.newPath)
+        emitFileChange({ source: 'local', kind: 'rename', oldPath: res.oldPath, newPath: res.newPath });
       showSnackbar(t('Renamed successfully'), 'success');
     },
   });
 
   const copyPath = useMutation({
     ...filesCopyPathMutation(),
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
+    onError: (error) => showSnackbar(getApiErrorMessage(error), 'error'),
     onSuccess: (_res, variables) => {
-      const destDir = parentDir(variables.body!.destinationPath);
-      invalidateDirs(destDir);
+      emitFileChange({ source: 'local', kind: 'invalidate', paths: [variables.body!.destinationPath] });
       showSnackbar(t('Copied successfully'), 'success');
     },
   });
 
   const movePath = useMutation({
     ...filesMovePathMutation(),
-    onSuccess: (res, variables) => {
-      const srcDir = parentDir(variables.body!.sourcePath);
-      const destDir = parentDir(variables.body!.destinationPath);
-      invalidateDirs(srcDir, destDir);
-      const nextSelected = remapSelectedPath(selectedFile, res.oldPath, res.newPath);
-      if (nextSelected) {
-        selectFile(nextSelected);
-      }
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
+    onError: (error) => showSnackbar(getApiErrorMessage(error), 'error'),
+    onSuccess: (res) => {
+      if (res.oldPath && res.newPath)
+        emitFileChange({ source: 'local', kind: 'rename', oldPath: res.oldPath, newPath: res.newPath });
       showSnackbar(t('Moved successfully'), 'success');
     },
   });
 
   const deletePath = useMutation({
     ...filesDeletePathMutation(),
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
+    onError: (error) => showSnackbar(getApiErrorMessage(error), 'error'),
     onSuccess: (_res, variables) => {
       const deleted = variables.query!.path;
-      const dir = parentDir(deleted);
-      invalidateDirs(dir);
-      if (
-        selectedFile === deleted ||
-        selectedFile?.startsWith(`${deleted}/`)
-      ) {
-        selectFile(null);
-      }
+      emitFileChange({ source: 'local', kind: 'delete', path: deleted });
       showSnackbar(t('Deleted successfully'), 'success');
     },
   });
 
   /** Upload via direct fetch — SDK serializes body as JSON, multipart needs raw FormData. */
   const uploadFiles = useMutation<UploadFilesResponse, Error, UploadFilesVariables>({
+    onMutate: beginFileMutation,
+    onSettled: finishFileMutation,
     mutationFn: async ({ destinationPath, formData }) => {
       const resp = await fetch(
         `${withBasePath('/api/files/upload')}?destinationPath=${encodeURIComponent(destinationPath)}`,
@@ -177,10 +157,11 @@ export function useFileOperations() {
       return (await resp.json()) as UploadFilesResponse;
     },
     onSuccess: (res, variables) => {
-      invalidateDirs(
-        variables.destinationPath,
-        ...res.files.map((file) => parentDir(file.path)),
-      );
+      emitFileChange({
+        source: 'local',
+        kind: 'invalidate',
+        paths: [variables.destinationPath, ...res.files.map((file) => file.path)],
+      });
       showSnackbar(t('Upload complete'), 'success');
     },
     onError: (err: Error) => {

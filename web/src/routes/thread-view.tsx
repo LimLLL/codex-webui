@@ -138,7 +138,7 @@ function ConversationWorkspace({ threadId }: { threadId: string }) {
       if (tab?.kind === 'file')
         useWorkspaceStore
           .getState()
-          .cancelReveal(fileViewId(context, tab.path));
+          .cancelReveal(fileViewId(context, tab.id));
     };
   }, [threadId, context, open]);
 
@@ -236,7 +236,8 @@ function ConversationWorkspace({ threadId }: { threadId: string }) {
                     active && (
                       <FileViewer
                         filePath={tab.path}
-                        viewId={fileViewId(context, tab.path)}
+                        documentId={tab.documentId}
+                        viewId={fileViewId(context, tab.id)}
                         active={active}
                       />
                     )

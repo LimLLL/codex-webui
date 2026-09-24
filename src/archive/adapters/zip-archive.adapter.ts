@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BusinessException } from '../../common/business.exception';
 import { ErrorCode } from '../../common/error-codes';
 import * as yauzl from 'yauzl';
-import type { Readable } from 'node:stream';
+import { PassThrough, type Readable } from 'node:stream';
 import { archiveEntryName, normalizeArchiveEntryPath } from '../archive-path';
 import type { ArchiveAdapter, ArchiveEntry } from '../archive.types';
 
@@ -121,9 +121,18 @@ export class ZipArchiveAdapter implements ArchiveAdapter {
             return;
           }
           settled = true;
+          // yauzl 3.3.0 stored-entry streams stall under async iteration
+          // (upstream #169). A standard Node stream also gives Range consumers
+          // a reliable early-close boundary without changing dependencies.
+          const output = new PassThrough();
+          output.once('close', () => {
+            stream.destroy();
+            zipfile.close();
+          });
+          stream.once('error', (error) => output.destroy(error));
           stream.once('end', () => zipfile.close());
-          stream.once('error', () => zipfile.close());
-          resolve(stream);
+          stream.pipe(output);
+          resolve(output);
         });
       });
       zipfile.once('error', fail);

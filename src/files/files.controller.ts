@@ -412,10 +412,4 @@ export class FilesController {
     const fallback = filename.replace(/[\r\n"\\]/g, '_');
     return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
   }
-
-  /** Builds a Content-Disposition inline header for browser rendering. */
-  private buildInlineDisposition(filename: string): string {
-    const fallback = filename.replace(/[\r\n"\\]/g, '_');
-    return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
-  }
 }

@@ -16,6 +16,8 @@ import { serverRequestDisposition } from './probes/server-request-disposition';
 import { serverRequestIdentity } from './probes/server-request-identity';
 import { observableServiceTier } from './probes/observable-service-tier';
 import { authTokenRefresh } from './probes/auth-token-refresh';
+import { fsWatch } from './probes/fs-watch';
+import { fsWatchClassification } from './probes/fs-watch-classification';
 
 const PROBES: Probe[] = [
   settingsUpdate,
@@ -28,6 +30,8 @@ const PROBES: Probe[] = [
   serverRequestIdentity,
   observableServiceTier,
   authTokenRefresh,
+  fsWatch,
+  fsWatchClassification,
 ];
 
 function list(): void {

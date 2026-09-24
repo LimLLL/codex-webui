@@ -977,5 +977,17 @@
   "Failed to start terminal shell": "无法启动终端 shell",
   "Terminal was explicitly closed": "此终端已被明确关闭",
   "Terminal session was lost": "终端会话已丢失",
-  "Unknown terminal identity": "未知的终端标识"
+  "Unknown terminal identity": "未知的终端标识",
+  "Save As": "另存为",
+  "Choose a directory and a new file name for this buffer.": "选择目录和新文件名以恢复此缓冲区。",
+  "This file was deleted. Save As recovers the buffer; discard permanently removes it.": "此文件已被删除。另存为可恢复缓冲区；放弃则会丢弃未保存内容。",
+  "File or directory name": "文件或目录名称",
+  "Enter a name without path separators.": "请输入不含路径分隔符的名称。",
+  "Filesystem watch unavailable": "文件系统监听不可用",
+  "File was deleted or moved outside this client.": "文件已被删除，或在此客户端之外被移动。",
+  "File was replaced by a moved document.": "文件已被移动来的文档替换。",
+  "Close the other document at this destination before saving.": "请先关闭目标路径对应的另一个文档，再保存。",
+  "Unsaved files no longer on disk": "已从磁盘移除的未保存文件",
+  "Recover {{name}}": "恢复 {{name}}",
+  "Discard unsaved changes?": "放弃未保存的更改？"
 }

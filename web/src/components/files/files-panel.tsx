@@ -7,12 +7,9 @@ import { useState } from 'react';
 import { FolderTree } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import {
-  Sheet,
-  SheetContent,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useBreakpoint } from '@/hooks/use-breakpoint';
+import { useDocumentStore } from '@/stores/document-store';
 import { useFilesStore } from '@/stores/files-store';
 import { FileTree } from './file-tree';
 import { FileViewer } from './file-viewer';
@@ -45,6 +42,9 @@ function FileTreeSidebar({
 export function FilesPanel() {
   const { t } = useTranslation();
   const selectedFile = useFilesStore((s) => s.selectedFile);
+  const documentId = useDocumentStore((state) =>
+    selectedFile ? state.pathIndex[selectedFile] : undefined,
+  );
   const rootDir = useFilesStore((s) => s.rootDir);
   const selectFile = useFilesStore((s) => s.selectFile);
   const breakpoint = useBreakpoint();
@@ -58,7 +58,12 @@ export function FilesPanel() {
   };
 
   const viewerContent = selectedFile ? (
-    <FileViewer key={selectedFile} filePath={selectedFile} viewId={fileViewId('files', selectedFile)} />
+    <FileViewer
+      key={documentId ?? selectedFile}
+      filePath={selectedFile}
+      documentId={documentId}
+      viewId={fileViewId('files', documentId ?? selectedFile)}
+    />
   ) : (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       {t('Select a file to view')}
@@ -90,16 +95,25 @@ export function FilesPanel() {
           {t('Explorer')}
         </Button>
         {rootDir && (
-          <span className="truncate text-xs text-muted-foreground/60">{rootDir}</span>
+          <span className="truncate text-xs text-muted-foreground/60">
+            {rootDir}
+          </span>
         )}
       </div>
       <div className="flex min-w-0 flex-1 flex-col">{viewerContent}</div>
 
       <Sheet open={treeSheetOpen} onOpenChange={setTreeSheetOpen}>
-        <SheetContent side="left" className="!w-[280px] p-0 sm:!max-w-[320px]" showCloseButton={false}>
+        <SheetContent
+          side="left"
+          className="!w-[280px] p-0 sm:!max-w-[320px]"
+          showCloseButton={false}
+        >
           <SheetTitle className="sr-only">{t('File explorer')}</SheetTitle>
           <div className="flex h-full flex-col bg-muted/20">
-            <FileTreeSidebar rootDir={rootDir} onFileClick={handleMobileFileClick} />
+            <FileTreeSidebar
+              rootDir={rootDir}
+              onFileClick={handleMobileFileClick}
+            />
           </div>
         </SheetContent>
       </Sheet>

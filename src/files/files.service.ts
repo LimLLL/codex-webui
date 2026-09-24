@@ -289,6 +289,45 @@ export class FilesService implements OnModuleDestroy {
   }
 
   /**
+   * Resolves a watch target while allowing the final path not to exist yet.
+   *
+   * Native filesystem watches intentionally support missing paths. The nearest
+   * existing ancestor is therefore resolved through the normal workspace-root
+   * policy, while the final target remains a canonical absolute path.
+   */
+  async resolveWatchPath(inputPath: string): Promise<string> {
+    if (!inputPath) {
+      throw BusinessException.badRequest(
+        ErrorCode.files.pathRequired,
+        'Path is required',
+      );
+    }
+
+    const absolutePath = path.resolve(inputPath);
+    try {
+      const resolved = await fs.realpath(absolutePath);
+      if (!this.isAllowedPath(resolved)) {
+        throw BusinessException.forbidden(
+          ErrorCode.files.pathOutsideWorkspace,
+          'Path outside allowed workspace roots',
+        );
+      }
+      return resolved;
+    } catch (error) {
+      if (error instanceof BusinessException) throw error;
+      const parentPath = path.dirname(absolutePath);
+      const ancestor = await this.resolveNearestExistingAncestor(parentPath);
+      const relativeParent = path.relative(ancestor.originalPath, parentPath);
+      const resolvedParent = relativeParent
+        ? path.join(ancestor.resolvedPath, relativeParent)
+        : ancestor.resolvedPath;
+      const targetPath = path.join(resolvedParent, path.basename(absolutePath));
+      this.assertAllowedPath(targetPath);
+      return targetPath;
+    }
+  }
+
+  /**
    * Rejects unsafe single path entries such as separators, empty names, or traversal.
    *
    * @param name - One file or directory name, not a full path
@@ -526,7 +565,12 @@ export class FilesService implements OnModuleDestroy {
         }
       } catch (err) {
         if (err instanceof BusinessException) throw err;
-        // File doesn't exist yet — ok to create
+        // A caller-provided revision is a write precondition. Missing targets
+        // must fail rather than turning a stale save into an implicit create.
+        throw BusinessException.conflict(
+          ErrorCode.files.modifiedSinceRead,
+          'File no longer exists. Refresh and retry.',
+        );
       }
     }
 
@@ -644,8 +688,15 @@ export class FilesService implements OnModuleDestroy {
    * @returns File metadata (type, size, mtime, permissions)
    */
   async getMetadata(targetPath: string): Promise<FileMetadata> {
-    const resolved = await this.resolveSafePath(targetPath);
-    const stat = await fs.lstat(resolved);
+    const safePath = await this.resolveSafePath(targetPath);
+    // Validate the real target first, but inspect the requested directory entry.
+    // lstat(realpath(...)) can never report a symlink.
+    const entryPath = path.resolve(targetPath);
+    const entryStat = await fs.lstat(entryPath);
+    const resolved = entryStat.isSymbolicLink() ? entryPath : safePath;
+    const stat = entryStat.isSymbolicLink()
+      ? entryStat
+      : await fs.lstat(safePath);
 
     let type: FileMetadata['type'] = 'other';
     if (stat.isFile()) type = 'file';
@@ -684,6 +735,13 @@ export class FilesService implements OnModuleDestroy {
    * @param recursive - Whether non-empty directories may be removed recursively
    */
   async deletePath(targetPath: string, recursive = false): Promise<void> {
+    const absoluteTarget = path.resolve(targetPath);
+    try {
+      const realTarget = await fs.realpath(absoluteTarget);
+      this.assertNotWorkspaceRoot(realTarget);
+    } catch (error) {
+      if (error instanceof BusinessException) throw error;
+    }
     const entryPath = await this.resolveSafeTargetPath(targetPath);
     this.assertNotWorkspaceRoot(entryPath);
 
@@ -912,12 +970,28 @@ export class FilesService implements OnModuleDestroy {
     upload: FileUploadInput,
     overwrite: boolean,
   ): Promise<UploadedFileResult> {
-    const targetPath = this.resolveUploadTargetPath(
+    const requestedTarget = this.resolveUploadTargetPath(
       destinationRoot,
       upload.relativePath ?? upload.filename,
     );
-    const parentDir = path.dirname(targetPath);
+    const parentDir = path.dirname(requestedTarget);
+    // Check before mkdir as well: following a symlink while creating nested
+    // parents must not create even empty directories outside the destination.
+    const ancestor = await this.resolveNearestExistingAncestor(parentDir);
+    this.assertPathInside(ancestor.resolvedPath, destinationRoot);
     await fs.mkdir(parentDir, { recursive: true });
+
+    // The lexical containment check above is not enough when an existing
+    // intermediate component is a symlink. Re-resolve the parent after
+    // creating missing directories and before opening the target. This is
+    // deliberately not a no-follow handle walk; that stronger race-proof
+    // guarantee belongs to a separate hardening change.
+    const resolvedParent = await fs.realpath(parentDir);
+    this.assertPathInside(resolvedParent, destinationRoot);
+    const targetPath = path.join(
+      resolvedParent,
+      path.basename(requestedTarget),
+    );
 
     const existing = await this.assertNoOverwrite(targetPath, overwrite);
     if (existing?.isDirectory()) {
@@ -928,7 +1002,7 @@ export class FilesService implements OnModuleDestroy {
     }
 
     let tempPath: string | null = path.join(
-      parentDir,
+      resolvedParent,
       `${UPLOAD_TEMP_PREFIX}${randomUUID()}.tmp`,
     );
 
