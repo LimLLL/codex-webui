@@ -69,7 +69,7 @@ WebUI 另外检查非空 models、slug 和重复 slug；空指令给出 warning�
 指针先转换为原配置目录下的位置。Codex 可刷新这个临时缓存，原缓存保持不变。导出
 仍可能与已有进程冻结的目录不同；它不构成运行中进程的原子快照。
 
-`docs/upstream/model-catalog-0.153.2.json` 是 pinned binary 的完整 bundled 导出，包含
+`docs/upstream/model-catalog-0.154.0.json` 是 pinned binary 的完整 bundled 导出，包含
 11 个条目及指令。用 `pnpm codex:catalog` 刷新；升级 CLI 时一起修改脚本目标版本、
 刷新文件及协议 README。保留 CODEX-LICENSE、CODEX-NOTICE。运行时从 binary 导出，
 不依赖容器包含 docs 目录。

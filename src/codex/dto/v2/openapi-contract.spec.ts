@@ -101,9 +101,9 @@ describe('Codex v2 OpenAPI contract', () => {
     expect(discriminators).toEqual(THREAD_ITEM_TYPES);
   });
 
-  it('exposes Codex 0.153 thread and asynchronous question metadata', () => {
+  it('exposes Codex 0.154 thread and asynchronous question metadata', () => {
     expect(Object.keys(schema('ThreadDto').properties ?? {})).toEqual(
-      expect.arrayContaining(['model', 'reasoningEffort']),
+      expect.arrayContaining(['model', 'reasoningEffort', 'originator']),
     );
     expect(
       Object.keys(schema('AgentMessageThreadItemDto').properties ?? {}),

@@ -70,6 +70,9 @@ export class ThreadDto {
   @ApiProperty(NULLABLE_STRING_SCHEMA)
   agentRole!: string | null;
 
+  @ApiProperty(NULLABLE_STRING_SCHEMA)
+  originator!: string | null;
+
   @ApiProperty({ nullable: true, type: () => GitInfoDto })
   gitInfo!: GitInfoDto | null;
 

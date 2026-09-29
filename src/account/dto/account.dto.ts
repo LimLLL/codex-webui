@@ -180,6 +180,9 @@ export class RateLimitSnapshotDto {
   @ApiProperty({ type: String, nullable: true })
   limitName!: string | null;
 
+  @ApiProperty({ type: String, nullable: true })
+  normalModelSlug!: string | null;
+
   @ApiProperty({ type: () => RateLimitWindowDto, nullable: true })
   primary!: RateLimitWindowDto | null;
 
@@ -203,4 +206,7 @@ export class AccountRateLimitsResponseDto {
     additionalProperties: { $ref: '#/components/schemas/RateLimitSnapshotDto' },
   })
   rateLimitsByLimitId!: Record<string, RateLimitSnapshotDto | undefined> | null;
+
+  @ApiProperty({ type: Boolean, nullable: true })
+  ordinaryUsageAllowed!: boolean | null;
 }

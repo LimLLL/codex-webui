@@ -28,7 +28,7 @@ export async function localCatalogProvider() {
   const catalog = fixture.storage.candidatePath();
   writeAtomic(
     catalog,
-    readFileSync(resolve('docs/upstream/model-catalog-0.153.2.json'), 'utf8'),
+    readFileSync(resolve('docs/upstream/model-catalog-0.154.0.json'), 'utf8'),
   );
   const port = (provider.address() as AddressInfo).port;
   writeAtomic(
