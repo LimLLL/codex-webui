@@ -95,7 +95,7 @@ export class TarArchiveAdapter implements ArchiveAdapter {
 
         found = true;
         settled = true;
-        activeEntryStream = stream;
+        activeEntryStream = stream as unknown as Readable;
         stream.on('end', next);
         stream.on('error', (error) => output.destroy(error));
         stream.pipe(output);
