@@ -14,6 +14,9 @@ services:
       WEBUI_API_KEY: ${WEBUI_API_KEY:?Set WEBUI_API_KEY in .env}
       WORKSPACE_ROOTS: /workspaces
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Optional: browser-facing subpath (e.g. /codex) when the proxy
+      # cannot send X-Forwarded-Prefix. Leave empty for the domain root.
+      CODEX_WEBUI_BASE_PATH: ${CODEX_WEBUI_BASE_PATH:-}
     volumes:
       - root_home:/root
       - workspaces:/workspaces

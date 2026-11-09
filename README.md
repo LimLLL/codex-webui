@@ -149,6 +149,7 @@ cd web && pnpm dev
 | `CODEX_HOME` | 否 | `~/.codex` | Codex 主目录 |
 | `LOG_LEVEL` | 否 | `info` | Pino 日志级别 |
 | `WEBUI_DB_PATH` | 否 | `CODEX_HOME/codex-webui.sqlite` | SQLite 数据库路径 |
+| `CODEX_WEBUI_BASE_PATH` | 否 | — | 启动时固定浏览器侧子路径（如 `/codex`）；代理无法设置 `X-Forwarded-Prefix` 时使用 |
 
 ### Runtime Settings
 
@@ -244,7 +245,9 @@ Docker Compose 中使用时，`proxy_pass` 改为 `http://codex-webui:8172`，�
 
 ### 部署到子目录
 
-同一个镜像可以同时用于域名根目录和代理子目录（例如 `https://cc.example.com/codex/`），无需为每个路径重新构建。子目录代理需要通过 `X-Forwarded-Prefix` 告诉 WebUI 浏览器侧的公开路径：
+同一个镜像可以同时用于域名根目录和代理子目录（例如 `https://cc.example.com/codex/`），无需为每个路径重新构建。子目录代理可以通过 `X-Forwarded-Prefix` 告诉 WebUI 浏览器侧的公开路径；如果代理无法添加该请求头，也可以启动时设置 `CODEX_WEBUI_BASE_PATH=/codex`。解析优先级为 `X-Forwarded-Prefix` > `CODEX_WEBUI_BASE_PATH` > 根路径。
+
+若代理保留了 `/codex/` 前缀而没有剥离，后端会在路由前按该前缀剥离；若代理已经剥离前缀，则请求保持原样。
 
 ```bash
 docker build \
@@ -274,7 +277,7 @@ location /codex/ {
 }
 ```
 
-根目录反代无需设置 `X-Forwarded-Prefix`。WebUI 会按每个请求动态生成正确的静态资源、前端路由、REST API 和 Socket.IO 基础路径，因此同一镜像可同时服务两种代理方式。若使用 OnlyOffice，请将 `general.publicBaseUrl` 设置为包含子目录的完整地址，例如 `https://cc.example.com/codex`。
+根目录反代无需设置 `X-Forwarded-Prefix`，也无需设置 `CODEX_WEBUI_BASE_PATH`。WebUI 会按每个请求动态生成正确的静态资源、前端路由、REST API 和 Socket.IO 基础路径，因此同一镜像可同时服务两种代理方式。若使用 OnlyOffice，请将 `general.publicBaseUrl` 设置为包含子目录的完整地址，例如 `https://cc.example.com/codex`。
 
 ### Caddy
 

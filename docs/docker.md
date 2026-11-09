@@ -127,7 +127,19 @@ CI 由 `codex-*` 格式的 tag 触发，tag 名会被解析成本 ARG：`codex-0
 
 ## 反向代理与子目录部署
 
-同一个镜像可同时服务域名根目录与代理子目录，无需按路径重新构建：前端构建产物使用相对路径，后端按每个 HTML 响应改写 `<base href>`。子目录代理需通过 `X-Forwarded-Prefix` 告知浏览器侧的公开路径。
+同一个镜像可同时服务域名根目录与代理子目录，无需按路径重新构建：前端构建产物使用相对路径，后端按每个 HTML 响应改写 `<base href>`。子目录代理可通过 `X-Forwarded-Prefix` 告知浏览器侧的公开路径；如果代理无法添加该请求头，也可以在容器启动时设置 `CODEX_WEBUI_BASE_PATH`：
+
+```bash
+docker run -e CODEX_WEBUI_BASE_PATH=/codex ... ghcr.io/limlll/codex-webui:latest
+```
+
+```yaml
+# docker-compose.yml
+environment:
+  CODEX_WEBUI_BASE_PATH: /codex
+```
+
+解析优先级为 `X-Forwarded-Prefix` > `CODEX_WEBUI_BASE_PATH` > 根路径。若代理保留了 `/codex/` 前缀而没有剥离，后端会在路由前剥离它（包括 Socket.IO 的 polling 与 WebSocket upgrade）；若代理已经剥离，请求保持原样。
 
 具体的 nginx / Caddy 配置见 README「部署到子目录」。此处只记录与镜像相关的两点：
 

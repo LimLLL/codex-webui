@@ -122,6 +122,10 @@ FROM runtime-base AS runtime
 ARG CODEX_CLI_VERSION=0.153.2
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
 
+# Optional: browser-facing subpath (for example /codex) for proxies that
+# cannot send X-Forwarded-Prefix. Empty means the domain root.
+ENV CODEX_WEBUI_BASE_PATH=
+
 WORKDIR /app
 
 # The toolchain exists only once in the final image and is restored into a
