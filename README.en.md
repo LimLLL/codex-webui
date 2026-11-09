@@ -149,6 +149,7 @@ Open `http://localhost:5173`.
 | `CODEX_HOME`                   |    No    | `~/.codex`                     | Codex home directory                           |
 | `LOG_LEVEL`                    |    No    | `info`                         | Pino log level                                 |
 | `WEBUI_DB_PATH`                |    No    | `CODEX_HOME/codex-webui.sqlite`| SQLite database path                           |
+| `CODEX_WEBUI_BASE_PATH`        |    No    | —                              | Fixed browser-facing subpath (e.g. `/codex`) for proxies that cannot set `X-Forwarded-Prefix` |
 
 ### Runtime Settings
 
@@ -244,7 +245,9 @@ When using Docker Compose, change `proxy_pass` to `http://codex-webui:8172` and 
 
 ### Deploying under a subpath
 
-The same image can serve both a domain root and a proxy subpath (for example, `https://cc.example.com/codex/`) without rebuilding for each path. A subpath proxy must use `X-Forwarded-Prefix` to tell the WebUI its browser-facing public path:
+The same image can serve both a domain root and a proxy subpath (for example, `https://cc.example.com/codex/`) without rebuilding for each path. A subpath proxy can use `X-Forwarded-Prefix` to tell the WebUI its browser-facing public path; if the proxy cannot add that header, start the backend with `CODEX_WEBUI_BASE_PATH=/codex` instead. Priority is `X-Forwarded-Prefix` > `CODEX_WEBUI_BASE_PATH` > root.
+
+If the proxy keeps the `/codex/` prefix instead of stripping it, the backend strips it before routing. If the proxy already strips it, the request is left untouched.
 
 ```bash
 docker build \
@@ -274,7 +277,7 @@ location /codex/ {
 }
 ```
 
-A root proxy does not need `X-Forwarded-Prefix`. The WebUI dynamically generates the correct base for static assets, frontend routes, REST APIs, and Socket.IO on every request, so one image can serve both proxy styles. For OnlyOffice, set `general.publicBaseUrl` to the full URL including the subpath, for example `https://cc.example.com/codex`.
+A root proxy needs neither `X-Forwarded-Prefix` nor `CODEX_WEBUI_BASE_PATH`. The WebUI dynamically generates the correct base for static assets, frontend routes, REST APIs, and Socket.IO on every request, so one image can serve both proxy styles. For OnlyOffice, set `general.publicBaseUrl` to the full URL including the subpath, for example `https://cc.example.com/codex`.
 
 ### Caddy
 

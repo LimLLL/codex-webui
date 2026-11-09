@@ -8,11 +8,16 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 import { readFile } from 'node:fs/promises';
+import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
-import { normalizeForwardedPrefix, renderIndexHtml } from './public-base-path';
+import {
+  normalizeConfiguredBasePath,
+  renderIndexHtml,
+  resolveBasePath,
+} from './public-base-path';
 import { FILES_SETTING_KEYS } from './settings/settings.definitions';
 import { SettingsService } from './settings/settings.service';
 
@@ -23,6 +28,15 @@ function operationIdFactory(controllerKey: string, methodKey: string): string {
 }
 
 async function bootstrap() {
+  const configuredBasePath = normalizeConfiguredBasePath(
+    process.env.CODEX_WEBUI_BASE_PATH,
+  );
+
+  // A proxy that keeps the public prefix (but cannot add X-Forwarded-Prefix)
+  // would otherwise route /codex/api/... and /codex/assets/... to no handler.
+  // Resolve the prefix before routing and strip it so the rest of the app sees
+  // root-relative URLs. A proxy that already strips the prefix leaves the URL
+  // untouched.
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),
@@ -64,6 +78,21 @@ async function bootstrap() {
   app.useWebSocketAdapter(new IoAdapter(app));
   app.setGlobalPrefix('api', { exclude: ['/'] });
 
+  // Strip the public prefix before any HTTP/upgrade listener runs. This must be
+  // installed AFTER listen: Socket.IO's Engine.IO replaces the server's request
+  // listeners during attach, so a listener added earlier would be discarded.
+  const httpServer = app.getHttpServer();
+  const stripPublicPrefix = (request: IncomingMessage) => {
+    const requestUrl = request.url ?? '/';
+    const basePath = resolveBasePath({
+      forwardedPrefix: request.headers['x-forwarded-prefix'],
+      configuredBasePath,
+    });
+    if (basePath !== '/' && requestUrl.startsWith(basePath)) {
+      request.url = `/${requestUrl.slice(basePath.length)}`;
+    }
+  };
+
   // `public/` is a gitignored build artifact, so it is absent on a fresh clone
   // and during any backend-only dev loop. A missing SPA must not stop the
   // server: there is simply no HTML to rewrite.
@@ -92,9 +121,10 @@ async function bootstrap() {
 
         if (payload instanceof Readable) payload.destroy();
         reply.removeHeader('content-length');
-        const basePath = normalizeForwardedPrefix(
-          request.headers['x-forwarded-prefix'],
-        );
+        const basePath = resolveBasePath({
+          forwardedPrefix: request.headers['x-forwarded-prefix'],
+          configuredBasePath,
+        });
         return renderIndexHtml(indexHtml, basePath);
       });
   }
@@ -113,5 +143,7 @@ async function bootstrap() {
   }
 
   await app.listen(process.env.PORT ?? 8172, '0.0.0.0');
+  httpServer.prependListener('request', stripPublicPrefix);
+  httpServer.prependListener('upgrade', stripPublicPrefix);
 }
 void bootstrap();
